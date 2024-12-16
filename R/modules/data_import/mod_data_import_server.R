@@ -2,11 +2,10 @@
 
 #' Server Module for Data Import
 #' @param id The module ID
-#' @param api_integration API integration module instance
 #' @param state State management instance
 #' @param logger Logger instance
 #' @export
-mod_data_import_server <- function(id, api_integration, state, logger = NULL) {
+mod_data_import_server <- function(id, state, logger = NULL) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
 
@@ -49,32 +48,14 @@ mod_data_import_server <- function(id, api_integration, state, logger = NULL) {
         shinyjs::hide(id = "url_warning")
       }
 
-      # Update search parameters
       search_params(prepare_search_params(input, selected_countries()))
-    })
-
-    # Input validation
-    observe({
-      validation <- validate_data_import_input(
-        taxa_input = if (!is.null(input$taxa_input)) {
-          unlist(strsplit(input$taxa_input, "\n"))
-        } else NULL,
-        dataset_codes = if (!is.null(input$dataset_codes)) {
-          unlist(strsplit(input$dataset_codes, "\n"))
-        } else NULL,
-        project_codes = if (!is.null(input$project_codes)) {
-          unlist(strsplit(input$project_codes, "\n"))
-        } else NULL,
-        countries = selected_countries()
-      )
-      validation_status(validation)
     })
 
     # Form submission handler
     observeEvent(input$submit, {
-      # Validate API key
-      api_status <- api_integration$get_status()
-      if (!api_status$is_set) {
+      # Validate API key from user info
+      user_info <- state$get_store()$user_info
+      if (is.null(user_info) || is.null(user_info$bold_api_key)) {
         logger$error("Attempted search without API key")
         showNotification("Please set your BOLD API key first", type = "error")
         return()
@@ -133,12 +114,9 @@ mod_data_import_server <- function(id, api_integration, state, logger = NULL) {
               message = "Processing datasets..."
             ))
 
-            api_integration$wait_for_request()
-            dataset_specimens <- process_dataset_search(api_integration, params$dataset_codes)
-
+            dataset_specimens <- fetch_specimens(params$dataset_codes, "datasets")
             if (!is.null(dataset_specimens)) {
               combined_specimens <- dataset_specimens
-              api_integration$record_success()
               logger$info("Dataset fetch successful",
                           list(records = nrow(dataset_specimens)))
             }
@@ -154,11 +132,8 @@ mod_data_import_server <- function(id, api_integration, state, logger = NULL) {
               message = "Processing projects..."
             ))
 
-            api_integration$wait_for_request()
-            project_specimens <- process_project_search(api_integration, params$project_codes)
-
+            project_specimens <- fetch_specimens(params$project_codes, "projects")
             if (!is.null(project_specimens)) {
-              api_integration$record_success()
               logger$info("Project fetch successful",
                           list(records = nrow(project_specimens)))
               combined_specimens <- merge_specimens(combined_specimens, project_specimens)
@@ -176,7 +151,6 @@ mod_data_import_server <- function(id, api_integration, state, logger = NULL) {
             ))
 
             taxonomy_specimens <- process_taxonomy_search(
-              api_integration,
               params$taxonomy,
               params$geography
             )
@@ -228,7 +202,6 @@ mod_data_import_server <- function(id, api_integration, state, logger = NULL) {
             showNotification(sprintf("Retrieved %d specimens", nrow(processed_data)),
                              type = "message")
           } else {
-            api_integration$record_failure()
             logger$warn("No specimens found matching criteria")
             stop("No specimens found matching search criteria")
           }
@@ -259,6 +232,78 @@ mod_data_import_server <- function(id, api_integration, state, logger = NULL) {
       })
     })
 
+    # Helper function to fetch specimens using BOLDconnectR
+    fetch_specimens <- function(codes, type = c("datasets", "projects")) {
+      type <- match.arg(type)
+      tryCatch({
+        # Get API key from state
+        user_info <- state$get_store()$user_info
+        if (is.null(user_info) || is.null(user_info$bold_api_key)) {
+          stop("No API key available")
+        }
+
+        # Set API key for request
+        BOLDconnectR::bold.apikey(user_info$bold_api_key)
+
+        # Make request based on type
+        if (type == "datasets") {
+          specimens <- BOLDconnectR::bold.fetch(
+            get_by = "dataset_codes",
+            identifiers = codes
+          )
+        } else {
+          specimens <- BOLDconnectR::bold.fetch(
+            get_by = "project_codes",
+            identifiers = codes
+          )
+        }
+
+        specimens
+      }, error = function(e) {
+        logger$error(sprintf("Error fetching %s: %s", type, e$message))
+        NULL
+      })
+    }
+
+    # Helper function to process taxonomy search
+    process_taxonomy_search <- function(taxonomy, geography) {
+      tryCatch({
+        # Get API key from state
+        user_info <- state$get_store()$user_info
+        if (is.null(user_info) || is.null(user_info$bold_api_key)) {
+          stop("No API key available")
+        }
+
+        # Set API key for request
+        BOLDconnectR::bold.apikey(user_info$bold_api_key)
+
+        # Search for specimens
+        search_results <- BOLDconnectR::bold.public.search(taxonomy = taxonomy, geography = geography)
+        if (!is.null(search_results) && nrow(search_results) > 0) {
+          specimens <- BOLDconnectR::bold.fetch(
+            get_by = "processid",
+            identifiers = search_results$processid
+          )
+          return(specimens)
+        }
+        NULL
+      }, error = function(e) {
+        logger$error("Taxonomy search failed", e$message)
+        NULL
+      })
+    }
+
+    # Helper function to merge specimen results
+    merge_specimens <- function(existing, new_specimens) {
+      if (is.null(existing)) return(new_specimens)
+      if (is.null(new_specimens)) return(existing)
+
+      rbind(
+        existing,
+        new_specimens[!new_specimens$processid %in% existing$processid, ]
+      )
+    }
+
     # Clear input handler
     observeEvent(input$clear_input, {
       updateTextAreaInput(session, "taxa_input", value = "")
@@ -269,6 +314,7 @@ mod_data_import_server <- function(id, api_integration, state, logger = NULL) {
                                choices = names(CONTINENT_COUNTRIES),
                                selected = character(0))
 
+      # Log action
       logger$info("Input fields cleared")
       showNotification("Input fields cleared", type = "message")
     })
@@ -356,55 +402,5 @@ mod_data_import_server <- function(id, api_integration, state, logger = NULL) {
         write.csv(state$get_store()$specimen_data, file, row.names = FALSE)
       }
     )
-
-    # Internal helper functions
-    process_dataset_search <- function(api_integration, dataset_codes) {
-      api_integration$fetch_specimens(list(dataset_codes = dataset_codes))
-    }
-
-    process_project_search <- function(api_integration, project_codes) {
-      api_integration$fetch_specimens(list(project_codes = project_codes))
-    }
-
-    process_taxonomy_search <- function(api_integration, taxonomy, geography) {
-      api_integration$wait_for_request()
-      search_results <- api_integration$search_public(list(
-        taxonomy = taxonomy,
-        geography = geography
-      ))
-
-      if (!is.null(search_results) && nrow(search_results) > 0) {
-        api_integration$record_success()
-        logger$info("Taxonomy search successful", list(records = nrow(search_results)))
-
-        state$update_state("processing", list(
-          active = TRUE,
-          progress = 75,
-          message = "Fetching specimens..."
-        ))
-
-        api_integration$wait_for_request()
-        taxonomy_specimens <- api_integration$fetch_specimens(list(
-          processids = search_results$processid
-        ))
-
-        if (!is.null(taxonomy_specimens)) {
-          api_integration$record_success()
-          logger$info("Specimen fetch successful", list(records = nrow(taxonomy_specimens)))
-          return(taxonomy_specimens)
-        }
-      }
-      NULL
-    }
-
-    merge_specimens <- function(existing, new_specimens) {
-      if (is.null(existing)) return(new_specimens)
-      if (is.null(new_specimens)) return(existing)
-
-      rbind(
-        existing,
-        new_specimens[!new_specimens$processid %in% existing$processid, ]
-      )
-    }
   })
 }

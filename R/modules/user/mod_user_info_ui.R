@@ -6,7 +6,6 @@
 #' @export
 mod_user_info_ui <- function(id) {
   ns <- NS(id)
-
   div(class = "user-info-container",
       box(
         title = "User Information",
@@ -27,17 +26,14 @@ mod_user_info_ui <- function(id) {
                   "ORCID:",
                   placeholder = "0000-0000-0000-0000"),
 
-        div(
-          class = "button-group",
-          actionButton(ns("save"),
-                       "Save Information",
-                       class = "btn-primary",
-                       icon = icon("save")),
-          actionButton(ns("clear"),
-                       "Clear Information",
-                       class = "btn-warning",
-                       icon = icon("eraser"))
-        ),
+        textInput(ns("bold_api_key"),
+                  "BOLD API Key:",
+                  placeholder = "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"),
+
+        actionButton(ns("save"),
+                     "Save Information",
+                     class = "btn-primary",
+                     icon = icon("save")),
 
         uiOutput(ns("validation_message"))
       ))

@@ -16,7 +16,6 @@ source("R/modules/state/state_manager.R")
 source("R/modules/logging/mod_logging.R")
 
 # Source primary modules
-source("R/modules/api_integration/mod_api_integration.R")
 source("R/modules/data_import/mod_data_import_ui.R")
 source("R/modules/data_import/mod_data_import_server.R")
 source("R/modules/data_import/mod_data_import_utils.R")
@@ -130,7 +129,6 @@ ui <- dashboardPage(
 
 # Server Definition
 server <- function(input, output, session) {
-
   # Initialize core components
   logging_manager <- LoggingManager$new()
   state <- StateManager$new(session, logging_manager)
@@ -142,11 +140,6 @@ server <- function(input, output, session) {
   bags_processor <- BagsProcessor$new(validator, logging_manager)
 
   # Initialize modules
-  api_integration <- mod_api_integration_server(
-    "api",
-    state = state
-  )
-
   user_info <- mod_user_info_server(
     "user_info",
     state = state,
@@ -155,7 +148,6 @@ server <- function(input, output, session) {
 
   data_import <- mod_data_import_server(
     "data_import",
-    api_integration = api_integration,
     state = state,
     logger = logging_manager
   )
@@ -269,13 +261,14 @@ server <- function(input, output, session) {
     }
   })
 
-  # Watch for API key changes and update UI state
+  # Watch for required user info and enable/disable UI accordingly
   observe({
-    api_status <- api_integration$get_status()
     store <- state$get_store()
+    user_info <- store$user_info
 
-    # Check if at least email or name is provided
-    has_user_info <- !is.null(store$user_info$email) || !is.null(store$user_info$name)
+    # Check if API key and user info are provided
+    has_api_key <- !is.null(user_info$bold_api_key) && nchar(user_info$bold_api_key) > 0
+    has_user_info <- !is.null(user_info$email) || !is.null(user_info$name)
 
     # Check if any input data is present
     input_present <- !is.null(input$`data_import-taxa_input`) &&
@@ -286,7 +279,7 @@ server <- function(input, output, session) {
       nchar(trimws(input$`data_import-project_codes`)) > 0 ||
       length(input$`data_import-continents`) > 0
 
-    if (api_status$is_set && has_user_info && input_present) {
+    if (has_api_key && has_user_info && input_present) {
       shinyjs::enable("data_import-submit")
       shinyjs::enable("bin_analysis-analyze")
     } else {

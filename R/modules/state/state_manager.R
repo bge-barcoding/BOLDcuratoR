@@ -29,8 +29,9 @@ StateManager <- R6::R6Class(
     #' @param key State key to update
     #' @param value New value
     #' @param validation_fn Optional validation function
+    #' @param cleanup_fn Optional cleanup function
     #' @return Logical indicating success
-    update_state = function(key, value, validation_fn = NULL) {
+    update_state = function(key, value, validation_fn = NULL, cleanup_fn = NULL) {
       success <- private$error_boundary$catch({
         # Pre-update validation
         if (!is.null(validation_fn)) {
@@ -45,6 +46,15 @@ StateManager <- R6::R6Class(
         old_value <- isolate(private$store[[key]])
 
         tryCatch({
+          # Validate state transition if applicable
+          if (key == "api_key_status") {
+            transition_validation <- private$validate_state_transition(old_value, value)
+            if (!transition_validation$valid) {
+              private$log_error("Invalid state transition", transition_validation$messages)
+              return(FALSE)
+            }
+          }
+
           # Update store
           private$store[[key]] <- value
 
@@ -59,6 +69,11 @@ StateManager <- R6::R6Class(
             return(FALSE)
           }
 
+          # Run cleanup if provided
+          if (!is.null(cleanup_fn)) {
+            cleanup_fn(old_value)
+          }
+
           private$log_info(sprintf("State updated successfully: %s", key))
           TRUE
         }, error = function(e) {
@@ -69,6 +84,29 @@ StateManager <- R6::R6Class(
       })
 
       return(!is.null(success) && success)
+    },
+
+    #' @description Validate API key
+    #' @param key API key to validate
+    #' @return Logical indicating success
+    validate_api_key = function(key) {
+      private$error_boundary$catch({
+        current_state <- isolate(private$store$api_key_status)
+
+        new_state <- list(
+          is_set = FALSE,
+          key = key,
+          last_validated = Sys.time(),
+          validation_attempts = current_state$validation_attempts + 1,
+          last_attempt = Sys.time()
+        )
+
+        if (private$validate_key_format(key)) {
+          new_state$is_set <- TRUE
+        }
+
+        self$update_state("api_key_status", new_state, private$validate_api_key_state)
+      })
     },
 
     #' @description Validate specific state components
@@ -84,7 +122,6 @@ StateManager <- R6::R6Class(
           validator(isolate(private$store[[key]]))
         })
 
-        # Combine validation results
         list(
           valid = all(sapply(validation_results, function(x) x$valid)),
           messages = unlist(lapply(validation_results, function(x) x$messages))
@@ -148,14 +185,15 @@ StateManager <- R6::R6Class(
     state_history = list(),
     initial_state = NULL,
 
-    #' Initialize reactive store with default values
     initialize_store = function() {
       private$initial_state <- list(
         # Core application state
         api_key_status = list(
           is_set = FALSE,
           key = NULL,
-          last_validated = NULL
+          last_validated = NULL,
+          validation_attempts = 0,
+          last_attempt = NULL
         ),
 
         # User state
@@ -198,7 +236,6 @@ StateManager <- R6::R6Class(
       private$store <- do.call(reactiveValues, private$initial_state)
     },
 
-    #' Setup reactive observers for state monitoring
     setup_observers = function() {
       # Monitor error state
       observe({
@@ -215,12 +252,16 @@ StateManager <- R6::R6Class(
           private$update_progress(processing)
         }
       })
+
+      # Monitor API key status
+      observe({
+        api_status <- isolate(private$store$api_key_status)
+        if (!is.null(api_status$last_attempt)) {
+          private$handle_api_status_change(api_status)
+        }
+      })
     },
 
-    #' Track state changes for history
-    #' @param key State key that changed
-    #' @param old_value Previous value
-    #' @param new_value New value
     track_state_change = function(key, old_value, new_value) {
       change_record <- list(
         timestamp = Sys.time(),
@@ -232,7 +273,6 @@ StateManager <- R6::R6Class(
       private$state_history <- c(private$state_history, list(change_record))
     },
 
-    #' Validate state consistency across components
     validate_state_consistency = function() {
       messages <- character()
 
@@ -265,12 +305,60 @@ StateManager <- R6::R6Class(
       )
     },
 
-    #' Get appropriate validator function for a state key
-    #' @param key State key
-    #' @return Validator function or NULL if no validator exists
+    validate_key_format = function(key) {
+      !is.null(key) &&
+        nchar(trimws(key)) == 36 &&
+        grepl("^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$",
+              key, ignore.case = TRUE)
+    },
+
+    validate_api_key_state = function(state) {
+      if (!is.list(state)) {
+        return(list(
+          valid = FALSE,
+          messages = "API key state must be a list"
+        ))
+      }
+
+      required_fields <- c("is_set", "key", "last_validated",
+                           "validation_attempts", "last_attempt")
+      missing_fields <- setdiff(required_fields, names(state))
+
+      if (length(missing_fields) > 0) {
+        return(list(
+          valid = FALSE,
+          messages = sprintf("Missing required fields: %s",
+                             paste(missing_fields, collapse = ", "))
+        ))
+      }
+
+      if (state$is_set && !is.null(state$key)) {
+        valid_format <- private$validate_key_format(state$key)
+        if (!valid_format) {
+          return(list(
+            valid = FALSE,
+            messages = "Invalid API key format"
+          ))
+        }
+      }
+
+      list(valid = TRUE, messages = character())
+    },
+
+    validate_state_transition = function(from_state, to_state) {
+      if (from_state$is_set && !to_state$is_set && !is.null(to_state$key)) {
+        return(list(
+          valid = FALSE,
+          messages = "Cannot set new key while clearing API key status"
+        ))
+      }
+
+      list(valid = TRUE, messages = character())
+    },
+
     get_validator = function(key) {
       switch(key,
-             "api_key_status" = validate_api_key,
+             "api_key_status" = private$validate_api_key_state,
              "user_info" = validate_user_info,
              "specimen_data" = validate_specimen_data,
              "bin_analysis" = validate_bin_analysis,
@@ -281,16 +369,11 @@ StateManager <- R6::R6Class(
       )
     },
 
-    #' Revert state to previous value
-    #' @param key State key to revert
-    #' @param old_value Previous value to restore
     revert_state = function(key, old_value) {
       private$store[[key]] <- old_value
       private$log_warn(sprintf("State reverted for key: %s", key))
     },
 
-    #' Handle error state changes
-    #' @param error_state Current error state
     handle_error_state = function(error_state) {
       if (!is.null(private$logger)) {
         private$logger$error(error_state$message, list(
@@ -300,7 +383,6 @@ StateManager <- R6::R6Class(
         ))
       }
 
-      # Update UI with error message
       if (!is.null(private$session)) {
         showNotification(
           error_state$message,
@@ -310,8 +392,15 @@ StateManager <- R6::R6Class(
       }
     },
 
-    #' Update progress indicators
-    #' @param processing Current processing state
+    handle_api_status_change = function(api_status) {
+      if (api_status$is_set) {
+        private$log_info("API key validated successfully")
+      } else if (api_status$validation_attempts > 0) {
+        private$log_warn(sprintf("API key validation failed. Attempts: %d",
+                                 api_status$validation_attempts))
+      }
+    },
+
     update_progress = function(processing) {
       if (!is.null(private$session)) {
         withProgress(
@@ -324,7 +413,6 @@ StateManager <- R6::R6Class(
       }
     },
 
-    #' Logging helpers
     log_info = function(message) {
       if (!is.null(private$logger)) {
         private$logger$info(message)
@@ -380,217 +468,3 @@ ErrorBoundary <- R6::R6Class(
     }
   )
 )
-
-# Validation Functions
-
-#' Validate API key format and expiration
-#' @param value API key status list
-#' @return Validation result list
-validate_api_key <- function(value) {
-  if (!is.list(value) || !all(c("is_set", "key") %in% names(value))) {
-    return(list(valid = FALSE, messages = "Invalid API key status format"))
-  }
-
-  if (value$is_set && (is.null(value$key) || nchar(trimws(value$key)) != 36)) {
-    return(list(valid = FALSE, messages = "Invalid API key format"))
-  }
-
-  list(valid = TRUE, messages = character())
-}
-
-#' Validate user information
-#' @param value User info list
-#' @return Validation result list
-validate_user_info <- function(value) {
-  if (!is.list(value)) {
-    return(list(valid = FALSE, messages = "User info must be a list"))
-  }
-
-  # Require either email or name
-  if (is.null(value$email) && is.null(value$name)) {
-    return(list(valid = FALSE, messages = "Either email or name must be provided"))
-  }
-
-  # Validate email format if provided
-  if (!is.null(value$email) && !grepl("^[^@]+@[^@]+\\.[^@]+$", value$email)) {
-    return(list(valid = FALSE, messages = "Invalid email format"))
-  }
-
-  list(valid = TRUE, messages = character())
-}
-
-#' Validate specimen data format and content
-#' @param value Specimen data frame
-#' @return Validation result list
-validate_specimen_data <- function(value) {
-  messages <- character()
-
-  if (is.null(value)) {
-    return(list(valid = FALSE, messages = "Specimen data is NULL"))
-  }
-
-  if (!is.data.frame(value)) {
-    return(list(valid = FALSE, messages = "Specimen data must be a data frame"))
-  }
-
-  if (nrow(value) == 0) {
-    return(list(valid = FALSE, messages = "Specimen data is empty"))
-  }
-
-  # Required columns
-  required_cols <- c("processid", "species", "bin_uri")
-  missing_cols <- setdiff(required_cols, names(value))
-  if (length(missing_cols) > 0) {
-    messages <- c(messages, sprintf("Missing required columns: %s",
-                                    paste(missing_cols, collapse = ", ")))
-  }
-
-  # Check for duplicate process IDs
-  if ("processid" %in% names(value) && any(duplicated(value$processid))) {
-    messages <- c(messages, "Duplicate process IDs found")
-  }
-
-  list(
-    valid = length(messages) == 0,
-    messages = messages
-  )
-}
-
-#' Validate BIN analysis results
-#' @param value BIN analysis list
-#' @return Validation result list
-validate_bin_analysis <- function(value) {
-  if (is.null(value)) {
-    return(list(valid = FALSE, messages = "BIN analysis is NULL"))
-  }
-
-  required_components <- c("bin_summary", "bin_content", "stats")
-  missing_components <- setdiff(required_components, names(value))
-
-  if (length(missing_components) > 0) {
-    return(list(
-      valid = FALSE,
-      messages = sprintf("Missing BIN analysis components: %s",
-                         paste(missing_components, collapse = ", "))
-    ))
-  }
-
-  list(valid = TRUE, messages = character())
-}
-
-#' Validate BAGS grades data
-#' @param value BAGS grades data frame
-#' @return Validation result list
-validate_bags_grades <- function(value) {
-  messages <- character()
-
-  if (is.null(value)) {
-    return(list(valid = FALSE, messages = "BAGS grades data is NULL"))
-  }
-
-  if (!is.data.frame(value)) {
-    return(list(valid = FALSE, messages = "BAGS grades must be a data frame"))
-  }
-
-  # Check required columns
-  required_cols <- c("species", "bags_grade", "specimen_count", "bin_count")
-  missing_cols <- setdiff(required_cols, names(value))
-  if (length(missing_cols) > 0) {
-    messages <- c(messages, sprintf("Missing required columns: %s",
-                                    paste(missing_cols, collapse = ", ")))
-  }
-
-  # Validate grade values
-  if ("bags_grade" %in% names(value)) {
-    invalid_grades <- setdiff(unique(value$bags_grade), c("A", "B", "C", "D", "E"))
-    if (length(invalid_grades) > 0) {
-      messages <- c(messages, sprintf("Invalid BAGS grades found: %s",
-                                      paste(invalid_grades, collapse = ", ")))
-    }
-  }
-
-  # Validate numeric columns
-  numeric_cols <- c("specimen_count", "bin_count")
-  for (col in intersect(numeric_cols, names(value))) {
-    if (!is.numeric(value[[col]]) || any(value[[col]] < 0, na.rm = TRUE)) {
-      messages <- c(messages, sprintf("Invalid values in column %s (must be non-negative numeric)", col))
-    }
-  }
-
-  list(
-    valid = length(messages) == 0,
-    messages = messages
-  )
-}
-
-#' Validate selected specimens
-#' @param value Selected specimens list
-#' @return Validation result list
-validate_selected_specimens <- function(value) {
-  messages <- character()
-
-  if (!is.list(value)) {
-    return(list(valid = FALSE, messages = "Selected specimens must be a list"))
-  }
-
-  # Validate species names as keys
-  invalid_species <- sapply(names(value), function(species) {
-    is.null(species) || nchar(trimws(species)) == 0 ||
-      grepl("sp\\.|spp\\.|[0-9]|^sp$|aff\\.|cf\\.", species)
-  })
-
-  if (any(invalid_species)) {
-    messages <- c(messages, "Invalid species names in selection")
-  }
-
-  # Validate process IDs as values
-  invalid_ids <- sapply(value, function(id) {
-    is.null(id) || !is.character(id) || length(id) != 1 ||
-      nchar(trimws(id)) == 0
-  })
-
-  if (any(invalid_ids)) {
-    messages <- c(messages, "Invalid process IDs in selection")
-  }
-
-  list(
-    valid = length(messages) == 0,
-    messages = messages
-  )
-}
-
-#' Validate processing state
-#' @param value Processing state list
-#' @return Validation result list
-validate_processing_state <- function(value) {
-  messages <- character()
-
-  if (!is.list(value)) {
-    return(list(valid = FALSE, messages = "Processing state must be a list"))
-  }
-
-  # Check required fields
-  required_fields <- c("active", "progress", "message")
-  missing_fields <- setdiff(required_fields, names(value))
-  if (length(missing_fields) > 0) {
-    messages <- c(messages, sprintf("Missing processing state fields: %s",
-                                    paste(missing_fields, collapse = ", ")))
-  }
-
-  # Validate progress value
-  if (!is.null(value$progress)) {
-    if (!is.numeric(value$progress) || value$progress < 0 || value$progress > 100) {
-      messages <- c(messages, "Progress must be numeric between 0 and 100")
-    }
-  }
-
-  # Validate active flag
-  if (!is.null(value$active) && !is.logical(value$active)) {
-    messages <- c(messages, "Active flag must be logical")
-  }
-
-  list(
-    valid = length(messages) == 0,
-    messages = messages
-  )
-}
