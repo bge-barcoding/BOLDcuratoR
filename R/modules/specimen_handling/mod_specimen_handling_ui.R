@@ -19,7 +19,7 @@ mod_specimen_handling_ui <- function(id) {
       box(
         title = "Specimen Quality Summary",
         status = "info",
-        width = 12,
+        width = 14,
         solidHeader = TRUE,
 
         fluidRow(
@@ -29,7 +29,8 @@ mod_specimen_handling_ui <- function(id) {
           column(2, valueBoxOutput(ns("rank_3_box"), width = NULL)),
           column(2, valueBoxOutput(ns("rank_4_box"), width = NULL)),
           column(2, valueBoxOutput(ns("rank_5_box"), width = NULL)),
-          column(2, valueBoxOutput(ns("rank_6_box"), width = NULL))
+          column(2, valueBoxOutput(ns("rank_6_box"), width = NULL)),
+          column(2, valueBoxOutput(ns("rank_7_box"), width = NULL))
         )
       )
     ),
@@ -48,7 +49,7 @@ mod_specimen_handling_ui <- function(id) {
           column(4,
                  selectInput(ns("rank_filter"),
                              "Filter by Rank:",
-                             choices = c("All", "1", "2", "3", "4", "5", "6"),
+                             choices = c("All", "1", "2", "3", "4", "5", "6", "7"),
                              selected = "All"
                  )
           ),

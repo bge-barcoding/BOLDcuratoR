@@ -20,10 +20,9 @@ mod_bin_analysis_ui <- function(id) {
 
         # Summary Statistics
         fluidRow(
-          valueBoxOutput(ns("total_bins_box"), width = 3),
-          valueBoxOutput(ns("concordant_bins_box"), width = 3),
-          valueBoxOutput(ns("discordant_bins_box"), width = 3),
-          valueBoxOutput(ns("shared_bins_box"), width = 3)
+          valueBoxOutput(ns("total_bins_box"), width = 4),
+          valueBoxOutput(ns("concordant_bins_box"), width = 4),
+          valueBoxOutput(ns("discordant_bins_box"), width = 4),
         ),
 
         # Main Content Tabs

@@ -9,7 +9,6 @@ source("R/config/constants.R")
 # Source utility functions
 source("R/utils/bags_grading.R")
 source("R/utils/specimen_ranking.R")
-source("R/utils/specimen_scoring.R")
 source("R/utils/specimen_validation.R")
 source("R/utils/table_utils.R")
 
@@ -26,7 +25,6 @@ source("R/modules/data_import/mod_data_import_utils.R")
 # Source analysis modules
 source("R/modules/specimen_handling/specimen_processor.R")
 source("R/modules/specimen_handling/specimen_scorer.R")
-# source("R/modules/specimen_handling/specimen_validator.R")
 source("R/modules/specimen_handling/mod_specimen_handling_server.R")
 source("R/modules/specimen_handling/mod_specimen_handling_ui.R")
 
