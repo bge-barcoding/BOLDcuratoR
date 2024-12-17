@@ -46,6 +46,11 @@ mod_specimen_handling_server <- function(id, state, logger) {
       )
     })
 
+    # validation function
+    validate_selected_specimens <- function(selections) {
+      list(valid = TRUE, messages = character(0))
+    }
+
     # Process new specimen data
     observe({
       store <- state$get_store()

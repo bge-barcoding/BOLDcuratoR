@@ -1,4 +1,12 @@
-# Package loading and installation
+# First ensure R6 is available
+if (!require("R6", quietly = TRUE)) {
+  install.packages("R6")
+  if (!require("R6", quietly = TRUE)) {
+    stop("Failed to load critical package: R6")
+  }
+}
+
+# Define required packages
 required_packages <- c(
   # Core packages
   "shiny",
@@ -9,13 +17,14 @@ required_packages <- c(
   "dplyr",
   "shinycssloaders",
   "tidyr",
-  "logger",
   "R6",
+  "logger",
   "markdown",
   "purrr",
   "utils",
   "remotes",
   "devtools",
+  "jsonlite",
 
   # Database packages
   "DBI",
@@ -31,82 +40,68 @@ required_packages <- c(
   "DECIPHER"
 )
 
-# Install missing packages including Bioconductor packages
-.install_if_missing <- function(packages) {
+# Install missing packages function
+.install_packages <- function() {
   tryCatch({
     installed_pkgs <- installed.packages()[,"Package"]
-    new_packages <- packages[!(packages %in% installed_pkgs)]
+    missing_pkgs <- required_packages[!(required_packages %in% installed_pkgs)]
 
-    if(length(new_packages)) {
-      message("Installing missing packages: ", paste(new_packages, collapse = ", "))
+    if(length(missing_pkgs) > 0) {
+      message("Installing missing packages: ", paste(missing_pkgs, collapse = ", "))
 
-      # Install BiocManager if not present
       if(!require("BiocManager", quietly = TRUE)) {
         install.packages("BiocManager")
       }
 
-      # Separate Bioconductor and CRAN packages
       bioc_packages <- c("Biostrings", "msa", "DECIPHER")
-      cran_packages <- setdiff(new_packages, bioc_packages)
+      cran_packages <- setdiff(missing_pkgs, bioc_packages)
 
-      # Install CRAN packages
       if(length(cran_packages) > 0) {
         install.packages(cran_packages)
       }
 
-      # Install Bioconductor packages
-      bioc_to_install <- intersect(new_packages, bioc_packages)
+      bioc_to_install <- intersect(missing_pkgs, bioc_packages)
       if(length(bioc_to_install) > 0) {
         BiocManager::install(bioc_to_install)
       }
     }
+    return(TRUE)
   }, error = function(e) {
     message("Error installing packages: ", e$message)
     if(grepl("Bioconductor", e$message)) {
-      message("Please try installing Bioconductor packages manually using:\n",
+      message("Please try installing Bioconductor packages manually:\n",
               "if (!require('BiocManager')) install.packages('BiocManager')\n",
               "BiocManager::install(c('Biostrings', 'msa', 'DECIPHER'))")
     }
-    stop("Package installation failed")
+    return(FALSE)
   })
+}
+
+# Load packages with error handling
+.load_packages <- function() {
+  # Then load other packages
+  for(pkg in setdiff(required_packages, "R6")) {
+    if(!require(pkg, character.only = TRUE, quietly = TRUE)) {
+      stop(sprintf("Failed to load package: %s", pkg))
+    }
+  }
 }
 
 # Install BOLDconnectR if missing
-if (!require("BOLDconnectR")) {
-  tryCatch({
-    devtools::install_github("boldsystems-central/BOLDconnectR")
-  }, error = function(e) {
-    message("Failed to install BOLDconnectR: ", e$message)
-    stop("BOLDconnectR installation failed")
-  })
-}
-
-# Load required packages with error handling
-.load_packages <- function(packages) {
-  failed_packages <- character()
-
-  for(pkg in packages) {
+.install_boldconnectr <- function() {
+  if (!require("BOLDconnectR")) {
     tryCatch({
-      suppressWarnings(suppressMessages(
-        library(pkg, character.only = TRUE)
-      ))
+      devtools::install_github("boldsystems-central/BOLDconnectR")
+      return(TRUE)
     }, error = function(e) {
-      failed_packages <<- c(failed_packages, pkg)
+      message("Failed to install BOLDconnectR: ", e$message)
+      return(FALSE)
     })
   }
-
-  if(length(failed_packages) > 0) {
-    stop("Failed to load packages: ", paste(failed_packages, collapse = ", "))
-  }
+  return(TRUE)
 }
 
-# Install missing packages
-.install_if_missing(required_packages)
-
-# Load all packages
-.load_packages(required_packages)
-
-# Source utility functions
+# Source utility functions with error handling
 .source_utils <- function() {
   tryCatch({
     utils_path <- "R/utils"
@@ -116,14 +111,14 @@ if (!require("BOLDconnectR")) {
       return(FALSE)
     }
     invisible(lapply(utils_files, source))
-    TRUE
+    return(TRUE)
   }, error = function(e) {
     warning("Error sourcing utility files: ", e$message)
-    FALSE
+    return(FALSE)
   })
 }
 
-# Source modules
+# Source modules with error handling
 .source_modules <- function() {
   tryCatch({
     modules_path <- "R/modules"
@@ -134,83 +129,103 @@ if (!require("BOLDconnectR")) {
       return(FALSE)
     }
     invisible(lapply(module_files, source))
-    TRUE
+    return(TRUE)
   }, error = function(e) {
     warning("Error sourcing module files: ", e$message)
-    FALSE
+    return(FALSE)
   })
 }
 
-# Initialize logging
-if (!dir.exists("logs")) {
-  dir.create("logs")
-}
-
-# Create logging manager instance
-logging_manager <- LoggingManager$new()
-
-# Load configuration
-tryCatch({
-  source("R/config/constants.R")
-}, error = function(e) {
-  stop("Failed to load constants: ", e$message)
-})
-
-# Set global options
-options(
-  shiny.maxRequestSize = 30*1024^2,  # 30MB max request size
-  timeout = 300,                      # 5-minute timeout
-  scipen = 999,                       # Avoid scientific notation
-  shiny.sanitize.errors = FALSE,      # Show detailed error messages
-  shiny.fullstacktrace = TRUE,        # Show full stack traces
-  warn = 1                            # Show warnings immediately
-)
-
 # Create required directories
-for(dir in c("data", "logs", "output", "temp")) {
-  if(!dir.exists(dir)) {
-    dir.create(dir)
+.create_directories <- function() {
+  required_dirs <- c("data", "logs", "output", "temp", "config")
+  for(dir in required_dirs) {
+    if(!dir.exists(dir)) {
+      dir.create(dir, recursive = TRUE)
+    }
   }
-}
-
-# Source utilities and modules
-if(!.source_utils()) {
-  stop("Failed to source utility files")
-}
-
-if(!.source_modules()) {
-  stop("Failed to source module files")
 }
 
 # Initialize analysis parameters
 .initialize_analysis_params <- function() {
-  # Load from config if exists
-  config_file <- "config/analysis_params.json"
-  if(file.exists(config_file)) {
-    params <- jsonlite::fromJSON(config_file)
-  } else {
-    # Default parameters
-    params <- list(
-      haplotype = list(
-        min_overlap = 100,
-        match_score = 1,
-        mismatch_penalty = -1,
-        gap_penalty = -2
-      ),
-      bin = list(
-        min_specimens = 3,
-        min_coverage = 0.8,
-        concordance_threshold = 0.95
-      ),
-      bags = list(
-        min_quality_score = 0,
-        max_rank = 7
+  tryCatch({
+    config_file <- "config/analysis_params.json"
+    if(file.exists(config_file)) {
+      params <- jsonlite::fromJSON(config_file)
+    } else {
+      params <- list(
+        haplotype = list(
+          min_overlap = 100,
+          match_score = 1,
+          mismatch_penalty = -1,
+          gap_penalty = -2
+        ),
+        bin = list(
+          min_specimens = 3,
+          min_coverage = 0.8,
+          concordance_threshold = 0.95
+        ),
+        bags = list(
+          min_quality_score = 0,
+          max_rank = 7
+        )
       )
-    )
-    jsonlite::write_json(params, config_file, pretty = TRUE)
-  }
-  params
+      jsonlite::write_json(params, config_file, pretty = TRUE)
+    }
+    return(params)
+  }, error = function(e) {
+    warning("Error initializing analysis parameters: ", e$message)
+    return(NULL)
+  })
 }
 
-# Initialize analysis parameters
-analysis_params <- .initialize_analysis_params()
+# Main initialization
+tryCatch({
+  # First install and load all required packages
+  if(!.install_packages()) {
+    stop("Package installation failed")
+  }
+  .load_packages()
+
+  if(!.install_boldconnectr()) {
+    stop("BOLDconnectR installation failed")
+  }
+
+  # Create required directories
+  .create_directories()
+
+  # Load configuration first
+  source("R/config/constants.R")
+
+  # Source utilities and modules
+  if(!.source_utils()) {
+    stop("Failed to source utility files")
+  }
+  if(!.source_modules()) {
+    stop("Failed to source module files")
+  }
+
+  # Initialize components that depend on loaded packages
+  analysis_params <- .initialize_analysis_params()
+  if(is.null(analysis_params)) {
+    stop("Failed to initialize analysis parameters")
+  }
+
+  # Create logging manager after ensuring R6 is loaded
+  if (!exists("R6Class")) {
+    stop("R6 package not properly loaded")
+  }
+  logging_manager <- LoggingManager$new()
+
+  options(
+    shiny.maxRequestSize = 30*1024^2,  # 30MB
+    timeout = 300,                      # 5 minutes
+    scipen = 999,                       # Avoid scientific notation
+    shiny.sanitize.errors = FALSE,      # Show detailed errors
+    shiny.fullstacktrace = TRUE,        # Show full error traces
+    warn = 1                            # Show warnings immediately
+  )
+
+}, error = function(e) {
+  stop("Initialization failed: ", e$message)
+})

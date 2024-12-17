@@ -88,52 +88,19 @@ calculate_grade_metrics <- function(data) {
   )
 }
 
-#' Get species with grade
-#' @param selected_specimens List of selected specimens
-#' @param grade_species Vector of species in grade
-#' @return Vector of species with grade
-#' @keywords internal
-get_species_with_grade <- function(selected_specimens, grade_species) {
-  if (!is.list(selected_specimens)) return(character(0))
-
-  names(selected_specimens)[names(selected_specimens) %in% grade_species]
-}
-
-#' Validate specimen selection
-#' @param selection_info Selection information list
-#' @return Boolean indicating if selection is valid
-#' @keywords internal
-validate_specimen_selection <- function(selection_info) {
-  if (!is.list(selection_info) ||
-      !all(c("species", "processid") %in% names(selection_info))) {
-    return(FALSE)
-  }
-  TRUE
-}
-
-#' Update specimen selection in state
-#' @param state State manager instance
-#' @param selection_info Selection information
+#' Format grade-specific data for display
+#' @param specimens Data frame of specimens
 #' @param grade BAGS grade
+#' @return Formatted data frame
 #' @keywords internal
-update_specimen_selection <- function(state, selection_info, grade) {
-  current_selections <- state$get_store()$selected_specimens
-  if (!is.list(current_selections)) {
-    current_selections <- list()
-  }
+format_grade_data <- function(specimens, grade) {
+  # Add species rank summary
+  specimens$species_rank <- factor(sapply(specimens$species, function(sp) {
+    if (is.na(sp) || sp == "") return("No ID")
+    if (grepl("cf\\.|aff\\.", sp)) return("cf./aff.")
+    if (grepl("sp\\.|spp\\.", sp)) return("sp./spp.")
+    "Species"
+  }))
 
-  current_selections[[selection_info$species]] <- selection_info$processid
-  state$update_state("selected_specimens", current_selections)
-
-  user_info <- state$get_store()$user_info
-  state$track_activity(
-    "specimen_selected",
-    list(
-      species = selection_info$species,
-      processid = selection_info$processid,
-      grade = grade,
-      user_email = user_info$email,
-      user_name = user_info$name
-    )
-  )
+  specimens
 }

@@ -3,9 +3,10 @@
 #' Server Module for BIN Analysis
 #' @param id The module ID
 #' @param state State management instance
+#' @param processor BIN processor instance
 #' @param logger Logger instance
 #' @export
-mod_bin_analysis_server <- function(id, state, logger) {
+mod_bin_analysis_server <- function(id, state, processor, logger) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
 
@@ -20,14 +21,8 @@ mod_bin_analysis_server <- function(id, state, logger) {
     # Process new specimen data
     observe({
       # Validate state and required data
-      validation <- state$validate_state(c("specimen_data"))
-      if (!validation$valid) {
-        logger$warn("Invalid state for BIN analysis", validation$messages)
-        return(NULL)
-      }
-
-      specimen_data <- state$get_store()$specimen_data
-      if (is.null(specimen_data)) return(NULL)
+      store <- state$get_store()
+      req(store$specimen_data)
 
       tryCatch({
         processing_status(list(
@@ -36,40 +31,54 @@ mod_bin_analysis_server <- function(id, state, logger) {
           error = NULL
         ))
 
+        # Filter to specimens with BINs for analysis
+        specimens_with_bins <- store$specimen_data[!is.na(store$specimen_data$bin_uri) &
+                                                     store$specimen_data$bin_uri != "", ]
+
         logger$info("Starting BIN analysis", list(
-          total_records = nrow(specimen_data),
-          records_with_bins = sum(!is.na(specimen_data$bin_uri))
+          total_records = nrow(store$specimen_data),
+          records_with_bins = nrow(specimens_with_bins)
         ))
 
         # Process BIN analysis
-        results <- analyze_bin_data(specimen_data)
+        results <- processor$analyze_bins(specimens_with_bins)
 
-        # Validate results
-        validation <- validate_bin_analysis(results)
-        if (!validation$valid) {
-          stop(paste("Invalid BIN analysis results:",
-                     paste(validation$messages, collapse = "; ")))
+        # Convert table objects to data frames
+        if (!is.null(results)) {
+          if ("summary" %in% names(results)) {
+            results$summary <- as.data.frame(results$summary)
+          }
+          if ("content" %in% names(results)) {
+            results$content <- as.data.frame(results$content)
+          }
+          if ("stats" %in% names(results) && !is.data.frame(results$stats)) {
+            results$stats <- as.data.frame(as.list(results$stats))
+          }
         }
 
-        # Update state and reactive values
-        state$update_state("bin_analysis", results, validate_bin_analysis)
-        analysis_results(results)
+        # Validate results
+        if (!is.null(results) && validate_bin_results(results)) {
+          # Update state and reactive values
+          state$update_state("bin_analysis", results)
+          analysis_results(results)
 
-        processing_status(list(
-          is_processing = FALSE,
-          message = "BIN analysis completed successfully",
-          error = NULL
-        ))
+          processing_status(list(
+            is_processing = FALSE,
+            message = "BIN analysis completed successfully",
+            error = NULL
+          ))
 
-        logger$info("BIN analysis completed", list(
-          total_bins = results$stats$total_bins,
-          concordant_bins = results$stats$concordant_bins,
-          discordant_bins = results$stats$discordant_bins
-        ))
+          logger$info("BIN analysis completed", list(
+            total_bins = results$stats$total_bins,
+            concordant_bins = results$stats$concordant_bins,
+            discordant_bins = results$stats$discordant_bins
+          ))
+        } else {
+          stop("Invalid BIN analysis results")
+        }
 
       }, error = function(e) {
         error_msg <- sprintf("BIN analysis error: %s", e$message)
-
         processing_status(list(
           is_processing = FALSE,
           message = NULL,
@@ -86,17 +95,18 @@ mod_bin_analysis_server <- function(id, state, logger) {
           details = list(
             source = "bin_analysis",
             timestamp = Sys.time()
-          ),
-          source = "bin_analysis"
+          )
         ))
       })
     })
 
-    # Summary table output
-    output$bin_summary_table <- renderDT({
-      req(!is.null(analysis_results()))
-      format_bin_summary_table(analysis_results()$summary)
-    })
+    # BIN validation internal function
+    validate_bin_results <- function(results) {
+      if (is.null(results)) return(FALSE)
+      if (!("content" %in% names(results))) return(FALSE)
+      if (!is.data.frame(results$content)) return(FALSE)
+      TRUE
+    }
 
     # Content table output
     output$bin_content_table <- renderDT({
@@ -104,17 +114,12 @@ mod_bin_analysis_server <- function(id, state, logger) {
       format_bin_content_table(analysis_results()$content)
     })
 
-    # Statistics table output
-    output$bin_stats_table <- renderDT({
-      req(!is.null(analysis_results()))
-      format_bin_stats_table(analysis_results()$stats)
-    })
-
     # Summary box outputs
     output$total_bins_box <- renderValueBox({
       req(!is.null(analysis_results()))
+      req(!is.null(analysis_results()$content))
       valueBox(
-        analysis_results()$stats$total_bins,
+        nrow(analysis_results()$content),  # Use content directly
         "Total BINs",
         icon = icon("dna"),
         color = "blue"
@@ -123,8 +128,10 @@ mod_bin_analysis_server <- function(id, state, logger) {
 
     output$concordant_bins_box <- renderValueBox({
       req(!is.null(analysis_results()))
+      req(!is.null(analysis_results()$content))
+      concordant <- sum(analysis_results()$content$concordance == "Concordant")
       valueBox(
-        analysis_results()$stats$concordant_bins,
+        concordant,
         "Concordant BINs",
         icon = icon("check"),
         color = "green"
@@ -133,7 +140,8 @@ mod_bin_analysis_server <- function(id, state, logger) {
 
     output$discordant_bins_box <- renderValueBox({
       req(!is.null(analysis_results()))
-      discordant <- analysis_results()$stats$discordant_bins
+      req(!is.null(analysis_results()$content))
+      discordant <- sum(analysis_results()$content$concordance == "Discordant")
       valueBox(
         discordant,
         "Discordant BINs",
@@ -144,7 +152,8 @@ mod_bin_analysis_server <- function(id, state, logger) {
 
     output$shared_bins_box <- renderValueBox({
       req(!is.null(analysis_results()))
-      shared <- analysis_results()$stats$shared_bins
+      req(!is.null(analysis_results()$content))
+      shared <- sum(analysis_results()$content$unique_species > 1)
       valueBox(
         shared,
         "Shared BINs",
@@ -165,7 +174,7 @@ mod_bin_analysis_server <- function(id, state, logger) {
         sheets <- list(
           "Summary" = results$summary,
           "Content" = results$content,
-          "Statistics" = as.data.frame(t(unlist(results$stats)))
+          "Statistics" = results$stats
         )
 
         writexl::write_xlsx(sheets, file)

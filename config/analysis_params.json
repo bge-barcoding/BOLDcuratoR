@@ -1,0 +1,17 @@
+{
+  "haplotype": {
+    "min_overlap": [100],
+    "match_score": [1],
+    "mismatch_penalty": [-1],
+    "gap_penalty": [-2]
+  },
+  "bin": {
+    "min_specimens": [3],
+    "min_coverage": [0.8],
+    "concordance_threshold": [0.95]
+  },
+  "bags": {
+    "min_quality_score": [0],
+    "max_rank": [7]
+  }
+}

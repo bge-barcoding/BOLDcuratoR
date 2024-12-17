@@ -1,5 +1,8 @@
 # BOLDcuratoR/app.R
 
+# Source global configuration
+source("global.R")
+
 # Source required modules
 source("R/config/constants.R")
 
@@ -23,7 +26,7 @@ source("R/modules/data_import/mod_data_import_utils.R")
 # Source analysis modules
 source("R/modules/specimen_handling/specimen_processor.R")
 source("R/modules/specimen_handling/specimen_scorer.R")
-source("R/modules/specimen_handling/specimen_validator.R")
+# source("R/modules/specimen_handling/specimen_validator.R")
 source("R/modules/specimen_handling/mod_specimen_handling_server.R")
 source("R/modules/specimen_handling/mod_specimen_handling_ui.R")
 
@@ -127,6 +130,47 @@ ui <- dashboardPage(
   )
 )
 
+# Define Processor classes
+BagsProcessor <- R6::R6Class(
+  "BagsProcessor",
+  public = list(
+    initialize = function(logger) {
+      private$logger <- logger
+    },
+    process_grades = function(specimens) {
+      return(calculate_bags_grade(specimens))
+    }
+  ),
+  private = list(
+    logger = NULL
+  )
+)
+
+BinProcessor <- R6::R6Class(
+  "BinProcessor",
+  public = list(
+    initialize = function(logger) {
+      private$logger <- logger
+    },
+    analyze_bins = function(specimens) {
+      if (!is.null(private$logger)) {
+        private$logger$info("Starting BIN analysis")
+      }
+      tryCatch({
+        analyze_bin_data(specimens)
+      }, error = function(e) {
+        if (!is.null(private$logger)) {
+          private$logger$error(sprintf("BIN analysis failed: %s", e$message))
+        }
+        NULL
+      })
+    }
+  ),
+  private = list(
+    logger = NULL
+  )
+)
+
 # Server Definition
 server <- function(input, output, session) {
   # Initialize core components
@@ -134,10 +178,9 @@ server <- function(input, output, session) {
   state <- StateManager$new(session, logging_manager)
   export_manager <- ExportManager$new(logging_manager, session$token)
 
-  # Initialize validator and processors
-  validator <- SpecimenValidator$new(logging_manager)
-  haplotype_manager <- HaplotypeManager$new(state, logging_manager)
-  bags_processor <- BagsProcessor$new(validator, logging_manager)
+  # Initialize processors
+  bags_processor <- BagsProcessor$new(logging_manager)
+  bin_processor <- BinProcessor$new(logging_manager)
 
   # Initialize modules
   user_info <- mod_user_info_server(
@@ -161,6 +204,7 @@ server <- function(input, output, session) {
   bin_analysis <- mod_bin_analysis_server(
     "bin_analysis",
     state = state,
+    processor = bin_processor,
     logger = logging_manager
   )
 
@@ -173,17 +217,6 @@ server <- function(input, output, session) {
     e = mod_bags_grading_server("bags_e", state, grade = "E")
   )
 
-  haplotype <- mod_haplotype_analysis_server(
-    "haplotype",
-    state = state,
-    logger = logging_manager
-  )
-
-  export_history <- mod_export_history_server(
-    "export_history",
-    state = state
-  )
-
   # Process specimens and run analyses after data import
   observe({
     store <- state$get_store()
@@ -194,19 +227,19 @@ server <- function(input, output, session) {
 
     if (!is.null(processed_specimens)) {
       # Run BIN analysis
-      bin_results <- bin_analysis$processor$analyze_bins(processed_specimens)
+      bin_results <- bin_processor$analyze_bins(processed_specimens)
       if (!is.null(bin_results)) {
-        state$update_state("bin_analysis", bin_results, validate_bin_analysis)
+        state$update_state("bin_analysis", bin_results)
       }
 
       # Calculate BAGS grades
       grades <- bags_processor$process_grades(processed_specimens)
       if (!is.null(grades)) {
-        state$update_state("bags_grades", grades, validate_bags_grades)
+        state$update_state("bags_grades", grades)
       }
 
       # Update state with processed data
-      state$update_state("specimen_data", processed_specimens, validate_specimen_data)
+      state$update_state("specimen_data", processed_specimens)
     }
   })
 
@@ -330,10 +363,10 @@ for (dir in c("data", "logs", "output")) {
 
 # Set global options
 options(
-  shiny.maxRequestSize = 30*1024^2,  # 30MB max request size
-  timeout = 300,                      # 5-minute timeout
-  scipen = 999,                       # Avoid scientific notation
-  shiny.sanitize.errors = FALSE       # Show detailed error messages in development
+  shiny.maxRequestSize = 30*1024^2,
+  timeout = 300,
+  scipen = 999,
+  shiny.sanitize.errors = FALSE
 )
 
 # Run application

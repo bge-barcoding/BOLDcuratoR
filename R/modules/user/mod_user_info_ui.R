@@ -24,11 +24,11 @@ mod_user_info_ui <- function(id) {
 
         textInput(ns("orcid"),
                   "ORCID:",
-                  placeholder = "0000-0000-0000-0000"),
+                  placeholder = "ORCID: 0000-0000-0000-0000"),
 
         textInput(ns("bold_api_key"),
                   "BOLD API Key:",
-                  placeholder = "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"),
+                  placeholder = "BOLD API Key: XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"),
 
         actionButton(ns("save"),
                      "Save Information",

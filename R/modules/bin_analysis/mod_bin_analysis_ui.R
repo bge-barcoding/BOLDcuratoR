@@ -32,35 +32,10 @@ mod_bin_analysis_ui <- function(id) {
           width = 12,
 
           tabPanel(
-            "BIN Summary",
-            div(
-              class = "actions-bar",
-              style = "margin-bottom: 15px;",
-              downloadButton(
-                ns("download_analysis"),
-                "Download Analysis",
-                class = "btn-success"
-              )
-            ),
-            div(
-              class = "table-responsive",
-              DTOutput(ns("bin_summary_table"))
-            )
-          ),
-
-          tabPanel(
             "BIN Content Details",
             div(
               class = "table-responsive",
               DTOutput(ns("bin_content_table"))
-            )
-          ),
-
-          tabPanel(
-            "BIN Statistics",
-            div(
-              class = "table-responsive",
-              DTOutput(ns("bin_stats_table"))
             )
           )
         )
