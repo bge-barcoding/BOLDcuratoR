@@ -69,7 +69,7 @@ SPECIMEN_SCORING_CRITERIA <- list(
   ),
 
   HAS_IMAGE = list(
-    fields = c("image")
+    fields = c("processid") # update this once proper image checking available in api
   ),
 
   IDENTIFIER = list(

@@ -38,12 +38,17 @@ SpecimenProcessor <- R6::R6Class(
           return(NULL)
         }
 
-        # Score specimens
-        scored <- private$scorer$score_specimens(validated)
-        if (is.null(scored)) {
-          private$logger$error("Specimen scoring failed")
+        # Score specimens using consolidated scorer
+        tryCatch({
+          scored <- private$scorer$score_specimens(validated)
+          if (is.null(scored)) {
+            private$logger$error("Specimen scoring failed")
+            return(NULL)
+          }
+        }, error = function(e) {
+          private$logger$error(sprintf("Scoring error: %s", e$message))
           return(NULL)
-        }
+        })
 
         # Rank specimens
         ranked <- private$rank_specimens(scored)

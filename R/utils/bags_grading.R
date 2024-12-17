@@ -6,23 +6,38 @@
 #' @export
 calculate_bags_grade <- function(specimens) {
   tryCatch({
-    # Filter for valid species names
-    valid_specimens <- specimens[!is.na(specimens$species) &
-                                   specimens$species != "" &
-                                   !grepl("sp\\.|spp\\.|[0-9]|^sp$|aff\\.|cf\\.",
-                                          specimens$species), ]
+    # Filter for specimens with any taxonomic ID
+    specimens <- specimens[!is.na(specimens$species) | !is.na(specimens$genus), ]
 
-    if (nrow(valid_specimens) == 0) {
+    if (nrow(specimens) == 0) {
       return(create_empty_grades_df())
     }
 
-    # Group by species
-    species_data <- split(valid_specimens, valid_specimens$species)
+    # Group by valid species names
+    valid_taxa <- unique(specimens$species[!is.na(specimens$species) & specimens$species != ""])
+    grades <- lapply(valid_taxa, function(taxon) {
+      # Get all specimens in BINs containing this taxon
+      taxon_bins <- specimens$bin_uri[specimens$species == taxon & !is.na(specimens$bin_uri)]
+      bin_specimens <- specimens[specimens$bin_uri %in% taxon_bins, ]
+      bin_count <- length(unique(taxon_bins))
 
-    # Calculate grades for each species
-    grades <- lapply(species_data, calculate_species_grade, full_dataset = valid_specimens)
+      # Count specimens with taxonomy matching the taxon
+      matching_specimens <- sum(is_concordant_taxonomy(bin_specimens, taxon))
 
-    # Combine and return results
+      # Check for shared/discordant BINs
+      has_shared_bins <- check_shared_bins(bin_specimens, taxon)
+
+      data.frame(
+        species = taxon,
+        bags_grade = determine_bags_grade(matching_specimens, bin_count, has_shared_bins),
+        specimen_count = matching_specimens,
+        bin_count = bin_count,
+        shared_bins = has_shared_bins,
+        bin_coverage = calculate_bin_coverage(specimens[specimens$species == taxon, ]),
+        stringsAsFactors = FALSE
+      )
+    })
+
     result <- do.call(rbind, grades)
     if (is.null(result)) return(create_empty_grades_df())
     result
@@ -32,112 +47,101 @@ calculate_bags_grade <- function(specimens) {
   })
 }
 
-#' Calculate grade for a single species
-#' @param species_specimens Specimens for one species
-#' @param full_dataset Complete specimen dataset for BIN sharing check
-#' @return Data frame row with grade analysis
+#' Check if BINs are shared/discordant
+#' @param bin_specimens Specimens from BINs
+#' @param reference_taxon Reference species name
+#' @return Boolean indicating if BINs are shared
 #' @keywords internal
-calculate_species_grade <- function(species_specimens, full_dataset) {
-  tryCatch({
-    species_name <- unique(species_specimens$species)[1]
-    specimen_count <- nrow(species_specimens)
+check_shared_bins <- function(bin_specimens, reference_taxon) {
+  # Get taxonomy of reference taxon
+  ref_taxonomy <- get_taxonomy_hierarchy(bin_specimens[bin_specimens$species == reference_taxon,][1,])
 
-    # Get valid BINs
-    species_bins <- get_valid_bins(species_specimens)
-    bin_count <- length(species_bins)
+  # For each specimen, check if taxonomy is discordant
+  any(sapply(1:nrow(bin_specimens), function(i) {
+    specimen <- bin_specimens[i,]
 
-    # Check for shared BINs
-    has_shared_bins <- check_shared_bins(species_bins, full_dataset)
+    # Always discordant if cf. or aff.
+    if (!is.na(specimen$species) &&
+        grepl("cf\\.|aff\\.", specimen$species)) {
+      return(TRUE)
+    }
 
-    # Calculate metrics
-    bin_coverage <- calculate_bin_coverage(species_specimens)
-    quality_metrics <- calculate_quality_metrics(species_specimens)
-
-    data.frame(
-      species = species_name,
-      bags_grade = determine_bags_grade(specimen_count, bin_count, has_shared_bins),
-      specimen_count = specimen_count,
-      bin_count = bin_count,
-      shared_bins = has_shared_bins,
-      bin_coverage = bin_coverage,
-      avg_quality = quality_metrics$avg_quality,
-      min_quality = quality_metrics$min_quality,
-      max_quality = quality_metrics$max_quality,
-      countries = length(unique(species_specimens$country.ocean)),
-      stringsAsFactors = FALSE
-    )
-  }, error = function(e) {
-    warning(sprintf("Error calculating grade for species %s: %s", species_name, e$message))
-    NULL
-  })
-}
-
-#' Get valid BINs for specimens
-#' @param specimens Specimen data frame
-#' @return Character vector of valid BIN URIs
-#' @keywords internal
-get_valid_bins <- function(specimens) {
-  unique(specimens$bin_uri[!is.na(specimens$bin_uri) & specimens$bin_uri != ""])
-}
-
-#' Check if BINs are shared with other species
-#' @param bins Vector of BIN URIs
-#' @param full_dataset Complete specimen dataset
-#' @return Boolean indicating if any BINs are shared
-#' @keywords internal
-check_shared_bins <- function(bins, full_dataset) {
-  if (length(bins) == 0) return(FALSE)
-
-  any(sapply(bins, function(bin) {
-    bin_specimens <- full_dataset[!is.na(full_dataset$bin_uri) &
-                                    full_dataset$bin_uri == bin, ]
-    length(unique(bin_specimens$species)) > 1
+    # Check taxonomy concordance
+    specimen_taxonomy <- get_taxonomy_hierarchy(specimen)
+    !is_concordant_hierarchy(specimen_taxonomy, ref_taxonomy)
   }))
 }
 
-#' Calculate BIN coverage percentage
-#' @param specimens Specimen data frame
-#' @return Numeric percentage of specimens with BINs
+#' Get taxonomy hierarchy for a specimen
+#' @param specimen Single specimen record
+#' @return Named list of taxonomic ranks
 #' @keywords internal
-calculate_bin_coverage <- function(specimens) {
-  if (nrow(specimens) == 0) return(0)
-  mean(!is.na(specimens$bin_uri) & specimens$bin_uri != "") * 100
-}
-
-#' Calculate specimen quality metrics
-#' @param specimens Specimen data frame
-#' @return List of quality statistics
-#' @keywords internal
-calculate_quality_metrics <- function(specimens) {
-  if (nrow(specimens) == 0) {
-    return(list(avg_quality = 0, min_quality = 0, max_quality = 0))
-  }
-
-  quality_scores <- specimens$quality_score
+get_taxonomy_hierarchy <- function(specimen) {
   list(
-    avg_quality = mean(quality_scores, na.rm = TRUE),
-    min_quality = min(quality_scores, na.rm = TRUE),
-    max_quality = max(quality_scores, na.rm = TRUE)
+    order = specimen$order,
+    family = specimen$family,
+    genus = specimen$genus,
+    species = specimen$species
   )
 }
 
-#' Create empty grades data frame
-#' @return Empty data frame with correct structure
+#' Check if taxonomies are concordant
+#' @param test_taxonomy Taxonomy to check
+#' @param ref_taxonomy Reference taxonomy
+#' @return Boolean indicating concordance
 #' @keywords internal
-create_empty_grades_df <- function() {
-  data.frame(
-    species = character(),
-    bags_grade = character(),
-    specimen_count = integer(),
-    bin_count = integer(),
-    shared_bins = logical(),
-    bin_coverage = numeric(),
-    avg_quality = numeric(),
-    min_quality = numeric(),
-    max_quality = numeric(),
-    countries = integer(),
-    stringsAsFactors = FALSE
-  )
+is_concordant_hierarchy <- function(test_taxonomy, ref_taxonomy) {
+  # Find lowest populated rank in test taxonomy
+  ranks <- c("species", "genus", "family", "order")
+  test_rank <- ranks[!sapply(test_taxonomy[ranks], is.na)][1]
+
+  if (is.na(test_rank)) return(FALSE)
+
+  # Compare at and above that rank
+  rank_index <- which(ranks == test_rank)
+  ranks_to_check <- ranks[rank_index:length(ranks)]
+
+  all(sapply(ranks_to_check, function(rank) {
+    test_val <- test_taxonomy[[rank]]
+    ref_val <- ref_taxonomy[[rank]]
+
+    # Special handling for species level
+    if (rank == "species" && !is.na(test_val)) {
+      if (grepl("sp\\.|spp\\.", test_val)) {
+        return(TRUE) # sp./spp. is concordant
+      }
+    }
+
+    # NA values are concordant
+    if (is.na(test_val) || is.na(ref_val)) return(TRUE)
+
+    test_val == ref_val
+  }))
+}
+
+#' Check if specimen taxonomy is concordant with reference taxon
+#' @param specimens Data frame of specimens
+#' @param reference_taxon Reference species name
+#' @return Boolean vector of concordance for each specimen
+#' @keywords internal
+is_concordant_taxonomy <- function(specimens, reference_taxon) {
+  # Get reference taxonomy
+  ref_specimen <- specimens[specimens$species == reference_taxon,][1,]
+  ref_taxonomy <- get_taxonomy_hierarchy(ref_specimen)
+
+  # Check each specimen
+  sapply(1:nrow(specimens), function(i) {
+    specimen <- specimens[i,]
+
+    # cf/aff specimens don't count toward specimen totals
+    if (!is.na(specimen$species) && grepl("cf\\.|aff\\.", specimen$species)) {
+      return(FALSE)
+    }
+
+    # Check taxonomy concordance
+    specimen_taxonomy <- get_taxonomy_hierarchy(specimen)
+    is_concordant_hierarchy(specimen_taxonomy, ref_taxonomy)
+  })
 }
 
 #' Determine BAGS grade
@@ -145,7 +149,7 @@ create_empty_grades_df <- function() {
 #' @param bin_count Number of BINs
 #' @param has_shared_bins Boolean indicating if BINs are shared
 #' @return Character indicating BAGS grade (A-E)
-#' @export
+#' @keywords internal
 determine_bags_grade <- function(specimen_count, bin_count, has_shared_bins) {
   tryCatch({
     if (is.na(specimen_count) || is.na(bin_count)) return('E')
@@ -160,66 +164,26 @@ determine_bags_grade <- function(specimen_count, bin_count, has_shared_bins) {
   })
 }
 
-#' Validate BAGS grades data frame
-#' @param grades Data frame of BAGS grades
-#' @return Boolean indicating if grades are valid
-#' @export
-validate_bags_grades <- function(grades) {
-  tryCatch({
-    if (!is.data.frame(grades) || nrow(grades) == 0) return(FALSE)
-
-    required_cols <- c("species", "bags_grade", "specimen_count",
-                       "bin_count", "shared_bins", "bin_coverage")
-    if (!all(required_cols %in% names(grades))) return(FALSE)
-
-    if (!all(grades$bags_grade %in% c("A", "B", "C", "D", "E"))) return(FALSE)
-    if (!is.numeric(grades$specimen_count)) return(FALSE)
-    if (!is.numeric(grades$bin_count)) return(FALSE)
-    if (!is.logical(grades$shared_bins)) return(FALSE)
-
-    TRUE
-  }, error = function(e) {
-    warning(sprintf("Error validating BAGS grades: %s", e$message))
-    FALSE
-  })
-}
-
-#' Summarize BAGS grades
-#' @param grades Data frame of BAGS grades
-#' @return List of summary statistics
-#' @export
-summarize_bags_grades <- function(grades) {
-  tryCatch({
-    if (!validate_bags_grades(grades)) {
-      return(create_empty_summary())
-    }
-
-    list(
-      total_species = nrow(grades),
-      grade_counts = table(grades$bags_grade),
-      avg_specimens = mean(grades$specimen_count),
-      avg_bins = mean(grades$bin_count),
-      shared_bins_count = sum(grades$shared_bins),
-      avg_coverage = mean(grades$bin_coverage),
-      timestamp = Sys.time()
-    )
-  }, error = function(e) {
-    warning(sprintf("Error summarizing BAGS grades: %s", e$message))
-    create_empty_summary()
-  })
-}
-
-#' Create empty summary list
-#' @return Empty summary structure
+#' Calculate BIN coverage percentage
+#' @param specimens Specimen data frame
+#' @return Numeric percentage of specimens with BINs
 #' @keywords internal
-create_empty_summary <- function() {
-  list(
-    total_species = 0,
-    grade_counts = table(character()),
-    avg_specimens = 0,
-    avg_bins = 0,
-    shared_bins_count = 0,
-    avg_coverage = 0,
-    timestamp = Sys.time()
+calculate_bin_coverage <- function(specimens) {
+  if (nrow(specimens) == 0) return(0)
+  mean(!is.na(specimens$bin_uri) & specimens$bin_uri != "") * 100
+}
+
+#' Create empty grades data frame
+#' @return Empty data frame with correct structure
+#' @keywords internal
+create_empty_grades_df <- function() {
+  data.frame(
+    species = character(),
+    bags_grade = character(),
+    specimen_count = integer(),
+    bin_count = integer(),
+    shared_bins = logical(),
+    bin_coverage = numeric(),
+    stringsAsFactors = FALSE
   )
 }

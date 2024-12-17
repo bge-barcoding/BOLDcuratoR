@@ -56,19 +56,14 @@ SpecimenScorer <- R6::R6Class(
     error_boundary = NULL,
     scoring_criteria = NULL,
 
-    #' @description Load scoring criteria from constants
     load_scoring_criteria = function() {
       private$scoring_criteria <- SPECIMEN_SCORING_CRITERIA
     },
 
-    #' @description Calculate score for a single specimen
-    #' @param specimen Single specimen record
-    #' @return List containing score and criteria met
     calculate_specimen_score = function(specimen) {
       score <- 0
       criteria_met <- character()
 
-      # Iterate through scoring criteria
       for (criterion_name in names(private$scoring_criteria)) {
         criterion <- private$scoring_criteria[[criterion_name]]
 
@@ -84,11 +79,6 @@ SpecimenScorer <- R6::R6Class(
       )
     },
 
-    #' @description Check if specimen meets a specific criterion
-    #' @param specimen Specimen record
-    #' @param criterion_name Name of criterion
-    #' @param criterion_rules Rules for the criterion
-    #' @return Boolean indicating if criterion is met
     check_criterion = function(specimen, criterion_name, criterion_rules) {
       # Get field values
       field_values <- sapply(criterion_rules$fields, function(field) {
@@ -96,22 +86,16 @@ SpecimenScorer <- R6::R6Class(
         specimen[[field]]
       })
 
-      # Check if any field has a valid value
       if (all(is.na(field_values))) return(FALSE)
 
-      # Apply criterion-specific checks
       switch(criterion_name,
              "SPECIES_ID" = private$check_species_id(field_values, criterion_rules),
              "TYPE_SPECIMEN" = private$check_type_specimen(field_values, criterion_rules),
              "SEQ_QUALITY" = private$check_sequence_quality(field_values, criterion_rules),
-             private$check_general_criterion(field_values, criterion_rules)
-      )
+             "PUBLIC_VOUCHER" = private$check_public_voucher(field_values, criterion_rules),
+             private$check_general_criterion(field_values, criterion_rules))
     },
 
-    #' @description Check species ID criterion
-    #' @param values Field values
-    #' @param rules Criterion rules
-    #' @return Boolean indicating if criterion is met
     check_species_id = function(values, rules) {
       if (all(is.na(values))) return(FALSE)
 
@@ -121,23 +105,22 @@ SpecimenScorer <- R6::R6Class(
         !grepl(rules$negative_pattern, species_name)
     },
 
-    #' @description Check type specimen criterion
-    #' @param values Field values
-    #' @param rules Criterion rules
-    #' @return Boolean indicating if criterion is met
     check_type_specimen = function(values, rules) {
       if (all(is.na(values))) return(FALSE)
 
+      # Special check for "type" in voucher_type field
+      if (!is.na(values["voucher_type"]) &&
+          grepl("type", tolower(values["voucher_type"]), ignore.case = TRUE)) {
+        return(TRUE)
+      }
+
+      # Standard check for type terms in all fields
       any(sapply(values, function(value) {
-        if (is.na(value) || value == "") return(FALSE)
-        grepl(rules$positive_pattern, tolower(value), ignore.case = TRUE)
+        !is.na(value) && value != "" &&
+          grepl(rules$positive_pattern, tolower(value), ignore.case = TRUE)
       }))
     },
 
-    #' @description Check sequence quality criterion
-    #' @param values Field values
-    #' @param rules Criterion rules
-    #' @return Boolean indicating if criterion is met
     check_sequence_quality = function(values, rules) {
       if (all(is.na(values))) return(FALSE)
 
@@ -148,35 +131,38 @@ SpecimenScorer <- R6::R6Class(
       has_bin && has_length
     },
 
-    #' @description Check general criterion
-    #' @param values Field values
-    #' @param rules Criterion rules
-    #' @return Boolean indicating if criterion is met
+    check_public_voucher = function(values, rules) {
+      if (all(is.na(values))) return(FALSE)
+
+      voucher_value <- tolower(trimws(values[1]))
+      !is.na(voucher_value) && voucher_value != "" &&
+        !grepl(rules$negative_pattern, voucher_value, ignore.case = TRUE) &&
+        (is.null(rules$positive_pattern) ||
+           grepl(rules$positive_pattern, voucher_value, ignore.case = TRUE))
+    },
+
     check_general_criterion = function(values, rules) {
       if (all(is.na(values))) return(FALSE)
 
       any(sapply(values, function(value) {
         if (is.na(value) || value == "") return(FALSE)
 
-        # Check for negative pattern if defined
+        # Check negative pattern if it exists
         if (!is.null(rules$negative_pattern) &&
             grepl(rules$negative_pattern, value, ignore.case = TRUE)) {
           return(FALSE)
         }
 
-        # Check for positive pattern if defined
-        if (!is.null(rules$positive_pattern)) {
-          return(grepl(rules$positive_pattern, value, ignore.case = TRUE))
+        # Check positive pattern if it exists
+        if (!is.null(rules$positive_pattern) &&
+            !grepl(rules$positive_pattern, value, ignore.case = TRUE)) {
+          return(FALSE)
         }
 
-        # Default to TRUE if value exists and no patterns defined
         TRUE
       }))
     },
 
-    #' @description Validate scoring results
-    #' @param specimens Scored specimen data frame
-    #' @return List with validation results
     validate_scoring_results = function(specimens) {
       messages <- character()
 
@@ -189,7 +175,8 @@ SpecimenScorer <- R6::R6Class(
 
       # Validate score range
       invalid_scores <- sum(!is.na(specimens$quality_score) &
-                              (specimens$quality_score < 0 | specimens$quality_score > length(private$scoring_criteria)))
+                              (specimens$quality_score < 0 |
+                                 specimens$quality_score > length(private$scoring_criteria)))
       if (invalid_scores > 0) {
         messages <- c(messages,
                       sprintf("%d specimens have invalid quality scores", invalid_scores))

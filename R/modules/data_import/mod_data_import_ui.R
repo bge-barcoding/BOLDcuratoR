@@ -7,102 +7,101 @@ mod_data_import_ui <- function(id) {
   ns <- NS(id)
 
   tagList(
-    fluidRow(
-      # Error/Warning Alert Box
-      uiOutput(ns("alert_box")),
+    # Error/Warning Alert Box
+    uiOutput(ns("alert_box")),
 
-      # Search Progress Section
-      conditionalPanel(
-        condition = sprintf("input['%s'] === true", ns("show_progress")),
-        box(
-          title = "Search Progress",
-          status = "info",
-          width = 12,
-          solidHeader = TRUE,
-          uiOutput(ns("progress_status"))
-        )
-      ),
-
-      # Main Input Box
+    # Search Progress Section
+    conditionalPanel(
+      condition = sprintf("input['%s'] === true", ns("show_progress")),
       box(
-        title = "Data Input",
-        status = "primary",
-        solidHeader = TRUE,
+        title = "Search Progress",
+        status = "info",
         width = 12,
+        solidHeader = TRUE,
+        uiOutput(ns("progress_status"))
+      )
+    ),
 
-        # Input Controls
-        fluidRow(
-          column(12,
-                   mod_api_integration_ui(NS(id, "api"))
-          ),
-          column(6,
-                 textAreaInput(ns("taxa_input"),
-                               "Enter taxa (one per line, comma-separated for synonyms):",
-                               rows = 8,
-                               placeholder = "Valid name 1, Synonym A, Synonym B\nValid name 2, Synonym C"
-                 )
-          ),
-          column(6,
-                 textAreaInput(ns("dataset_codes"),
-                               "Dataset codes (one per line):",
-                               rows = 4,
-                               placeholder = "DS-EXAMPLE1\nDS-EXAMPLE2"
+    # Main Input Box
+    fluidRow(
+      column(12,
+             box(
+               title = "Data Input",
+               status = "primary",
+               solidHeader = TRUE,
+               width = NULL,
+
+               # Input Controls
+               fluidRow(
+                 column(6,
+                        textAreaInput(ns("taxa_input"),
+                                      "Enter taxa (one per line, comma-separated for synonyms):",
+                                      rows = 8,
+                                      placeholder = "Valid name 1, Synonym A, Synonym B\nValid name 2, Synonym C"
+                        )
                  ),
-                 textAreaInput(ns("project_codes"),
-                               "Project codes (one per line):",
-                               rows = 4,
-                               placeholder = "PROJECT1\nPROJECT2"
+                 column(6,
+                        textAreaInput(ns("dataset_codes"),
+                                      "Dataset codes (one per line):",
+                                      rows = 4,
+                                      placeholder = "DS-EXAMPLE1\nDS-EXAMPLE2"
+                        ),
+                        textAreaInput(ns("project_codes"),
+                                      "Project codes (one per line):",
+                                      rows = 4,
+                                      placeholder = "PROJECT1\nPROJECT2"
+                        )
                  )
-          )
-        ),
+               ),
 
-        # Geographic Filters
-        box(
-          title = "Geographic Filters",
-          status = "info",
-          solidHeader = TRUE,
-          width = 12,
-          collapsible = TRUE,
+               # Geographic Filters
+               box(
+                 title = "Geographic Filters",
+                 status = "info",
+                 solidHeader = TRUE,
+                 width = NULL,
+                 collapsible = TRUE,
 
-          checkboxGroupInput(ns("continents"),
-                             "Select Continents:",
-                             choices = names(CONTINENT_COUNTRIES),
-                             inline = TRUE
-          ),
+                 checkboxGroupInput(ns("continents"),
+                                    "Select Continents:",
+                                    choices = names(CONTINENT_COUNTRIES),
+                                    inline = TRUE
+                 ),
 
-          textAreaInput(ns("countries"),
-                        "Additional Countries (one per line):",
-                        rows = 3,
-                        placeholder = "Enter additional countries not covered by continent selection"
-          ),
+                 textAreaInput(ns("countries"),
+                               "Additional Countries (one per line):",
+                               rows = 3,
+                               placeholder = "Enter additional countries not covered by continent selection"
+                 ),
 
-          div(
-            id = ns("url_warning"),
-            style = "display: none;",
-            tags$p(
-              class = "text-warning",
-              icon("warning"),
-              "Warning: Query length approaching limit. Consider reducing selected regions."
-            )
-          ),
+                 div(
+                   id = ns("url_warning"),
+                   style = "display: none;",
+                   tags$p(
+                     class = "text-warning",
+                     icon("warning"),
+                     "Warning: Query length approaching limit. Consider reducing selected regions."
+                   )
+                 ),
 
-          helpText("Note: Selecting multiple continents will include all countries from each selected continent.")
-        ),
+                 helpText("Note: Selecting multiple continents will include all countries from each selected continent.")
+               ),
 
-        # Action Buttons
-        div(
-          style = "margin-top: 15px;",
-          actionButton(ns("submit"),
-                       "Get Data",
-                       class = "btn-primary",
-                       icon = icon("search")
-          ),
-          actionButton(ns("clear_input"),
-                       "Clear Input",
-                       class = "btn-warning",
-                       icon = icon("eraser")
-          )
-        )
+               # Action Buttons
+               div(
+                 style = "margin-top: 15px;",
+                 actionButton(ns("submit"),
+                              "Get Data",
+                              class = "btn-primary",
+                              icon = icon("search")
+                 ),
+                 actionButton(ns("clear_input"),
+                              "Clear Input",
+                              class = "btn-warning",
+                              icon = icon("eraser")
+                 )
+               )
+             )
       )
     ),
 
@@ -215,22 +214,5 @@ mod_data_import_nav <- function(id) {
     "Data Input",
     tabName = "input",
     icon = icon("table")
-  )
-}
-
-#' Create Help Button Panel
-#' @param id The module ID
-#' @export
-mod_data_import_help <- function(id) {
-  ns <- NS(id)
-  absolutePanel(
-    id = ns("help_panel"),
-    class = "panel panel-default",
-    style = "position: fixed; bottom: 10px; right: 10px; width: auto;",
-    actionButton(ns("show_help"),
-                 "Help",
-                 icon = icon("question-circle"),
-                 class = "btn-info"
-    )
   )
 }
