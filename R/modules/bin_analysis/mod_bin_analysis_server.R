@@ -41,7 +41,7 @@ mod_bin_analysis_server <- function(id, state, processor, logger) {
         ))
 
         # Process BIN analysis
-        results <- processor$analyze_bins(specimens_with_bins)
+        results <- processor(specimens_with_bins) # removed processor$analyze_bins(specimens_with_bins)
 
         # Convert table objects to data frames
         if (!is.null(results)) {

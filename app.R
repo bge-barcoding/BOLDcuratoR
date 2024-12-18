@@ -35,6 +35,7 @@ source("R/modules/bin_analysis/mod_bin_analysis_utils.R")
 source("R/modules/bags_grading/mod_bags_grading_ui.R")
 source("R/modules/bags_grading/mod_bags_grading_server.R")
 source("R/modules/bags_grading/mod_bags_grading_utils.R")
+source("R/modules/bags_grading/mod_bags_table_utils.R")
 
 source("R/modules/haplotype_analysis/haplotype_manager.R")
 source("R/modules/haplotype_analysis/sequence_aligner.R")
@@ -179,6 +180,11 @@ server <- function(input, output, session) {
   # Initialize processors
   bags_processor <- BagsProcessor$new(logging_manager)
   bin_processor <- BinProcessor$new(logging_manager)
+  specimen_processor <- SpecimenProcessor$new(
+    validator = SpecimenValidator$new(logging_manager),
+    scorer = SpecimenScorer$new(logging_manager),
+    logger = logging_manager
+  )
 
   # Initialize modules
   user_info <- mod_user_info_server(
@@ -196,23 +202,24 @@ server <- function(input, output, session) {
   specimen_handling <- mod_specimen_handling_server(
     "specimen_handling",
     state = state,
+    processor = specimen_processor,
     logger = logging_manager
   )
 
   bin_analysis <- mod_bin_analysis_server(
     "bin_analysis",
     state = state,
-    processor = bin_processor,
+    processor = function(specimens) bin_processor$analyze_bins(specimens),  # Pass as function
     logger = logging_manager
   )
 
   # Initialize BAGS grading modules
   bags_grading <- list(
-    a = mod_bags_grading_server("bags_a", state, grade = "A"),
-    b = mod_bags_grading_server("bags_b", state, grade = "B"),
-    c = mod_bags_grading_server("bags_c", state, grade = "C"),
-    d = mod_bags_grading_server("bags_d", state, grade = "D"),
-    e = mod_bags_grading_server("bags_e", state, grade = "E")
+    a = mod_bags_grading_server("bags_a", state, grade = "A", logger = logging_manager),
+    b = mod_bags_grading_server("bags_b", state, grade = "B", logger = logging_manager),
+    c = mod_bags_grading_server("bags_c", state, grade = "C", logger = logging_manager),
+    d = mod_bags_grading_server("bags_d", state, grade = "D", logger = logging_manager),
+    e = mod_bags_grading_server("bags_e", state, grade = "E", logger = logging_manager)
   )
 
   # Process specimens and run analyses after data import
@@ -221,7 +228,7 @@ server <- function(input, output, session) {
     req(store$specimen_data)
 
     # Process specimens through pipeline
-    processed_specimens <- specimen_handling$processor$process_specimens(store$specimen_data)
+    processed_specimens <- specimen_processor$process_specimens(store$specimen_data)  # Use processor instance method
 
     if (!is.null(processed_specimens)) {
       # Run BIN analysis
