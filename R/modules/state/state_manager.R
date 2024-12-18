@@ -4,6 +4,7 @@
 #' @description Manages centralized application state with validation and error handling
 #' @importFrom R6 R6Class
 #' @importFrom shiny reactiveValues isolate
+#' @importFrom jsonlite toJSON fromJSON
 #' @export
 StateManager <- R6::R6Class(
   "StateManager",
@@ -26,7 +27,7 @@ StateManager <- R6::R6Class(
       private$store
     },
 
-    #' @description Update state with validation
+    #' @description Update state with validation and data type conversion
     #' @param key State key to update
     #' @param value New value
     #' @param validation_fn Optional validation function
@@ -34,9 +35,12 @@ StateManager <- R6::R6Class(
     #' @return Logical indicating success
     update_state = function(key, value, validation_fn = NULL, cleanup_fn = NULL) {
       success <- private$error_boundary$catch({
+        # Convert value to proper format before validation
+        converted_value <- private$convert_value(value)
+
         # Pre-update validation
         if (!is.null(validation_fn)) {
-          validation_result <- validation_fn(value)
+          validation_result <- validation_fn(converted_value)
           if (!validation_result$valid) {
             private$log_error("Validation failed", validation_result$messages)
             return(FALSE)
@@ -47,11 +51,11 @@ StateManager <- R6::R6Class(
         old_value <- isolate(private$store[[key]])
 
         tryCatch({
-          # Update store
-          private$store[[key]] <- value
+          # Update store with converted value
+          private$store[[key]] <- converted_value
 
           # Track state change
-          private$track_state_change(key, old_value, value)
+          private$track_state_change(key, old_value, converted_value)
 
           # Run cleanup if provided
           if (!is.null(cleanup_fn)) {
@@ -86,49 +90,6 @@ StateManager <- R6::R6Class(
           }
         }
         TRUE
-      })
-    },
-
-    #' @description Log action with state context
-    #' @param action_type Type of action
-    #' @param details Action details
-    #' @param error Optional error details
-    log_action = function(action_type, details = NULL, error = NULL) {
-      if (!is.null(private$logger)) {
-        context <- list(
-          session_id = private$session$token,
-          timestamp = Sys.time(),
-          action = action_type,
-          details = details,
-          error = error
-        )
-
-        if (!is.null(error)) {
-          private$logger$error(action_type, context)
-        } else {
-          private$logger$info(action_type, context)
-        }
-      }
-    },
-
-    #' @description Handle error state
-    #' @param error Error object
-    #' @param source Error source
-    handle_error = function(error, source = NULL) {
-      tryCatch({
-        error_details <- list(
-          has_error = TRUE,
-          message = if (is.character(error)) error else error$message,
-          details = if (is.list(error)) error else NULL,
-          timestamp = Sys.time(),
-          source = source
-        )
-
-        self$update_state("error", error_details)
-        self$log_action("error_occurred", error_details)
-
-      }, error = function(e) {
-        private$log_error("Error handling failed", e$message)
       })
     }
   ),
@@ -187,25 +148,113 @@ StateManager <- R6::R6Class(
           private$handle_error_state(error_state)
         }
       })
+    },
 
-      # Monitor processing state
-      observe({
-        processing <- isolate(private$store$processing)
-        if (processing$active) {
-          private$update_progress(processing)
+    #' @description Convert value to proper format for state storage
+    #' @param value Value to convert
+    #' @return Converted value
+    convert_value = function(value) {
+      if (is.null(value)) return(NULL)
+
+      if (is.data.frame(value)) {
+        return(private$convert_data_frame(value))
+      } else if (is.list(value)) {
+        return(private$convert_list(value))
+      } else if (inherits(value, "table")) {
+        return(private$convert_table(value))
+      }
+
+      # Return unchanged for other types
+      value
+    },
+
+    #' @description Convert data frame ensuring proper format
+    #' @param df Data frame to convert
+    #' @return Converted data frame
+    convert_data_frame = function(df) {
+      # Ensure proper row names
+      if (!is.null(rownames(df)) && !all(rownames(df) == as.character(seq_len(nrow(df))))) {
+        df <- data.frame(df, stringsAsFactors = FALSE, row.names = NULL)
+      }
+
+      # Convert any table columns to data frames
+      for (col in names(df)) {
+        if (inherits(df[[col]], "table")) {
+          df[[col]] <- private$convert_table(df[[col]])
+        }
+      }
+
+      df
+    },
+
+    #' @description Convert list ensuring proper format for all elements
+    #' @param lst List to convert
+    #' @return Converted list
+    convert_list = function(lst) {
+      lapply(lst, function(x) {
+        if (is.data.frame(x)) {
+          private$convert_data_frame(x)
+        } else if (is.list(x)) {
+          private$convert_list(x)
+        } else if (inherits(x, "table")) {
+          private$convert_table(x)
+        } else {
+          x
         }
       })
+    },
+
+    #' @description Convert table object to data frame
+    #' @param tbl Table object to convert
+    #' @return Data frame
+    convert_table = function(tbl) {
+      if (!inherits(tbl, "table")) return(tbl)
+
+      # Convert table to data frame
+      df <- as.data.frame(tbl, stringsAsFactors = FALSE)
+
+      # Add proper column names if missing
+      if (is.null(colnames(df))) {
+        colnames(df) <- paste0("V", seq_len(ncol(df)))
+      }
+
+      # Clean row names
+      rownames(df) <- NULL
+
+      df
     },
 
     track_state_change = function(key, old_value, new_value) {
       change_record <- list(
         timestamp = Sys.time(),
         key = key,
-        old_value = old_value,
-        new_value = new_value,
+        old_value = private$prepare_for_history(old_value),
+        new_value = private$prepare_for_history(new_value),
         session_id = private$session$token
       )
       private$state_history <- c(private$state_history, list(change_record))
+    },
+
+    #' @description Prepare value for history tracking
+    #' @param value Value to prepare
+    #' @return Prepared value
+    prepare_for_history = function(value) {
+      if (is.data.frame(value)) {
+        list(
+          type = "data.frame",
+          rows = nrow(value),
+          cols = ncol(value),
+          names = names(value)
+        )
+      } else if (is.list(value)) {
+        list(
+          type = "list",
+          length = length(value),
+          names = names(value)
+        )
+      } else {
+        value
+      }
     },
 
     handle_error_state = function(error_state) {
@@ -215,31 +264,6 @@ StateManager <- R6::R6Class(
           source = error_state$source,
           timestamp = error_state$timestamp
         ))
-      }
-
-      if (!is.null(private$session)) {
-        showNotification(
-          error_state$message,
-          type = "error",
-          duration = NULL
-        )
-      }
-    },
-
-    update_progress = function(processing) {
-      if (!is.null(private$session)) {
-        withProgress(
-          message = processing$message,
-          value = processing$progress / 100,
-          {
-            if (!is.null(processing$stage)) {
-              incProgress(
-                amount = processing$sub_progress / 100,
-                detail = processing$stage
-              )
-            }
-          }
-        )
       }
     },
 
@@ -264,42 +288,6 @@ StateManager <- R6::R6Class(
       if (!is.null(private$logger)) {
         private$logger$error(message, details)
       }
-    }
-  )
-)
-
-#' @title ErrorBoundary R6 Class
-#' @description Error handling and recovery system
-#' @export
-ErrorBoundary <- R6::R6Class(
-  "ErrorBoundary",
-
-  public = list(
-    #' @description Execute code with error handling
-    #' @param expr Expression to evaluate
-    #' @return Result of expression or NULL on error
-    catch = function(expr) {
-      tryCatch(
-        expr,
-        error = function(e) {
-          private$handle_error(e)
-          NULL
-        },
-        warning = function(w) {
-          private$handle_warning(w)
-          NULL
-        }
-      )
-    }
-  ),
-
-  private = list(
-    handle_error = function(error) {
-      warning(sprintf("Error caught: %s", error$message))
-    },
-
-    handle_warning = function(warning) {
-      warning(sprintf("Warning: %s", warning$message))
     }
   )
 )
