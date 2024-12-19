@@ -21,7 +21,8 @@ mod_bags_grading_ui <- function(id, grade) {
                                "B" = "info",
                                "C" = "warning",
                                "D" = "danger",
-                               "E" = "danger"),
+                               "E" = "danger"
+               ),
                width = NULL,
                solidHeader = TRUE,
 
@@ -49,112 +50,88 @@ mod_bags_grading_ui <- function(id, grade) {
       )
     ),
 
-    # Main Content Section
+    # Filter Controls
     fluidRow(
-      column(12,
-             box(
-               title = "Specimen Data",
-               status = "primary",
-               width = NULL,
-               solidHeader = TRUE,
+      box(
+        title = "Filter Controls",
+        status = "primary",
+        width = 12,
+        solidHeader = TRUE,
+        collapsible = TRUE,
 
-               # Table Controls
-               div(
-                 class = "table-controls",
-                 style = "margin-bottom: 15px;",
-
-                 # Download Button
-                 downloadButton(
-                   ns("download_data"),
-                   "Download Data",
-                   class = "btn-success"
-                 ),
-
-                 # Help Button
-                 actionButton(
-                   ns("show_help"),
-                   "Help",
-                   class = "btn-info",
-                   icon = icon("question-circle")
+        fluidRow(
+          column(4,
+                 selectInput(ns("rank_filter"),
+                             "Filter by Rank:",
+                             choices = c("All", "1", "2", "3", "4", "5", "6", "7"),
+                             selected = "All"
                  )
-               ),
+          ),
+          column(4,
+                 numericInput(ns("min_quality_score"),
+                              "Minimum Quality Score:",
+                              value = 0,
+                              min = 0,
+                              max = 14,
+                              step = 1
+                 )
+          ),
+          column(4,
+                 selectInput(ns("criteria_filter"),
+                             "Filter by Required Criteria:",
+                             choices = c(
+                               "Species ID" = "SPECIES_ID",
+                               "Type Specimen" = "TYPE_SPECIMEN",
+                               "Sequence Quality" = "SEQ_QUALITY",
+                               "Public Voucher" = "PUBLIC_VOUCHER",
+                               "Has Image" = "HAS_IMAGE",
+                               "Identifier" = "IDENTIFIER",
+                               "Collection Date" = "COLLECTION_DATE",
+                               "Country" = "COUNTRY",
+                               "Coordinates" = "COORD"
+                             ),
+                             multiple = TRUE
+                 )
+          )
+        ),
 
-               # Specimen Tables
-               div(
-                 class = "specimen-tables",
-                 uiOutput(ns("specimen_tables"))
-               )
-             )
+        fluidRow(
+          column(12,
+                 div(
+                   style = "margin-top: 15px;",
+                   actionButton(ns("reset_filters"),
+                                "Reset Filters",
+                                class = "btn-warning",
+                                icon = icon("undo")
+                   ),
+                   downloadButton(ns("download_data"),
+                                  "Download Data",
+                                  class = "btn-success"
+                   ),
+                   actionButton(ns("show_help"),
+                                "Help",
+                                class = "btn-info",
+                                icon = icon("question-circle")
+                   )
+                 )
+          )
+        )
       )
     ),
 
-    # Help Modal
-    tags$div(
-      id = ns("help_modal"),
-      class = "modal fade",
-      tags$div(
-        class = "modal-dialog",
-        tags$div(
-          class = "modal-content",
-          tags$div(
-            class = "modal-header",
-            tags$h4(paste("BAGS Grade", grade, "Help"), class = "modal-title"),
-            tags$button(type = "button", class = "close", `data-dismiss` = "modal", "×")
-          ),
-          tags$div(
-            class = "modal-body",
-            switch(grade,
-                   "A" = tagList(
-                     tags$p("Grade A species have:"),
-                     tags$ul(
-                       tags$li("More than 10 specimens"),
-                       tags$li("A single BIN"),
-                       tags$li("No taxonomic discordance")
-                     )
-                   ),
-                   "B" = tagList(
-                     tags$p("Grade B species have:"),
-                     tags$ul(
-                       tags$li("3-10 specimens"),
-                       tags$li("A single BIN"),
-                       tags$li("No taxonomic discordance")
-                     )
-                   ),
-                   "C" = tagList(
-                     tags$p("Grade C species have:"),
-                     tags$ul(
-                       tags$li("Multiple BINs"),
-                       tags$li("No taxonomic discordance within BINs")
-                     )
-                   ),
-                   "D" = tagList(
-                     tags$p("Grade D species have:"),
-                     tags$ul(
-                       tags$li("Fewer than 3 specimens"),
-                       tags$li("A single BIN")
-                     )
-                   ),
-                   "E" = tagList(
-                     tags$p("Grade E species have:"),
-                     tags$ul(
-                       tags$li("Taxonomic discordance within BINs"),
-                       tags$li("Color coding indicates different species within shared BINs")
-                     )
-                   )
-            ),
-            hr(),
-            tags$p("Table Features:"),
-            tags$ul(
-              tags$li("Use checkboxes to select representative specimens"),
-              tags$li("Use flag dropdown to mark potential issues"),
-              tags$li("First two columns (selection and flags) are frozen"),
-              tags$li("Scroll horizontally to see all specimen data")
-            )
-          ),
-          tags$div(
-            class = "modal-footer",
-            tags$button(type = "button", class = "btn btn-default", `data-dismiss` = "modal", "Close")
-          )
+    # Main Content Section
+    fluidRow(
+      box(
+        title = "Specimen Data",
+        status = "primary",
+        width = 12,
+        solidHeader = TRUE,
+
+        # Specimen Tables
+        div(
+          class = "specimen-tables",
+          style = "margin-top: 20px;",
+          uiOutput(ns("specimen_tables"))
         )
       )
     ),
@@ -183,6 +160,7 @@ mod_bags_grading_ui <- function(id, grade) {
 
         /* Table Styling */
         .datatable {
+          width: 100% !important;
           margin-bottom: 20px !important;
           border: 1px solid #dee2e6;
           border-radius: 4px;
@@ -233,54 +211,45 @@ mod_bags_grading_ui <- function(id, grade) {
           margin-bottom: 20px;
         }
 
+        /* Status Messages */
+        .status-message {
+          padding: 10px 15px;
+          margin-bottom: 15px;
+          border-radius: 4px;
+        }
+
+        .status-message.info {
+          background-color: #d1ecf1;
+          border-color: #bee5eb;
+        }
+
+        .status-message.error {
+          background-color: #f8d7da;
+          border-color: #f5c6cb;
+        }
+
+        /* Button Styling */
+        .action-buttons {
+          margin: 15px 0;
+        }
+
+        .action-buttons .btn {
+          margin-right: 10px;
+        }
+
         /* Value Boxes */
         .small-box {
           margin-bottom: 20px;
         }
 
-        /* Modal Styling */
-        .modal-content {
-          border-radius: 6px;
-        }
-
-        .modal-header {
-          background-color: #f8f9fa;
-          border-radius: 6px 6px 0 0;
-        }
-
-        .modal-body {
-          padding: 20px;
-        }
-
-        .modal-body ul {
-          padding-left: 20px;
-          margin-bottom: 15px;
-        }
-
-        .modal-body li {
-          margin-bottom: 8px;
-        }
-
-        /* Table Controls */
-        .table-controls {
-          padding: 15px;
-          background-color: #f8f9fa;
-          border-radius: 4px;
-          margin-bottom: 20px;
-        }
-
-        .table-controls .btn {
-          margin-right: 10px;
-        }
-
         /* Responsive Design */
         @media (max-width: 768px) {
-          .value-box {
-            text-align: center;
-          }
-
           .specimen-flag {
             min-width: 100px;
+          }
+
+          .value-box {
+            text-align: center;
           }
         }
       "))

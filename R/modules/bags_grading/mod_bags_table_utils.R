@@ -31,20 +31,30 @@ create_specimen_table <- function(ns, data, group_id, color_by = NULL) {
   options <- list(
     scrollX = TRUE,
     fixedColumns = list(left = 2),
-    ordering = FALSE,
+    ordering = TRUE,
+    order = list(list(2, 'desc')), # Sort by quality score by default
     dom = "t",
     pageLength = -1,
     columnDefs = list(
       list(
         targets = 0:1,  # Selection and flag columns
         searchable = FALSE,
-        orderable = FALSE
+        orderable = FALSE,
+        width = "50px"
+      ),
+      list(
+        targets = 2,  # Quality score column
+        width = "80px"
+      ),
+      list(
+        targets = "_all",
+        className = "dt-center"
       )
     )
   )
 
   # Create color coding if needed
-  if(!is.null(color_by)) {
+  if(!is.null(color_by) && color_by %in% names(data)) {
     unique_values <- unique(data[[color_by]])
     colors <- create_species_colors(unique_values)
   }
@@ -85,6 +95,15 @@ create_specimen_table <- function(ns, data, group_id, color_by = NULL) {
         new $.fn.dataTable.FixedColumns(table, {
           leftColumns: 2
         });
+
+        // Add tooltips
+        table.on('mouseover', 'td', function() {
+          var $cell = $(this);
+          var cellData = $cell.text();
+          if (cellData.length > 20) {
+            $cell.attr('title', cellData);
+          }
+        });
       }
     ", ns("specimen_selection"), ns("specimen_flag")))
   )
@@ -110,7 +129,7 @@ create_specimen_table <- function(ns, data, group_id, color_by = NULL) {
       render = JS("
         function(data, type, row) {
           if(type === 'display') {
-            return '<select class=\"specimen-flag\">' +
+            return '<select class=\"specimen-flag form-control\">' +
                    '<option value=\"\"' + (data === '' ? ' selected' : '') + '></option>' +
                    '<option value=\"Misidentified\"' + (data === 'Misidentified' ? ' selected' : '') + '>Misidentified</option>' +
                    '<option value=\"ID uncertain\"' + (data === 'ID uncertain' ? ' selected' : '') + '>ID uncertain</option>' +
@@ -161,8 +180,7 @@ create_specimen_table <- function(ns, data, group_id, color_by = NULL) {
 #' @keywords internal
 create_table_container <- function(ns, table, title, caption = NULL) {
   div(
-    class = "specimen-table-container",
-    style = "margin-bottom: 2rem;",
+    class = "specimen-table-container mb-4",
 
     # Title section
     div(
@@ -201,29 +219,68 @@ add_column_definitions <- function(table, definitions) {
   table
 }
 
-#' Create column definitions for specimen table
-#' @return List of column definitions
+#' Create species-specific color scheme for shared BINs
+#' @param species Vector of species names
+#' @return Named vector of colors
 #' @keywords internal
-get_column_definitions <- function() {
+create_species_colors <- function(species) {
+  if (length(species) == 0) return(NULL)
+
+  unique_species <- unique(species)
+  if (length(unique_species) <= 3) {
+    colors <- c("#e6f3ff", "#cce6ff", "#b3d9ff")
+  } else if (length(unique_species) <= 5) {
+    colors <- c("#e6f3ff", "#cce6ff", "#b3d9ff", "#99ccff", "#80bfff")
+  } else {
+    colors <- colorRampPalette(c("#e6f3ff", "#80bfff"))(length(unique_species))
+  }
+
+  setNames(colors[1:length(unique_species)], unique_species)
+}
+
+#' Format flag text for display
+#' @param flag_value Raw flag value
+#' @return Formatted flag text
+#' @keywords internal
+format_flag_text <- function(flag_value) {
+  if (is.null(flag_value) || is.na(flag_value) || flag_value == "") {
+    return("")
+  }
+  switch(flag_value,
+         "Misidentified" = "Misidentified",
+         "ID uncertain" = "ID uncertain",
+         ""
+  )
+}
+
+#' Generate table caption based on grouping
+#' @param grade BAGS grade
+#' @param group_info Group information list
+#' @return Caption string
+#' @keywords internal
+generate_table_caption <- function(grade, group_info) {
+  switch(grade,
+         "A" = sprintf("Species: %s (>10 specimens, single BIN)", group_info$species),
+         "B" = sprintf("Species: %s (3-10 specimens, single BIN)", group_info$species),
+         "C" = sprintf("Species: %s - BIN: %s", group_info$species, group_info$bin),
+         "D" = sprintf("Species: %s (<3 specimens, single BIN)", group_info$species),
+         "E" = sprintf("Shared BIN: %s (%d species)", group_info$bin, group_info$species_count),
+         ""
+  )
+}
+
+#' Format specimen fields for display
+#' @param specimen Specimen data
+#' @return List of formatted fields
+#' @keywords internal
+format_specimen_fields <- function(specimen) {
   list(
-    "quality_score" = list(
-      background = "#f8f9fa",
-      textAlign = "center",
-      fontWeight = "bold"
-    ),
-    "specimen_rank" = list(
-      textAlign = "center",
-      fontWeight = "bold"
-    ),
-    "processid" = list(
-      fontWeight = "bold"
-    ),
-    "bin_uri" = list(
-      background = "#f8f9fa",
-      textAlign = "center"
-    ),
-    "criteria_met" = list(
-      background = "#ffffff"
-    )
+    processid = specimen$processid,
+    quality_score = sprintf("%.1f", specimen$quality_score),
+    criteria_met = gsub("; ", "<br>", specimen$criteria_met),
+    bin_uri = specimen$bin_uri %||% "",
+    species = specimen$species %||% "",
+    collection_date = format(specimen$collection_date_start, "%Y-%m-%d"),
+    country = specimen$country.ocean %||% ""
   )
 }

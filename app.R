@@ -213,39 +213,42 @@ server <- function(input, output, session) {
     logger = logging_manager
   )
 
-  # Initialize BAGS grading modules
+  # Initialize BAGS grading modules with direct grade parameters
   bags_grading <- list(
-    a = mod_bags_grading_server("bags_a", state, grade = "A", logger = logging_manager),
-    b = mod_bags_grading_server("bags_b", state, grade = "B", logger = logging_manager),
-    c = mod_bags_grading_server("bags_c", state, grade = "C", logger = logging_manager),
-    d = mod_bags_grading_server("bags_d", state, grade = "D", logger = logging_manager),
-    e = mod_bags_grading_server("bags_e", state, grade = "E", logger = logging_manager)
+    a = mod_bags_grading_server("bags_a", state, "A", logging_manager),
+    b = mod_bags_grading_server("bags_b", state, "B", logging_manager),
+    c = mod_bags_grading_server("bags_c", state, "C", logging_manager),
+    d = mod_bags_grading_server("bags_d", state, "D", logging_manager),
+    e = mod_bags_grading_server("bags_e", state, "E", logging_manager)
   )
 
-  # Process specimens and run analyses after data import
+  # Process specimens for analysis
   observe({
     store <- state$get_store()
     req(store$specimen_data)
 
-    # Process specimens through pipeline
-    processed_specimens <- specimen_processor$process_specimens(store$specimen_data)  # Use processor instance method
+    withProgress(
+      message = 'Processing specimens',
+      value = 0,
+      {
+        # Process specimens through pipeline
+        incProgress(0.3, detail = "Analyzing specimens...")
+        processed_specimens <- specimen_processor$process_specimens(store$specimen_data)
 
-    if (!is.null(processed_specimens)) {
-      # Run BIN analysis
-      bin_results <- bin_processor$analyze_bins(processed_specimens)
-      if (!is.null(bin_results)) {
-        state$update_state("bin_analysis", bin_results)
+        if (!is.null(processed_specimens)) {
+          # Calculate BAGS grades
+          incProgress(0.3, detail = "Calculating BAGS grades...")
+          grades <- calculate_bags_grade(processed_specimens)
+          if (!is.null(grades)) {
+            state$update_state("bags_grades", grades)
+          }
+
+          # Update state with processed data
+          incProgress(0.4, detail = "Updating data...")
+          state$update_state("specimen_data", processed_specimens)
+        }
       }
-
-      # Calculate BAGS grades
-      grades <- bags_processor$process_grades(processed_specimens)
-      if (!is.null(grades)) {
-        state$update_state("bags_grades", grades)
-      }
-
-      # Update state with processed data
-      state$update_state("specimen_data", processed_specimens)
-    }
+    )
   })
 
   # Handle specimen selection across modules
