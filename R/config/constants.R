@@ -168,7 +168,7 @@ BAGS_GRADE_CRITERIA <- list(
 
 # Validation constants
 VALIDATION_CONSTANTS <- list(
-  REQUIRED_FIELDS = c("processid", "bin_uri", "species", "country.ocean"),
+  REQUIRED_FIELDS = c("processid", "bin_uri"),
   MAX_MISSING = 0.1,
   MIN_QUALITY_SCORE = 0,
   MAX_QUALITY_SCORE = 14,
@@ -195,8 +195,11 @@ UI_CONSTANTS <- list(
 # Column configurations for data display
 PREFERRED_COLUMNS <- function(data) {
   custom_cols <- c(
-    "quality_score",
-    "specimen_rank",
+    "selected", "flag", "notes",
+    "quality_score", "processid", "bin_uri",
+    "species", "identification", "identified_by",
+    "identification_method", "country.ocean",
+    "collection_date_start", "collectors", "inst",
     "criteria_met"
   )
   bold_cols <- setdiff(names(data), custom_cols)

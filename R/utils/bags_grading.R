@@ -6,45 +6,49 @@
 #' @export
 calculate_bags_grade <- function(specimens) {
   tryCatch({
-    # Filter for specimens with any taxonomic ID
-    specimens <- specimens[!is.na(specimens$species) | !is.na(specimens$genus), ]
+    # Filter for specimens with valid BINs and species-level identification
+    specimens <- specimens[!is.na(specimens$bin_uri) &
+                             specimens$bin_uri != "" &
+                             specimens$identification_rank %in% c("species", "subspecies"), ]
 
     if (nrow(specimens) == 0) {
       return(create_empty_grades_df())
     }
 
-    # Group by valid species names
+    # Get unique species (including cf/aff variants as separate species)
     valid_taxa <- unique(specimens$species[!is.na(specimens$species) & specimens$species != ""])
+
+    # Process each taxon
     grades <- lapply(valid_taxa, function(taxon) {
-      # Get all specimens in BINs containing this taxon
-      taxon_specimens <- specimens[specimens$species == taxon & !is.na(specimens$species), ]
+      # Get all specimens for this exact species name
+      taxon_specimens <- specimens[specimens$species == taxon, ]
 
       if (nrow(taxon_specimens) == 0) {
         return(NULL)
       }
 
-      # Count specimens with valid BINs
-      valid_bins <- taxon_specimens$bin_uri[!is.na(taxon_specimens$bin_uri) &
-                                              taxon_specimens$bin_uri != ""]
-      bin_count <- length(unique(valid_bins))
+      # Get valid BINs
+      valid_bins <- unique(taxon_specimens$bin_uri[!is.na(taxon_specimens$bin_uri)])
+      bin_count <- length(valid_bins)
 
-      # Count valid specimens (excluding cf./aff.)
-      valid_specimens <- sum(!grepl("cf\\.|aff\\.", taxon_specimens$species))
+      # Count total specimens
+      specimen_count <- nrow(taxon_specimens)
 
       # Check for shared/discordant BINs
       has_shared_bins <- check_shared_bins(specimens, taxon, valid_bins)
 
-      # Calculate BIN coverage
-      bin_coverage <- calculate_bin_coverage(taxon_specimens)
+      # Ensure has_shared_bins is boolean
+      if (is.na(has_shared_bins)) {
+        has_shared_bins <- FALSE
+      }
 
       # Create result row
       data.frame(
         species = taxon,
-        bags_grade = determine_bags_grade(valid_specimens, bin_count, has_shared_bins),
-        specimen_count = valid_specimens,
+        bags_grade = determine_bags_grade(specimen_count, bin_count, has_shared_bins),
+        specimen_count = specimen_count,
         bin_count = bin_count,
         shared_bins = has_shared_bins,
-        bin_coverage = bin_coverage,
         stringsAsFactors = FALSE
       )
     })
@@ -71,28 +75,34 @@ calculate_bags_grade <- function(specimens) {
 check_shared_bins <- function(specimens, taxon, taxon_bins) {
   if (length(taxon_bins) == 0) return(FALSE)
 
+  # Filter for specimens with valid BINs
+  specimens <- specimens[!is.na(specimens$bin_uri) & specimens$bin_uri != "", ]
+
   # For each BIN containing the taxon
-  any(sapply(taxon_bins, function(bin) {
+  shared <- sapply(taxon_bins, function(bin) {
     # Get all specimens in this BIN
-    bin_specimens <- specimens[specimens$bin_uri == bin & !is.na(specimens$bin_uri), ]
+    bin_specimens <- specimens[specimens$bin_uri == bin, ]
 
     if (nrow(bin_specimens) == 0) return(FALSE)
 
-    # Get unique valid species in this BIN (excluding cf./aff.)
+    # Get unique valid species in this BIN
     bin_species <- unique(bin_specimens$species[
       !is.na(bin_specimens$species) &
-        !grepl("cf\\.|aff\\.", bin_specimens$species) &
-        bin_specimens$species != ""
+        bin_specimens$species != "" &
+        bin_specimens$identification_rank %in% c("species", "subspecies")
     ])
 
-    # Check if this BIN contains other valid species
+    # Check if this BIN contains other species
     length(bin_species) > 1 ||
       (length(bin_species) == 1 && bin_species != taxon)
-  }))
+  })
+
+  # Return TRUE if any BIN is shared
+  any(shared, na.rm = TRUE)
 }
 
 #' Determine BAGS grade based on criteria
-#' @param specimen_count Number of valid specimens
+#' @param specimen_count Number of specimens
 #' @param bin_count Number of unique BINs
 #' @param has_shared_bins Boolean indicating if BINs are shared
 #' @return Character indicating BAGS grade (A-E)
@@ -101,6 +111,7 @@ determine_bags_grade <- function(specimen_count, bin_count, has_shared_bins) {
   tryCatch({
     # Handle invalid inputs
     if (is.na(specimen_count) || is.na(bin_count)) return('E')
+    if (is.na(has_shared_bins)) has_shared_bins <- FALSE
 
     # Grade E: Shared BINs
     if (has_shared_bins) return('E')
@@ -123,17 +134,6 @@ determine_bags_grade <- function(specimen_count, bin_count, has_shared_bins) {
   })
 }
 
-#' Calculate BIN coverage percentage
-#' @param specimens Specimen data frame
-#' @return Numeric percentage of specimens with BINs
-#' @keywords internal
-calculate_bin_coverage <- function(specimens) {
-  if (nrow(specimens) == 0) return(0)
-
-  # Calculate percentage of specimens with valid BINs
-  mean(!is.na(specimens$bin_uri) & specimens$bin_uri != "") * 100
-}
-
 #' Create empty grades data frame
 #' @return Empty data frame with correct structure
 #' @keywords internal
@@ -144,7 +144,6 @@ create_empty_grades_df <- function() {
     specimen_count = integer(),
     bin_count = integer(),
     shared_bins = logical(),
-    bin_coverage = numeric(),
     stringsAsFactors = FALSE
   )
 }
@@ -162,7 +161,7 @@ validate_bags_grades <- function(grades) {
 
   # Check required columns
   required_cols <- c("species", "bags_grade", "specimen_count",
-                     "bin_count", "shared_bins", "bin_coverage")
+                     "bin_count", "shared_bins")
   missing_cols <- setdiff(required_cols, names(grades))
 
   if (length(missing_cols) > 0) {
@@ -187,12 +186,6 @@ validate_bags_grades <- function(grades) {
   if ("bin_count" %in% names(grades)) {
     if (any(grades$bin_count < 0, na.rm = TRUE)) {
       messages <- c(messages, "Negative BIN counts detected")
-    }
-  }
-
-  if ("bin_coverage" %in% names(grades)) {
-    if (any(grades$bin_coverage < 0 | grades$bin_coverage > 100, na.rm = TRUE)) {
-      messages <- c(messages, "Invalid BIN coverage values detected")
     }
   }
 

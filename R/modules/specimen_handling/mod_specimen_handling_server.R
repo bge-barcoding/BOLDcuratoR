@@ -8,39 +8,19 @@
 #' @export
 mod_specimen_handling_server <- function(id, state, processor, logger) {
   moduleServer(id, function(input, output, session) {
-    ns <- NS(id)
+    ns <- session$ns
 
     # Reactive Values
     filtered_data <- reactiveVal(NULL)
+    selected_specimens <- reactiveVal(list())
+    flagged_specimens <- reactiveVal(list())
+    notes <- reactiveVal(list())
+    metrics <- reactiveVal(NULL)
     processing_status <- reactiveVal(list(
       is_processing = FALSE,
       message = NULL,
       error = NULL
     ))
-
-    # Handle specimen data updates
-    observe({
-      store <- state$get_store()
-      req(store$specimen_data)
-
-      # Validate incoming data
-      validation <- validate_specimen_data(store$specimen_data)
-      if (!validation$valid) {
-        logger$error("Invalid specimen data", validation$messages)
-        showNotification(paste(validation$messages, collapse = "; "), type = "error")
-        return()
-      }
-
-      # Apply filters and update filtered data
-      update_filtered_data(
-        data = store$specimen_data,
-        rank_filter = input$rank_filter,
-        quality_filter = input$min_quality_score,
-        criteria_filter = input$criteria_filter,
-        filtered_data = filtered_data,
-        logger = logger
-      )
-    })
 
     # Process new specimen data
     observe({
@@ -89,124 +69,258 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
       })
     })
 
-    # Update rank distribution boxes
+    # Update filtered data based on filters
     observe({
-      req(filtered_data())
-      data <- filtered_data()
+      store <- state$get_store()
+      req(store$specimen_data)
 
-      for (rank in 1:7) {
-        local({
-          r <- rank
-          output[[paste0("rank_", r, "_box")]] <- renderValueBox({
-            count <- sum(data$specimen_rank == r, na.rm = TRUE)
-            valueBox(
-              count,
-              paste("Rank", r, "Specimens"),
-              icon = icon(switch(as.character(r),
-                                 "1" = "trophy",
-                                 "2" = "medal",
-                                 "3" = "award",
-                                 "4" = "check",
-                                 "5" = "circle-check",
-                                 "6" = "circle",
-                                 "7" = "circle-xmark"
-              )),
-              color = if (r <= 2) "green" else if (r <= 4) "blue" else "orange"
-            )
-          })
-        })
+      data <- store$specimen_data
+
+      # Apply rank filter
+      if (!is.null(input$rank_filter) && input$rank_filter != "All") {
+        data <- data[data$specimen_rank == as.numeric(input$rank_filter), ]
       }
+
+      # Apply quality filter
+      if (!is.null(input$min_quality_score) && input$min_quality_score > 0) {
+        data <- data[data$quality_score >= input$min_quality_score, ]
+      }
+
+      # Apply criteria filter
+      if (!is.null(input$criteria_filter) && length(input$criteria_filter) > 0) {
+        data <- data[sapply(data$criteria_met, function(x) {
+          if (is.na(x) || x == "") return(FALSE)
+          criteria_list <- strsplit(x, "; ")[[1]]
+          all(input$criteria_filter %in% criteria_list)
+        }), ]
+      }
+
+      filtered_data(data)
+      metrics(calculate_metrics(data))
+
+      logger$info("Updated filtered data", list(
+        total_records = nrow(store$specimen_data),
+        filtered_records = nrow(data)
+      ))
     })
 
-    # Render specimen table
+    # Specimen table output
     output$specimen_table <- renderDT({
       req(filtered_data())
+
       data <- filtered_data()
+      if (is.null(data) || nrow(data) == 0) return(NULL)
 
-      if (!is.data.frame(data) || nrow(data) == 0) {
-        return(NULL)
-      }
+      logger$info("Rendering specimen table", list(
+        total_rows = nrow(data),
+        columns = names(data)
+      ))
 
-      format_specimen_table(
-        data,
-        buttons = c('copy', 'csv', 'excel'),
-        selection = 'multiple'
+      withProgress(
+        message = 'Rendering specimen table',
+        detail = 'Processing data...',
+        value = 0,
+        {
+          # Get current state safely
+          current_sel <- try(isolate(selected_specimens()), silent = TRUE)
+          if (inherits(current_sel, "try-error")) {
+            logger$warn("Could not access selected_specimens()")
+            current_sel <- list()
+          }
+
+          current_flags <- try(isolate(flagged_specimens()), silent = TRUE)
+          if (inherits(current_flags, "try-error")) {
+            logger$warn("Could not access flagged_specimens()")
+            current_flags <- list()
+          }
+
+          current_notes <- try(isolate(notes()), silent = TRUE)
+          if (inherits(current_notes, "try-error")) {
+            logger$warn("Could not access notes()")
+            current_notes <- list()
+          }
+
+          logger$info("Current state", list(
+            selections = length(current_sel),
+            flags = length(current_flags),
+            notes = length(current_notes)
+          ))
+
+          # Create table with logger
+          format_specimen_table(
+            data = data,
+            ns = ns,
+            buttons = c('copy', 'csv', 'excel'),
+            page_length = 25,
+            selection = 'multiple',
+            current_selections = current_sel,
+            current_flags = current_flags,
+            current_notes = current_notes,
+            logger = logger  # Pass logger instance
+          )
+        }
       )
     })
 
-    # Handle specimen selection
-    observeEvent(input$specimen_table_rows_selected, {
-      selected_rows <- input$specimen_table_rows_selected
-      if (length(selected_rows) == 0) return()
+    # Handle specimen selection with logging
+    observeEvent(input$specimen_selection, {
+      req(input$specimen_selection)
+      selection <- input$specimen_selection
 
-      data <- filtered_data()
-      if (is.null(data)) return()
+      logger$info("Selection event", list(
+        processid = selection$processid,
+        selected = selection$selected
+      ))
 
-      selected_specimens <- data[selected_rows, ]
+      if (!is.null(selection$processid)) {
+        current_selections <- selected_specimens()
 
-      # Update state with new selections
-      current_selections <- state$get_store()$selected_specimens
-      if (!is.list(current_selections)) {
-        current_selections <- list()
-      }
+        if (selection$selected) {
+          specimen_data <- filtered_data()[
+            filtered_data()$processid == selection$processid,
+          ]
 
-      # Group by species
-      species_groups <- split(selected_specimens, selected_specimens$species)
+          if (nrow(specimen_data) > 0) {
+            current_selections[[selection$processid]] <- list(
+              timestamp = Sys.time(),
+              species = specimen_data$species[1],
+              quality_score = specimen_data$quality_score[1]
+            )
 
-      for (species in names(species_groups)) {
-        specimens <- species_groups[[species]]
-        if (nrow(specimens) > 0) {
-          # Select best specimen for each species
-          best_specimen <- specimens[order(-specimens$quality_score, specimens$specimen_rank)[1], ]
-          current_selections[[species]] <- best_specimen$processid
-
-          # Log selection
-          logger$info("Specimen selected", list(
-            species = species,
-            processid = best_specimen$processid,
-            quality_score = best_specimen$quality_score,
-            rank = best_specimen$specimen_rank
+            logger$info("Specimen selected", list(
+              processid = selection$processid,
+              species = specimen_data$species[1],
+              quality_score = specimen_data$quality_score[1]
+            ))
+          } else {
+            logger$warn("Selected specimen not found in filtered data", list(
+              processid = selection$processid
+            ))
+          }
+        } else {
+          current_selections[[selection$processid]] <- NULL
+          logger$info("Specimen deselected", list(
+            processid = selection$processid
           ))
         }
-      }
 
-      state$update_state("selected_specimens", current_selections)
+        selected_specimens(current_selections)
+
+        # Log before state update
+        logger$info("Updating state with selections", list(
+          total_selections = length(current_selections)
+        ))
+
+        state$update_state("selected_specimens", current_selections)
+      }
     })
 
-    # Render selection history
-    output$selection_history <- renderDT({
-      store <- state$get_store()
-      req(store$selected_specimens)
+    # Handle specimen flagging
+    observeEvent(input$specimen_flag, {
+      req(input$specimen_flag)
+      flag <- input$specimen_flag
 
-      if (length(store$selected_specimens) == 0) return(NULL)
+      if (!is.null(flag$processid)) {
+        current_flags <- flagged_specimens()
 
-      history_data <- data.frame(
-        Species = names(store$selected_specimens),
-        ProcessID = unlist(store$selected_specimens),
-        stringsAsFactors = FALSE
+        if (nchar(flag$flag) > 0) {
+          specimen_data <- filtered_data()[
+            filtered_data()$processid == flag$processid,
+          ]
+
+          current_flags[[flag$processid]] <- list(
+            flag = flag$flag,
+            timestamp = Sys.time(),
+            species = specimen_data$species[1]
+          )
+
+          logger$info("Specimen flagged", list(
+            processid = flag$processid,
+            flag = flag$flag,
+            species = specimen_data$species[1]
+          ))
+        } else {
+          current_flags[[flag$processid]] <- NULL
+          logger$info("Flag removed", list(
+            processid = flag$processid
+          ))
+        }
+
+        flagged_specimens(current_flags)
+        state$update_state("specimen_flags", current_flags)
+      }
+    })
+
+    # Handle specimen notes
+    observeEvent(input$specimen_notes, {
+      req(input$specimen_notes)
+      note <- input$specimen_notes
+
+      if (!is.null(note$processid)) {
+        current_notes <- notes()
+
+        if (nchar(note$notes) > 0) {
+          current_notes[[note$processid]] <- note$notes
+        } else {
+          current_notes[[note$processid]] <- NULL
+        }
+
+        notes(current_notes)
+        state$update_state("specimen_notes", current_notes)
+
+        logger$info("Specimen note updated", list(
+          processid = note$processid
+        ))
+      }
+    })
+
+    # Value box outputs
+    output$total_records_box <- renderValueBox({
+      m <- metrics()
+      if (is.null(m)) return(NULL)
+
+      valueBox(
+        m$total_specimens,
+        "Total Records",
+        icon = icon("table"),
+        color = "blue"
       )
-
-      specimen_data <- store$specimen_data
-      if (!is.null(specimen_data)) {
-        history_data <- merge(
-          history_data,
-          specimen_data[, c("processid", "quality_score", "specimen_rank", "country.ocean")],
-          by.x = "ProcessID",
-          by.y = "processid",
-          all.x = TRUE
-        )
-      }
-
-      format_history_table(history_data)
     })
 
-    # Handle clear filters
-    observeEvent(input$clear_filters, {
-      updateSelectInput(session, "rank_filter", selected = "All")
-      updateNumericInput(session, "min_quality_score", value = 0)
-      updateCheckboxGroupInput(session, "criteria_filter", selected = character(0))
+    output$unique_taxa_box <- renderValueBox({
+      m <- metrics()
+      if (is.null(m)) return(NULL)
 
-      logger$info("Filters cleared")
+      valueBox(
+        m$unique_species,
+        "Unique Taxa",
+        icon = icon("sitemap"),
+        color = "green"
+      )
+    })
+
+    output$unique_bins_box <- renderValueBox({
+      m <- metrics()
+      if (is.null(m)) return(NULL)
+
+      valueBox(
+        m$unique_bins,
+        "Unique BINs",
+        icon = icon("dna"),
+        color = "purple"
+      )
+    })
+
+    output$avg_quality_box <- renderValueBox({
+      m <- metrics()
+      if (is.null(m)) return(NULL)
+
+      valueBox(
+        sprintf("%.1f", m$avg_quality),
+        "Average Quality Score",
+        icon = icon("star"),
+        color = "yellow"
+      )
     })
 
     # Download handlers
@@ -230,75 +344,62 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
         paste0("selected_specimens_", format(Sys.time(), "%Y%m%d_%H%M"), ".tsv")
       },
       content = function(file) {
-        selected_rows <- input$specimen_table_rows_selected
-        if (is.null(selected_rows)) return(NULL)
+        selected <- selected_specimens()
+        if (is.null(selected) || length(selected) == 0) return(NULL)
 
         data <- filtered_data()
         if (is.null(data) || nrow(data) == 0) return(NULL)
 
-        selected_data <- data[selected_rows, ]
+        selected_data <- data[data$processid %in% names(selected), ]
         write.table(selected_data, file, sep = "\t", row.names = FALSE, quote = FALSE)
         logger$info("Downloaded selected specimens", list(count = nrow(selected_data)))
       }
     )
 
-    # Handle help modal
-    observeEvent(input$show_help, {
-      showModal(modalDialog(
-        title = "Specimen Handling Help",
-        tags$div(
-          tags$h4("Working with Specimens"),
-          tags$ul(
-            tags$li("Use filters to narrow down specimens by rank, quality score, and criteria"),
-            tags$li("Select specimens by clicking rows in the specimen table"),
-            tags$li("The system automatically selects the highest quality specimen for each species"),
-            tags$li("View selection history at the bottom to track your choices"),
-            tags$li("Download filtered or selected specimens using the export buttons")
-          ),
-          tags$h4("Understanding Ranks"),
-          tags$ul(
-            tags$li("Rank 1-2: Highest quality specimens with type material"),
-            tags$li("Rank 3-4: Well-documented specimens with good metadata"),
-            tags$li("Rank 5-6: Basic specimens meeting minimal criteria"),
-            tags$li("Rank 7: Specimens missing key information")
-          )
-        ),
-        easyClose = TRUE,
-        footer = modalButton("Close")
-      ))
+    # Calculate metrics helper
+    calculate_metrics <- function(data) {
+      list(
+        total_specimens = nrow(data),
+        unique_species = length(unique(data$species)),
+        unique_bins = length(unique(data$bin_uri[!is.na(data$bin_uri)])),
+        avg_quality = mean(data$quality_score, na.rm = TRUE),
+        bin_coverage = sum(!is.na(data$bin_uri) & data$bin_uri != "") / nrow(data) * 100
+      )
+    }
+
+    # Session cleanup
+    session$onSessionEnded(function() {
+      logger$info("Specimen handling session ended")
+      filtered_data(NULL)
+      selected_specimens(NULL)
+      flagged_specimens(NULL)
+      notes(NULL)
+      metrics(NULL)
     })
 
     # Return reactive values and functions
     list(
       filtered_data = filtered_data,
+      selected_specimens = selected_specimens,
+      flagged_specimens = flagged_specimens,
+      notes = notes,
+      metrics = metrics,
       processing_status = processing_status,
-      processor = processor,
 
-      # Helper functions
-      update_filters = function(rank = NULL, quality = NULL, criteria = NULL) {
-        if (!is.null(rank)) updateSelectInput(session, "rank_filter", selected = rank)
-        if (!is.null(quality)) updateNumericInput(session, "min_quality_score", value = quality)
-        if (!is.null(criteria)) updateCheckboxGroupInput(session, "criteria_filter", selected = criteria)
+      reset_filters = function() {
+        updateSelectInput(session, "rank_filter", selected = "All")
+        updateNumericInput(session, "min_quality_score", value = 0)
+        updateCheckboxGroupInput(session, "criteria_filter", selected = character(0))
       },
 
       clear_selections = function() {
-        selectRows(dataTableProxy("specimen_table"), NULL)
+        selected_specimens(list())
         state$update_state("selected_specimens", list())
       },
 
-      get_selection_summary = function() {
-        store <- state$get_store()
-        selections <- store$selected_specimens
-        if (is.null(selections)) return(NULL)
-
-        list(
-          total_selected = length(selections),
-          species_covered = length(unique(names(selections))),
-          avg_quality = mean(sapply(selections, function(pid) {
-            specimen <- store$specimen_data[store$specimen_data$processid == pid, ]
-            specimen$quality_score
-          }))
-        )
+      clear_flags = function() {
+        flagged_specimens(list())
+        state$update_state("specimen_flags", list())
       }
     )
   })
@@ -352,7 +453,7 @@ validate_specimen_data <- function(data) {
   messages <- character()
 
   # Check required columns
-  required_cols <- c("processid", "species", "bin_uri", "quality_score", "specimen_rank")
+  required_cols <- c("processid", "quality_score")
   missing_cols <- setdiff(required_cols, names(data))
   if (length(missing_cols) > 0) {
     messages <- c(messages, sprintf("Missing required columns: %s",

@@ -201,7 +201,7 @@ ExportManager <- R6::R6Class("ExportManager",
                                    "bin_uri", "identified_by", "identification_method",
                                    "collectors", "collection_date_start", "country.ocean",
                                    "coord", "institution", "voucher_type", "quality_score",
-                                   "specimen_rank", "criteria_met", "nuc")
+                                   "criteria_met", "nuc")
                                },
 
                                prepare_bin_summary = function(bin_analysis) {

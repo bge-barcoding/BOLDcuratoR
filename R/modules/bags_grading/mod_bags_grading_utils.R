@@ -240,10 +240,10 @@ prepare_download_data <- function(specimens, grade, selections, flags) {
   # Order columns
   cols <- c(
     "processid", "species", "bin_uri", "quality_score",
-    "specimen_rank", "criteria_met", "selected", "flag",
+    "criteria_met", "selected", "flag",
     setdiff(names(specimens), c(
       "processid", "species", "bin_uri", "quality_score",
-      "specimen_rank", "criteria_met", "selected", "flag"
+      "criteria_met", "selected", "flag"
     ))
   )
 

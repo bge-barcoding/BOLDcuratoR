@@ -35,7 +35,6 @@ source("R/modules/bin_analysis/mod_bin_analysis_utils.R")
 source("R/modules/bags_grading/mod_bags_grading_ui.R")
 source("R/modules/bags_grading/mod_bags_grading_server.R")
 source("R/modules/bags_grading/mod_bags_grading_utils.R")
-source("R/modules/bags_grading/mod_bags_table_utils.R")
 
 source("R/modules/haplotype_analysis/haplotype_manager.R")
 source("R/modules/haplotype_analysis/sequence_aligner.R")
