@@ -41,7 +41,7 @@ mod_bin_analysis_server <- function(id, state, processor, logger) {
         ))
 
         # Process BIN analysis
-        results <- processor$analyze_bins(specimens_with_bins)
+        results <- processor(specimens_with_bins) # removed processor$analyze_bins(specimens_with_bins)
 
         # Convert table objects to data frames
         if (!is.null(results)) {
@@ -111,7 +111,15 @@ mod_bin_analysis_server <- function(id, state, processor, logger) {
     # Content table output
     output$bin_content_table <- renderDT({
       req(!is.null(analysis_results()))
-      format_bin_content_table(analysis_results()$content)
+      results <- analysis_results()
+
+      # Ensure required columns exist
+      required_cols <- c("bin_uri", "total_records", "unique_species", "species_list", "countries", "concordance")
+
+      if(!is.null(results$content)) {
+        content_data <- results$content[, intersect(names(results$content), required_cols)]
+        format_bin_content_table(content_data)
+      }
     })
 
     # Summary box outputs
@@ -129,7 +137,11 @@ mod_bin_analysis_server <- function(id, state, processor, logger) {
     output$concordant_bins_box <- renderValueBox({
       req(!is.null(analysis_results()))
       req(!is.null(analysis_results()$content))
-      concordant <- sum(analysis_results()$content$concordance == "Concordant")
+      concordant <- if (!is.null(analysis_results()$content$concordance)) {
+        sum(analysis_results()$content$concordance == "Concordant", na.rm = TRUE)
+      } else {
+        0
+      }
       valueBox(
         concordant,
         "Concordant BINs",
