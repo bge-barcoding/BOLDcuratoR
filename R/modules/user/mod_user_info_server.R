@@ -53,7 +53,7 @@ mod_user_info_server <- function(id, state, logger) {
       # Require at least email/name and API key
       if ((is.null(input$email) || nchar(input$email) == 0) &&
           (is.null(input$name) || nchar(input$name) == 0)) {
-        messages <- c(messages, "Please provide either email or name")
+        messages <- c(messages, "Please provide email or name")
       }
 
       if (is.null(input$bold_api_key) || nchar(input$bold_api_key) == 0) {

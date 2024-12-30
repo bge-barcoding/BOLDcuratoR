@@ -12,6 +12,7 @@ required_packages <- c(
   "shiny",
   "writexl",
   "DT",
+  "htmlwidgets",
   "shinydashboard",
   "shinyjs",
   "dplyr",

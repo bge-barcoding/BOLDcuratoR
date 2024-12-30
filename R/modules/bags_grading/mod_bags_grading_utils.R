@@ -129,65 +129,35 @@ organize_grade_specimens <- function(specimens, grade) {
   )
 }
 
-#' Calculate BIN sharing metrics for grade E specimens
-#' @param specimens Data frame of specimens
-#' @return List of BIN sharing metrics
-#' @keywords internal
-calculate_bin_sharing_metrics <- function(specimens) {
-  if (is.null(specimens) || nrow(specimens) == 0) return(NULL)
-
-  # Get BIN sharing data
-  bin_species <- tapply(specimens$species, specimens$bin_uri, function(x) {
-    length(unique(x))
-  })
-
-  list(
-    total_shared_bins = length(bin_species),
-    max_species_per_bin = max(bin_species),
-    avg_species_per_bin = mean(bin_species),
-    bin_distribution = table(bin_species)
-  )
-}
-
-#' Create color scheme for species
+#' Format the grade tables
 #' @param species Vector of species names
 #' @return Named vector of colors
 #' @keywords internal
-create_species_colors <- function(species) {
-  if (length(species) == 0) return(NULL)
+format_grade_table <- function(data, ns = NULL, grade) {
+  dt <- format_specimen_table(
+    data = data,
+    ns = ns,
+    buttons = c('copy', 'csv', 'excel'),
+    page_length = 50,
+    selection = 'none',
+    color_by = if(grade == "E") "species" else NULL,
+    current_selections = NULL,
+    current_flags = NULL,
+    current_notes = NULL
+  )
 
-  unique_species <- unique(species)
+  if(grade == "E") {
+    unique_species <- unique(data$species)
+    colors <- create_species_colors(unique_species)
 
-  # Define color palette for different numbers of species
-  if (length(unique_species) <= 3) {
-    colors <- c("#e6f3ff", "#cce6ff", "#b3d9ff")
-  } else if (length(unique_species) <= 5) {
-    colors <- c("#e6f3ff", "#cce6ff", "#b3d9ff", "#99ccff", "#80bfff")
-  } else {
-    # For more species, generate colors programmatically
-    colors <- colorRampPalette(c("#e6f3ff", "#80bfff"))(length(unique_species))
-  }
-
-  setNames(colors[1:length(unique_species)], unique_species)
-}
-
-#' Format specimen flags for display
-#' @param flags List of specimen flags
-#' @return Character vector of formatted flags
-#' @keywords internal
-format_specimen_flags <- function(flags) {
-  if (is.null(flags) || length(flags) == 0) return(character(0))
-
-  sapply(flags, function(flag) {
-    if (is.null(flag) || is.na(flag) || flag == "") {
-      return("")
-    }
-    switch(flag,
-           "Misidentified" = "Misidentified",
-           "ID uncertain" = "ID uncertain",
-           ""
+    dt <- dt %>% formatStyle(
+      'species',
+      backgroundColor = function(x) colors[x],
+      height = "24px !important",
+      lineHeight = "24px !important"
     )
-  })
+  }
+  dt
 }
 
 #' Generate table caption based on grade and grouping
@@ -204,23 +174,6 @@ generate_table_caption <- function(grade, group_info) {
          "E" = sprintf("Shared BIN: %s (%d species)", group_info$bin, group_info$species_count),
          ""
   )
-}
-
-#' Format grade-specific data for display
-#' @param specimens Data frame of specimens
-#' @param grade BAGS grade
-#' @return Formatted data frame
-#' @keywords internal
-format_grade_data <- function(specimens, grade) {
-  # Add species rank summary
-  specimens$species_rank <- factor(sapply(specimens$species, function(sp) {
-    if (is.na(sp) || sp == "") return("No ID")
-    if (grepl("cf\\.|aff\\.", sp)) return("cf./aff.")
-    if (grepl("sp\\.|spp\\.", sp)) return("sp./spp.")
-    "Species"
-  }))
-
-  specimens
 }
 
 #' Prepare specimen data for download

@@ -14,7 +14,7 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
     filtered_data <- reactiveVal(NULL)
     selected_specimens <- reactiveVal(list())
     flagged_specimens <- reactiveVal(list())
-    notes <- reactiveVal(list())
+    curator_notes <- reactiveVal(list())  # Changed from notes
     metrics <- reactiveVal(NULL)
     processing_status <- reactiveVal(list(
       is_processing = FALSE,
@@ -104,65 +104,52 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
       ))
     })
 
+    # Initialize from state
+    observe({
+      store <- state$get_store()
+      if (!is.null(store$specimen_curator_notes)) {
+        curator_notes(store$specimen_curator_notes)
+      }
+    })
+
     # Specimen table output
     output$specimen_table <- renderDT({
       req(filtered_data())
 
-      data <- filtered_data()
-      if (is.null(data) || nrow(data) == 0) return(NULL)
-
       logger$info("Rendering specimen table", list(
-        total_rows = nrow(data),
-        columns = names(data)
+        rows = nrow(filtered_data()),
+        columns = names(filtered_data())
       ))
 
-      withProgress(
-        message = 'Rendering specimen table',
-        detail = 'Processing data...',
-        value = 0,
-        {
-          # Get current state safely
-          current_sel <- try(isolate(selected_specimens()), silent = TRUE)
-          if (inherits(current_sel, "try-error")) {
-            logger$warn("Could not access selected_specimens()")
-            current_sel <- list()
-          }
+      tryCatch({
+        data <- filtered_data()
 
-          current_flags <- try(isolate(flagged_specimens()), silent = TRUE)
-          if (inherits(current_flags, "try-error")) {
-            logger$warn("Could not access flagged_specimens()")
-            current_flags <- list()
-          }
+        # Get current state
+        current_sel <- isolate(selected_specimens())
+        current_flags <- isolate(flagged_specimens())
+        current_notes <- isolate(curator_notes())
 
-          current_notes <- try(isolate(notes()), silent = TRUE)
-          if (inherits(current_notes, "try-error")) {
-            logger$warn("Could not access notes()")
-            current_notes <- list()
-          }
-
-          logger$info("Current state", list(
-            selections = length(current_sel),
-            flags = length(current_flags),
-            notes = length(current_notes)
-          ))
-
-          # Create table with logger
-          format_specimen_table(
-            data = data,
-            ns = ns,
-            buttons = c('copy', 'csv', 'excel'),
-            page_length = 25,
-            selection = 'multiple',
-            current_selections = current_sel,
-            current_flags = current_flags,
-            current_notes = current_notes,
-            logger = logger  # Pass logger instance
-          )
-        }
-      )
+        format_specimen_table(
+          data = data,
+          ns = ns,
+          buttons = c('copy', 'csv', 'excel'),
+          page_length = 50,
+          selection = 'multiple',
+          current_selections = current_sel,
+          current_flags = current_flags,
+          current_notes = current_notes,
+          logger = logger
+        )
+      }, error = function(e) {
+        logger$error("Error rendering specimen table", list(
+          error = e$message,
+          stack = e$call
+        ))
+        NULL
+      })
     })
 
-    # Handle specimen selection with logging
+    # Handle specimen selection
     observeEvent(input$specimen_selection, {
       req(input$specimen_selection)
       selection <- input$specimen_selection
@@ -205,12 +192,6 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
         }
 
         selected_specimens(current_selections)
-
-        # Log before state update
-        logger$info("Updating state with selections", list(
-          total_selections = length(current_selections)
-        ))
-
         state$update_state("selected_specimens", current_selections)
       }
     })
@@ -223,22 +204,25 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
       if (!is.null(flag$processid)) {
         current_flags <- flagged_specimens()
 
-        if (nchar(flag$flag) > 0) {
+        if (!is.null(flag$flag) && nchar(flag$flag) > 0) {
           specimen_data <- filtered_data()[
             filtered_data()$processid == flag$processid,
           ]
 
-          current_flags[[flag$processid]] <- list(
-            flag = flag$flag,
-            timestamp = Sys.time(),
-            species = specimen_data$species[1]
-          )
+          if (nrow(specimen_data) > 0) {
+            current_flags[[flag$processid]] <- list(
+              flag = flag$flag,
+              timestamp = Sys.time(),
+              species = specimen_data$species[1],
+              user = state$get_store()$user_info$email
+            )
 
-          logger$info("Specimen flagged", list(
-            processid = flag$processid,
-            flag = flag$flag,
-            species = specimen_data$species[1]
-          ))
+            logger$info("Specimen flagged", list(
+              processid = flag$processid,
+              flag = flag$flag,
+              species = specimen_data$species[1]
+            ))
+          }
         } else {
           current_flags[[flag$processid]] <- NULL
           logger$info("Flag removed", list(
@@ -251,25 +235,31 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
       }
     })
 
-    # Handle specimen notes
+    # Handle curator notes
     observeEvent(input$specimen_notes, {
       req(input$specimen_notes)
       note <- input$specimen_notes
 
       if (!is.null(note$processid)) {
-        current_notes <- notes()
+        current_notes <- curator_notes()
 
-        if (nchar(note$notes) > 0) {
-          current_notes[[note$processid]] <- note$notes
+        if (!is.null(note$notes) && nchar(note$notes) > 0) {
+          current_notes[[note$processid]] <- list(
+            text = note$notes,
+            timestamp = Sys.time(),
+            user = state$get_store()$user_info$email
+          )
         } else {
           current_notes[[note$processid]] <- NULL
         }
 
-        notes(current_notes)
-        state$update_state("specimen_notes", current_notes)
+        curator_notes(current_notes)
+        state$update_state("specimen_curator_notes", current_notes)
 
-        logger$info("Specimen note updated", list(
-          processid = note$processid
+        logger$info("Curator note updated", list(
+          processid = note$processid,
+          user = state$get_store()$user_info$email,
+          has_note = !is.null(note$notes) && nchar(note$notes) > 0
         ))
       }
     })
@@ -373,7 +363,7 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
       filtered_data(NULL)
       selected_specimens(NULL)
       flagged_specimens(NULL)
-      notes(NULL)
+      curator_notes(NULL)
       metrics(NULL)
     })
 
@@ -382,7 +372,7 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
       filtered_data = filtered_data,
       selected_specimens = selected_specimens,
       flagged_specimens = flagged_specimens,
-      notes = notes,
+      curator_notes = curator_notes,
       metrics = metrics,
       processing_status = processing_status,
 

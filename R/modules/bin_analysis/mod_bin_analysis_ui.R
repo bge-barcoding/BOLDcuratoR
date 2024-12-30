@@ -79,49 +79,6 @@ mod_bin_analysis_ui <- function(id) {
           )
         )
       )
-    ),
-
-    # Custom CSS
-    tags$head(
-      tags$style(HTML("
-        .table-responsive {
-          overflow-x: auto;
-          margin-top: 15px;
-        }
-
-        .dataTables_wrapper {
-          padding: 15px 0;
-        }
-
-        .actions-bar {
-          padding: 10px;
-          background-color: #f8f9fa;
-          border-radius: 4px;
-        }
-
-        .processing-status {
-          margin-bottom: 15px;
-          padding: 10px 15px;
-          border-radius: 4px;
-          background-color: #e9ecef;
-        }
-
-        .value-box {
-          cursor: default;
-        }
-
-        .concordant {
-          background-color: #d4edda !important;
-        }
-
-        .discordant {
-          background-color: #f8d7da !important;
-        }
-
-        .btn {
-          margin-right: 5px;
-        }
-      "))
     )
   )
 }
