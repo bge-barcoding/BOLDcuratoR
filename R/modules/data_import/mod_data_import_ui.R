@@ -33,46 +33,38 @@ mod_data_import_ui <- function(id) {
 
                # Input Controls
                fluidRow(
-                 column(6,
+                 column(4,
                         textAreaInput(ns("taxa_input"),
                                       "Enter taxa (one per line, comma-separated for synonyms):",
-                                      rows = 8,
+                                      rows = 9,
                                       placeholder = "Valid name 1, Synonym A, Synonym B\nValid name 2, Synonym C"
                         )
                  ),
-                 column(6,
+                 column(4,
                         textAreaInput(ns("dataset_codes"),
                                       "Dataset codes (one per line):",
-                                      rows = 4,
+                                      rows = 3,
                                       placeholder = "DS-EXAMPLE1\nDS-EXAMPLE2"
                         ),
                         textAreaInput(ns("project_codes"),
                                       "Project codes (one per line):",
-                                      rows = 4,
+                                      rows = 3,
                                       placeholder = "PROJECT1\nPROJECT2"
                         )
-                 )
+                 ),
+                 column(4,
+                        checkboxGroupInput(ns("continents"),
+                                           "Continents:",
+                                           choices = names(CONTINENT_COUNTRIES),
+                                           inline = TRUE
+                        ),
+
+                        textAreaInput(ns("countries"),
+                                      "Countries (one per line):",
+                                      rows = 5,
+                                      placeholder = "Specific countries (one per line)"
+                        )
                ),
-
-               # Geographic Filters
-               box(
-                 title = "Geographic Filters",
-                 status = "info",
-                 solidHeader = TRUE,
-                 width = NULL,
-                 collapsible = TRUE,
-
-                 checkboxGroupInput(ns("continents"),
-                                    "Select Continents:",
-                                    choices = names(CONTINENT_COUNTRIES),
-                                    inline = TRUE
-                 ),
-
-                 textAreaInput(ns("countries"),
-                               "Additional Countries (one per line):",
-                               rows = 3,
-                               placeholder = "Enter additional countries not covered by continent selection"
-                 ),
 
                  div(
                    id = ns("url_warning"),
@@ -83,8 +75,6 @@ mod_data_import_ui <- function(id) {
                      "Warning: Query length approaching limit. Consider reducing selected regions."
                    )
                  ),
-
-                 helpText("Note: Selecting multiple continents will include all countries from each selected continent.")
                ),
 
                # Action Buttons
@@ -138,7 +128,7 @@ mod_data_import_ui <- function(id) {
         # Results table
         div(
           class = "table-wrapper",
-          DTOutput(ns("results_table"))
+          DTOutput(ns("specimen_table"))
         )
       )
     ),
@@ -172,35 +162,6 @@ mod_data_import_ui <- function(id) {
           )
         )
       )
-    ),
-
-    # Custom CSS
-    tags$head(
-      tags$style(HTML("
-        .table-wrapper {
-          overflow-x: auto;
-          margin-top: 15px;
-        }
-        .alert {
-          margin-top: 15px;
-        }
-        .progress-status {
-          margin: 10px 0;
-        }
-        .btn {
-          margin-right: 5px;
-        }
-        .validation-message {
-          color: #dc3545;
-          margin-top: 5px;
-        }
-        #url_warning {
-          margin-top: 10px;
-          padding: 10px;
-          border-radius: 4px;
-          background-color: #fff3cd;
-        }
-      "))
     )
   )
 }

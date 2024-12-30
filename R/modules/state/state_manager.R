@@ -27,6 +27,30 @@ StateManager <- R6::R6Class(
       private$store
     },
 
+    #' @description Validate state requirements
+    #' @param required_keys Vector of required state keys
+    #' @return List with validation results
+    validate_state = function(required_keys) {
+      private$error_boundary$catch({
+        if (is.null(required_keys) || length(required_keys) == 0) {
+          return(list(valid = FALSE, messages = "No required keys specified"))
+        }
+
+        store <- isolate(private$store)
+        missing_keys <- required_keys[!required_keys %in% names(store)]
+
+        if (length(missing_keys) > 0) {
+          return(list(
+            valid = FALSE,
+            messages = sprintf("Missing required state: %s",
+                               paste(missing_keys, collapse = ", "))
+          ))
+        }
+
+        list(valid = TRUE, messages = NULL)
+      })
+    },
+
     #' @description Update state with validation and data type conversion
     #' @param key State key to update
     #' @param value New value
@@ -91,6 +115,29 @@ StateManager <- R6::R6Class(
         }
         TRUE
       })
+    },
+
+    #' @description Get state metrics
+    #' @return List of state metrics
+    get_metrics = function() {
+      store <- isolate(private$store)
+      list(
+        total_keys = length(names(store)),
+        updated_keys = length(private$state_history),
+        last_update = if (length(private$state_history) > 0)
+          private$state_history[[length(private$state_history)]]$timestamp else NULL
+      )
+    },
+
+    #' @description Get state history
+    #' @param key Optional key to filter history
+    #' @return List of state changes
+    get_history = function(key = NULL) {
+      if (is.null(key)) {
+        private$state_history
+      } else {
+        Filter(function(x) x$key == key, private$state_history)
+      }
     }
   ),
 
@@ -117,6 +164,10 @@ StateManager <- R6::R6Class(
         bin_analysis = NULL,
         bags_grades = NULL,
         selected_specimens = list(),
+        specimen_flags = list(),
+        specimen_curator_notes = list(),
+        specimen_metrics = NULL,
+        specimen_history = list(),
 
         # Processing state
         processing = list(
@@ -148,11 +199,84 @@ StateManager <- R6::R6Class(
           private$handle_error_state(error_state)
         }
       })
+
+      # Monitor processing state
+      observe({
+        proc_state <- isolate(private$store$processing)
+        if (proc_state$active) {
+          private$log_info("Processing state update", list(
+            progress = proc_state$progress,
+            message = proc_state$message,
+            stage = proc_state$stage
+          ))
+        }
+      })
     },
 
-    #' @description Convert value to proper format for state storage
-    #' @param value Value to convert
-    #' @return Converted value
+    # Validation functions
+    validate_curator_notes = function(notes) {
+      if (!is.list(notes)) {
+        return(list(valid = FALSE, messages = "Curator notes must be a list"))
+      }
+
+      # Validate each note
+      invalid_notes <- Filter(function(note) {
+        !is.character(note$text) || nchar(note$text) > 1000  # Max length validation
+      }, notes)
+
+      if (length(invalid_notes) > 0) {
+        return(list(
+          valid = FALSE,
+          messages = "Invalid curator note format or length"
+        ))
+      }
+
+      list(valid = TRUE, messages = NULL)
+    },
+
+    validate_flags = function(flags) {
+      if (!is.list(flags)) {
+        return(list(valid = FALSE, messages = "Flags must be a list"))
+      }
+
+      valid_flags <- c("misidentification", "ID uncertain", "issue")
+
+      invalid_flags <- Filter(function(flag) {
+        !is.null(flag$flag) && !(flag$flag %in% valid_flags)
+      }, flags)
+
+      if (length(invalid_flags) > 0) {
+        return(list(
+          valid = FALSE,
+          messages = "Invalid flag values detected"
+        ))
+      }
+
+      list(valid = TRUE, messages = NULL)
+    },
+
+    validate_selected_specimens = function(selections) {
+      if (!is.list(selections)) {
+        return(list(valid = FALSE, messages = "Selections must be a list"))
+      }
+
+      specimen_data <- isolate(private$store$specimen_data)
+      if (is.null(specimen_data)) {
+        return(list(valid = FALSE, messages = "No specimen data available"))
+      }
+
+      invalid_ids <- setdiff(names(selections), specimen_data$processid)
+      if (length(invalid_ids) > 0) {
+        return(list(
+          valid = FALSE,
+          messages = "Invalid specimen IDs in selection"
+        ))
+      }
+
+      list(valid = TRUE, messages = NULL)
+    },
+
+    # Value conversion functions
     convert_value = function(value) {
       if (is.null(value)) return(NULL)
 
@@ -164,20 +288,14 @@ StateManager <- R6::R6Class(
         return(private$convert_table(value))
       }
 
-      # Return unchanged for other types
       value
     },
 
-    #' @description Convert data frame ensuring proper format
-    #' @param df Data frame to convert
-    #' @return Converted data frame
     convert_data_frame = function(df) {
-      # Ensure proper row names
       if (!is.null(rownames(df)) && !all(rownames(df) == as.character(seq_len(nrow(df))))) {
         df <- data.frame(df, stringsAsFactors = FALSE, row.names = NULL)
       }
 
-      # Convert any table columns to data frames
       for (col in names(df)) {
         if (inherits(df[[col]], "table")) {
           df[[col]] <- private$convert_table(df[[col]])
@@ -187,9 +305,6 @@ StateManager <- R6::R6Class(
       df
     },
 
-    #' @description Convert list ensuring proper format for all elements
-    #' @param lst List to convert
-    #' @return Converted list
     convert_list = function(lst) {
       lapply(lst, function(x) {
         if (is.data.frame(x)) {
@@ -204,26 +319,17 @@ StateManager <- R6::R6Class(
       })
     },
 
-    #' @description Convert table object to data frame
-    #' @param tbl Table object to convert
-    #' @return Data frame
     convert_table = function(tbl) {
       if (!inherits(tbl, "table")) return(tbl)
-
-      # Convert table to data frame
       df <- as.data.frame(tbl, stringsAsFactors = FALSE)
-
-      # Add proper column names if missing
       if (is.null(colnames(df))) {
         colnames(df) <- paste0("V", seq_len(ncol(df)))
       }
-
-      # Clean row names
       rownames(df) <- NULL
-
       df
     },
 
+    # State tracking functions
     track_state_change = function(key, old_value, new_value) {
       change_record <- list(
         timestamp = Sys.time(),
@@ -235,9 +341,6 @@ StateManager <- R6::R6Class(
       private$state_history <- c(private$state_history, list(change_record))
     },
 
-    #' @description Prepare value for history tracking
-    #' @param value Value to prepare
-    #' @return Prepared value
     prepare_for_history = function(value) {
       if (is.data.frame(value)) {
         list(
@@ -257,6 +360,7 @@ StateManager <- R6::R6Class(
       }
     },
 
+    # Error handling functions
     handle_error_state = function(error_state) {
       if (!is.null(private$logger)) {
         private$logger$error(error_state$message, list(
@@ -272,6 +376,7 @@ StateManager <- R6::R6Class(
       private$log_warn(sprintf("State reverted for key: %s", key))
     },
 
+    # Logging functions
     log_info = function(message, details = NULL) {
       if (!is.null(private$logger)) {
         private$logger$info(message, details)

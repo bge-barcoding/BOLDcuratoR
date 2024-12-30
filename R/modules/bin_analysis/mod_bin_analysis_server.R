@@ -122,13 +122,23 @@ mod_bin_analysis_server <- function(id, state, processor, logger) {
       }
     })
 
-    # Summary box outputs
+    # Summary box outputs with enhanced metrics
     output$total_bins_box <- renderValueBox({
       req(!is.null(analysis_results()))
-      req(!is.null(analysis_results()$content))
+      content <- analysis_results()$content
+      if(is.null(content)) return(NULL)
+
+      # Ensure we calculate complete metrics for display
+      content$total_records <- sapply(content$species_list, function(x) {
+        length(unlist(strsplit(x, "; ")))
+      })
+      content$unique_species <- sapply(content$species_list, function(x) {
+        length(unique(unlist(strsplit(x, "; "))))
+      })
+      content$bin_coverage <- content$total_records / max(content$total_records)
+
       valueBox(
-        nrow(analysis_results()$content),  # Use content directly
-        "Total BINs",
+        nrow(content), "Total BINs",
         icon = icon("dna"),
         color = "blue"
       )

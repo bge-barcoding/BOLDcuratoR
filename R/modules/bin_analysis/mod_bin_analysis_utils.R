@@ -118,7 +118,7 @@ process_bin_content <- function(specimen_data, unique_bins) {
     # Check concordance
     is_concordant <- check_taxonomic_concordance(bin_specimens)
 
-    data.frame(
+    bin_data <- data.frame(
       bin_uri = bin,
       total_records = nrow(bin_specimens),
       unique_species = length(species_list),
@@ -127,6 +127,8 @@ process_bin_content <- function(specimen_data, unique_bins) {
         bin_specimens$country.ocean[!is.na(bin_specimens$country.ocean)]))),
         collapse = "; "),
       concordance = if(is_concordant) "Concordant" else "Discordant",
+      bin_coverage = nrow(bin_specimens) / nrow(specimen_data), # Added for coverage metric
+      concordant_bins = as.numeric(is_concordant), # Added for numerical concordance
       stringsAsFactors = FALSE
     )
   })

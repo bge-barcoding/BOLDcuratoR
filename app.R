@@ -1,5 +1,8 @@
 # BOLDcuratoR/app.R
 
+# debugging mode - delete later
+options(shiny.error = browser)
+
 # Source global configuration
 source("global.R")
 
@@ -76,17 +79,75 @@ ui <- dashboardPage(
 
   dashboardBody(
     useShinyjs(),
+    # Add DT dependency
+    DT::datatable(NULL),
+    DTOutput('dummy-dt'),
     tags$head(
-      tags$style(HTML("
-        .content-wrapper { overflow: auto; }
-        .table-wrapper { overflow-x: auto; }
-        .small-box { margin-bottom: 15px; }
-        .failed-query { background-color: #fff3cd !important; }
-        .datatable .failed-query:hover { background-color: #ffe7b6 !important; }
-        .datatable { width: 100% !important; font-size: 12px !important; }
-        .datatable td { padding: 4px 8px !important; white-space: nowrap; }
-        .datatable th { padding: 5px 8px !important; white-space: nowrap; font-size: 13px !important; }
-      "))
+      tags$style(HTML(paste(
+        "
+        /* Global Styles */
+        .content-wrapper {
+          overflow: auto !important;
+          padding: 1 !important;
+        }
+        .small-box {
+          margin-bottom: 5px !important;
+        }
+
+        /* DataTables Overrides */
+        .dataTables_wrapper {
+          padding: 0 !important;
+          line-height: 1 !important;
+        }
+        .dataTables_wrapper .dataTables_scroll {
+          padding: 0 !important;
+          margin: 0 !important;
+        }
+        .dataTables_scrollBody {
+          min-height: 120px !important;
+          max-height: 70vh !important;
+        }
+        .dataTables_wrapper .row {
+          margin: 0 !important;
+          padding: 2px 0 !important;
+        }
+
+        /* Reduce spacing in user info forms */
+        .content-wrapper .user-info-container .form-group {
+          margin-bottom: 1px !important;
+          margin-top: 1px !important;
+        }
+
+        .content-wrapper .user-info-container .shiny-input-container {
+          margin: 1px !important;
+          padding: 1px !important;
+        }
+
+        .content-wrapper .user-info-container .form-control {
+          margin: 1px !important;
+          padding: 1px 1px !important;
+          height: 1px !important;
+        }
+
+        .content-wrapper .user-info-container .box-body {
+          padding: 1px !important;
+        }
+
+        /* Compact shinydashboard boxes */
+        .content-wrapper .box {
+          margin-bottom: 5px !important;
+        }
+
+        .content-wrapper .box-header {
+          padding: 5px 5px !important;
+        }
+
+        .content-wrapper .box-body {
+          padding: 5px !important;
+        }
+        ",
+        get_table_css()
+      ))),
     ),
 
     tabItems(
