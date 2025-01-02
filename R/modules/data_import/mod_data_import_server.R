@@ -258,9 +258,27 @@ mod_data_import_server <- function(id, state, logger = NULL) {
           )
         }
 
+        # Log directly using logging_manager
+        logging_manager$info("Columns after BOLD fetch", list(
+          num_columns = length(names(specimens)),
+          column_names = names(specimens),
+          specimen_count = nrow(specimens),
+          missing_columns = setdiff(
+            c("collection_notes", "funding_src", "nuc",
+              "sampling_protocol", "specimenid", "tribe"),
+            names(specimens)
+          ),
+          has_collection_notes = "collection_notes" %in% names(specimens),
+          has_funding_src = "funding_src" %in% names(specimens),
+          has_nuc = "nuc" %in% names(specimens),
+          has_sampling_protocol = "sampling_protocol" %in% names(specimens),
+          has_specimenid = "specimenid" %in% names(specimens),
+          has_tribe = "tribe" %in% names(specimens)
+        ))
+
         specimens
       }, error = function(e) {
-        logger$error(sprintf("Error fetching %s: %s", type, e$message))
+        logging_manager$error(sprintf("Error fetching %s: %s", type, e$message))
         NULL
       })
     }

@@ -195,9 +195,9 @@ UI_CONSTANTS <- list(
 # Column configurations for data display
 PREFERRED_COLUMNS <- function(data) {
   custom_cols <- c(
-    "selected", "flag", "notes",
-    "quality_score", "processid", "bin_uri",
-    "species", "identification", "identified_by",
+    "selected", "flag", "curator_notes",
+    "rank","quality_score", "processid", "bin_uri",
+    "identification", "identified_by",
     "identification_method", "country.ocean",
     "collection_date_start", "collectors", "inst",
     "criteria_met"

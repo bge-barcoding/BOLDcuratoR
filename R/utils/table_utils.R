@@ -1,15 +1,39 @@
 # R/utils/table_utils.R
 
+# Source the constants file for PREFERRED_COLUMNS
+if (!exists("PREFERRED_COLUMNS")) {
+  source("R/config/constants.R")
+}
+
 #' Get standard table columns
+#' depreciated in favour of preferred_columns in constants.R
 #' @return Vector of standard column names
 #' @keywords internal
-get_standard_columns <- function() {
-  c("selected", "flag", "curator_notes",
-    "specimen_rank", "quality_score", "processid", "bin_uri",
-    "species", "identification", "identified_by",
-    "identification_method", "country.ocean",
-    "collection_date_start", "collectors", "inst",
-    "criteria_met")
+# get_standard_columns <- function() {
+#  c("selected", "flag", "curator_notes",
+#    "rank", "quality_score", "processid", "bin_uri",
+#    "identification", "identified_by",
+#    "identification_method", "country.ocean",
+#    "collection_date_start", "collectors", "inst",
+#    "criteria_met")
+#}
+
+#' Order columns according to preferred configuration
+#' @param data Data frame to reorder
+#' @return Data frame with reordered columns
+#' @keywords internal
+order_columns <- function(data) {
+  if (is.null(data) || nrow(data) == 0) return(data)
+
+  # Get preferred column order using the PREFERRED_COLUMNS function
+  ordered_cols <- PREFERRED_COLUMNS(data)
+  # Get actual columns that exist in the data
+  valid_cols <- intersect(ordered_cols, names(data))
+  # Get any remaining columns not in the preferred list
+  other_cols <- setdiff(names(data), ordered_cols)
+
+  # Combine the columns in the desired order
+  data[, c(valid_cols, other_cols)]
 }
 
 #' Get available flag options
@@ -26,17 +50,19 @@ get_flag_options <- function() {
   )
 }
 
-#' Format specimen table with standardized styling
+#' Format specimen table with standardized styling and interactive elements
+#'
 #' @param data Data frame of specimen data
 #' @param ns Namespace function for Shiny
 #' @param buttons Vector of export button types
 #' @param page_length Number of rows per page
-#' @param selection Selection type
+#' @param selection Selection type ('none', 'single', 'multiple')
 #' @param color_by Optional column for color coding
-#' @param current_selections List of currently selected specimens
-#' @param current_flags List of current specimen flags
-#' @param current_notes List of current curator notes
+#' @param current_selections Current selections list
+#' @param current_flags Current flags list
+#' @param current_notes Current curator notes list
 #' @param logger Optional logger instance
+#' @return DT datatable object or NULL if processing fails
 #' @export
 format_specimen_table <- function(data, ns = NULL,
                                   buttons = c('copy', 'csv', 'excel'),
@@ -47,151 +73,149 @@ format_specimen_table <- function(data, ns = NULL,
                                   current_flags = NULL,
                                   current_notes = NULL,
                                   logger = NULL) {
-  if (!is.null(logger)) {
-    logger$info("Formatting specimen table", list(
-      rows = nrow(data),
-      columns = names(data)
-    ))
-  }
-
-  # Get standard columns
-  cols <- get_standard_columns()
-
-  # Prepare data with interactive columns
-  data <- prepare_table_data(data, cols, current_selections,
-                             current_flags, current_notes)
-
-  # Get flag options for dropdown
-  flag_options <- get_flag_options()
-  flag_js <- sprintf(
-    "var flagOptions = %s;",
-    jsonlite::toJSON(flag_options, auto_unbox = TRUE)
-  )
-
-  # DT options
-  options <- list(
-    scrollX = TRUE,
-    scrollY = "500px",
-    pageLength = page_length,
-    autoWidth = FALSE,
-    dom = 'Bfrtip',
-    buttons = buttons,
-    fixedColumns = list(leftColumns = 3),
-    columnDefs = list(
-      list(
-        targets = 0:2,
-        searchable = FALSE,
-        orderable = FALSE,
-        width = "100px",
-        className = 'dt-center'
-      ),
-      list(
-        targets = "_all",
-        className = "dt-body-left nowrap",
-        height = "22px"
-      ),
-      list(
-        targets = which(cols == "criteria_met") - 1,
-        width = "200px",
-        render = JS("
-        function(data, type, row) {
-          if (type === 'display') {
-            return '<div class=\"criteria-content\" title=\"' +
-                   (data || '') + '\">' + (data || '') + '</div>';
-          }
-          return data;
-      }")
-      )
-    )
-  )
-
-  # Add callback if namespace provided
-  if (!is.null(ns)) {
-    options$callback <- get_table_callback(ns, flag_options)
-  }
-
-  # Create base table
-  dt <- datatable(
-    data,
-    options = options,
-    selection = selection,
-    rownames = FALSE,
-    escape = FALSE
-  )
-
-  # Add standard formatting
-  dt <- format_table_columns(dt, data, color_by = NULL)
-
-  dt
-}
-
-#' Prepare table data with interactive columns
-#' @param data Input data frame
-#' @param cols Required columns
-#' @param current_selections Current selections
-#' @param current_flags Current flags
-#' @param current_notes Current curator notes
-#' @param logger Optional logger instance
-#' @return Prepared data frame
-#' @keywords internal
-prepare_table_data <- function(data, cols, current_selections, current_flags,
-                               current_notes, logger = NULL) {
 
   if (is.null(data) || nrow(data) == 0) {
-    if (!is.null(logger)) logger$warn("Empty or invalid input data")
-    return(data.frame())
+    if (!is.null(logger)) logger$warn("Empty input data")
+    return(NULL)
   }
 
-  # Add selected column
-  if (!"selected" %in% names(data)) {
-    data$selected <- sapply(data$processid, function(pid) {
-      !is.null(current_selections) && !is.null(current_selections[[pid]])
-    })
-  }
+  # Add this check for column definitions
+  # only if renaming columns from standard BOLD names
+  #if (!exists("COLUMN_DEFINITIONS", envir = .GlobalEnv)) {
+  #  source("R/config/column_definitions.R")
+  #}
 
-  # Add flag dropdown column
-  if (!"flag" %in% names(data)) {
+  # Ensure data is a data frame and reset rownames
+  data <- as.data.frame(data, stringsAsFactors = FALSE)
+  rownames(data) <- NULL
+
+  # Add interactive columns
+  data$selected <- FALSE
+  data$flag <- ""
+  data$curator_notes <- ""
+
+  # Update with current values if provided
+  if (!is.null(current_selections)) {
+    data$selected <- sapply(data$processid, function(pid) !is.null(current_selections[[pid]]))
+  }
+  if (!is.null(current_flags)) {
     data$flag <- sapply(data$processid, function(pid) {
-      if (!is.null(current_flags) && !is.null(current_flags[[pid]])) {
+      if (!is.null(current_flags[[pid]]) && !is.null(current_flags[[pid]]$flag)) {
         current_flags[[pid]]$flag
       } else {
         ""
       }
     })
   }
-
-  # Add curator notes column
-  if (!"curator_notes" %in% names(data)) {
+  if (!is.null(current_notes)) {
     data$curator_notes <- sapply(data$processid, function(pid) {
-      if (!is.null(current_notes) && !is.null(current_notes[[pid]])) {
-        current_notes[[pid]]
+      if (!is.null(current_notes[[pid]])) {
+        as.character(current_notes[[pid]])
       } else {
         ""
       }
     })
   }
+  # order the columns properly
+  data <- order_columns(data)
 
-  # Add any missing columns
-  for (col in setdiff(cols, names(data))) {
-    data[[col]] <- NA
+  # Basic options for DT
+  dt_options <- list(
+    scrollX = TRUE,
+    scrollY = "500px",
+    pageLength = page_length,
+    autoWidth = FALSE,
+    dom = 'Bfrtip',
+    buttons = buttons,
+    extensions = 'FixedColumns',  # Add this line
+    fixedColumns = list(
+      left = 3
+    ),
+    columnDefs = list(
+      list(
+        targets = which(names(data) %in% c("selected", "flag", "curator_notes")) - 1,
+        searchable = FALSE,
+        orderable = FALSE,
+        width = "100px",
+        className = 'dt-center fixed-col'  # Change sticky-col to fixed-col
+      ),
+      list(
+        targets = "_all",
+        className = "dt-body-left nowrap",
+        height = "22px"
+      )
+    )
+  )
+
+  # Add callback if namespace provided
+  if (!is.null(ns)) {
+    dt_options$callback <- get_table_callback(ns, get_flag_options())
   }
 
-  # Reorder columns to match preferred order
-  data[, cols]
+  # Create base DT object
+  tryCatch({
+    dt <- DT::datatable(
+      data,
+      options = dt_options,
+      selection = selection,
+      rownames = FALSE,
+
+      # column renaming lines which break the app
+      # tables don't appear and I can't figure it out
+      # leaving here for future activation
+      #colnames = sapply(names(data), function(col) {
+      #  if(col %in% names(COLUMN_DEFINITIONS)) COLUMN_DEFINITIONS[[col]] else tools::toTitleCase(gsub("_", " ", col))
+      #}),
+      #escape = c("Selected", "Issue", "Curator_Notes")
+
+      escape = c("selected", "flag", "curator_notes"),
+      extensions = c('Buttons', 'FixedColumns')  # Add FixedColumns here
+    )
+
+    # Add interactive column formatting using new column names
+    for(col_pair in list(c("selected", "Selected"),
+                         c("flag", "Issue"),
+                         c("curator_notes", "Curator_Notes"))) {
+      orig_col <- col_pair[1]
+      new_col <- col_pair[2]
+      if (orig_col %in% names(data)) {
+        dt <- format_interactive_column(dt, new_col)
+      }
+    }
+
+    # Add metric column formatting
+    if ("quality_score" %in% names(data)) {
+      dt <- format_quality_score(dt, data)
+    }
+
+    if ("rank" %in% names(data)) {
+      dt <- format_rank(dt)
+    }
+
+    # Add color coding if specified
+    if (!is.null(color_by) && color_by %in% names(data)) {
+      dt <- add_color_coding(dt, data, color_by)
+    }
+
+    return(dt)
+
+  }, error = function(e) {
+    if (!is.null(logger)) {
+      logger$error("Error creating DT object", details = list(
+        error = e$message,
+        data_dims = dim(data),
+        data_class = class(data),
+        column_names = names(data)
+      ))
+    }
+    return(NULL)
+  })
 }
 
-#' Format table columns with styling
-#' @param dt DT datatable object
-#' @param data Original data frame
-#' @param color_by Optional column for color coding
-#' @param logger Optional logger instance
-#' @return Formatted datatable
-#' @keywords internal
-format_table_columns <- function(dt, data, color_by = NULL, logger = NULL) {
-
-  # Format selected column as checkbox
-  dt <- dt %>%
-    formatStyle(
+# Helper function to format interactive columns
+format_interactive_column <- function(dt, col) {
+  if (col == "selected") {
+    dt %>% formatStyle(
       'selected',
       target = "cell",
       render = JS("
@@ -204,10 +228,8 @@ format_table_columns <- function(dt, data, color_by = NULL, logger = NULL) {
         }
       ")
     )
-
-  # Format flag column as dropdown using defined options
-  dt <- dt %>%
-    formatStyle(
+  } else if (col == "flag") {
+    dt %>% formatStyle(
       'flag',
       target = "cell",
       render = JS("
@@ -226,10 +248,8 @@ format_table_columns <- function(dt, data, color_by = NULL, logger = NULL) {
         }
       ")
     )
-
-  # Format curator notes as expandable input
-  dt <- dt %>%
-    formatStyle(
+  } else if (col == "curator_notes") {
+    dt %>% formatStyle(
       'curator_notes',
       target = "cell",
       render = JS("
@@ -245,47 +265,429 @@ format_table_columns <- function(dt, data, color_by = NULL, logger = NULL) {
         }
       ")
     )
+  } else {
+    dt
+  }
+}
 
-  # Add other standard formatting
-  if ("quality_score" %in% names(data)) {
-    dt <- dt %>%
-      formatStyle(
-        'quality_score',
-        background = styleColorBar(c(0, 14), "#28a745"),
-        backgroundSize = "98% 88%",
-        backgroundRepeat = "no-repeat",
-        backgroundPosition = "center"
-      )
+# Helper function to format quality score
+format_quality_score <- function(dt, data) {
+  dt %>% formatStyle(
+    'quality_score',
+    background = styleColorBar(c(0, max(14, max(data$quality_score, na.rm = TRUE))),
+                               "#28a745"),
+    backgroundSize = "98% 88%",
+    backgroundRepeat = "no-repeat",
+    backgroundPosition = "center"
+  )
+}
+
+# Helper function to format rank
+format_rank <- function(dt) {
+  dt %>% formatStyle(
+    'rank',
+    backgroundColor = styleEqual(
+      c(1:7),
+      c('#28a745', '#28a745', '#17a2b8', '#17a2b8',
+        '#ffc107', '#ffc107', '#dc3545')
+    ),
+    color = styleEqual(
+      c(1:7),
+      rep('white', 7)
+    )
+  )
+}
+
+# Helper function to add color coding
+add_color_coding <- function(dt, data, color_by) {
+  unique_values <- unique(data[[color_by]])
+  colors <- if(length(unique_values) <= 3) {
+    c("#e6f3ff", "#cce6ff", "#b3d9ff")
+  } else if(length(unique_values) <= 5) {
+    c("#e6f3ff", "#cce6ff", "#b3d9ff", "#99ccff", "#80bfff")
+  } else {
+    colorRampPalette(c("#e6f3ff", "#80bfff"))(length(unique_values))
   }
 
-  if ("specimen_rank" %in% names(data)) {
-    dt <- dt %>%
-      formatStyle(
-        'specimen_rank',
-        backgroundColor = styleEqual(
-          c(1, 2, 3, 4, 5, 6, 7),
-          c('#28a745', '#28a745', '#17a2b8', '#17a2b8',
-            '#ffc107', '#ffc107', '#dc3545')
-        ),
-        color = styleEqual(
-          c(1, 2, 3, 4, 5, 6, 7),
-          rep('white', 7)
+  dt %>% formatStyle(
+    color_by,
+    backgroundColor = styleEqual(unique_values, colors[1:length(unique_values)])
+  )
+}
+
+# Handles data preparation consistently
+prepare_module_data <- function(data,
+                                current_selections = NULL,
+                                current_flags = NULL,
+                                current_notes = NULL,
+                                logger = NULL) {
+
+  if (is.null(data) || nrow(data) == 0) {
+    if (!is.null(logger)) logger$warn("Empty input data to prepare_module_data")
+    return(data.frame())
+  }
+
+  # Log initial state
+  if (!is.null(logger)) {
+    logger$info("Pre-format specimen table data", details = list(
+      rows = nrow(data),
+      columns = names(data),
+      sample_processids = head(data$processid)
+    ))
+  }
+
+  # Convert problematic column types
+  for (col in names(data)) {
+    if (is.list(data[[col]]) || is.factor(data[[col]])) {
+      data[[col]] <- as.character(data[[col]])
+    }
+  }
+
+  # Add missing standard columns if needed
+  missing_cols <- setdiff(PREFERRED_COLUMNS(data), names(data))
+  for (col in missing_cols) {
+    data[[col]] <- NA_character_
+  }
+
+  # Add interactive columns
+  data$selected <- FALSE
+  data$flag <- ""
+  data$curator_notes <- ""
+
+  # Update with current values
+  if (!is.null(current_selections)) {
+    data$selected <- sapply(data$processid, function(pid) {
+      !is.null(current_selections[[pid]])
+    })
+  }
+
+  if (!is.null(current_flags)) {
+    data$flag <- sapply(data$processid, function(pid) {
+      if (!is.null(current_flags[[pid]]) && !is.null(current_flags[[pid]]$flag)) {
+        current_flags[[pid]]$flag
+      } else {
+        ""
+      }
+    })
+  }
+
+  if (!is.null(current_notes)) {
+    data$curator_notes <- sapply(data$processid, function(pid) {
+      if (!is.null(current_notes[[pid]])) {
+        as.character(current_notes[[pid]])
+      } else {
+        ""
+      }
+    })
+  }
+
+  # Final cleanup - ensure no NULL values
+  for (col in names(data)) {
+    if (any(sapply(data[[col]], is.null))) {
+      data[[col]][sapply(data[[col]], is.null)] <- NA
+    }
+  }
+
+  # Log final state
+  if (!is.null(logger)) {
+    logger$info("Post-format specimen table", details = list(
+      table_class = class(data),
+      table_columns = if(is.data.frame(data)) names(data) else "Not a data frame"
+    ))
+  }
+
+  return(data)
+}
+
+
+#' Format specific table columns with styling
+#' @param dt DT datatable object
+#' @param data Original data frame
+#' @param color_by Optional column for color coding
+#' @param logger Optional logger instance
+#' @return Formatted datatable
+#' @keywords internal
+format_table_columns <- function(dt, data, color_by = NULL, logger = NULL) {
+  if (is.null(dt)) return(NULL)
+
+  tryCatch({
+    # Add interactive column formatting
+    if ("selected" %in% names(data)) {
+      dt <- dt %>%
+        formatStyle(
+          'selected',
+          target = "cell",
+          render = JS("
+            function(data, type, row) {
+              if(type === 'display') {
+                return '<input type=\"checkbox\" class=\"specimen-select\"' +
+                       (data ? ' checked' : '') + '>';
+              }
+              return data;
+            }
+          ")
         )
-      )
+    }
+
+    if ("flag" %in% names(data)) {
+      dt <- dt %>%
+        formatStyle(
+          'flag',
+          target = "cell",
+          render = JS("
+            function(data, type, row) {
+              if(type === 'display') {
+                var select = '<select class=\"specimen-flag form-select form-select-sm\">';
+                Object.entries(flagOptions).forEach(function([label, value]) {
+                  select += '<option value=\"' + value + '\"' +
+                           (data === value ? ' selected' : '') + '>' +
+                           label + '</option>';
+                });
+                select += '</select>';
+                return select;
+              }
+              return data;
+            }
+          ")
+        )
+    }
+
+    if ("curator_notes" %in% names(data)) {
+      dt <- dt %>%
+        formatStyle(
+          'curator_notes',
+          target = "cell",
+          render = JS("
+            function(data, type, row) {
+              if(type === 'display') {
+                var input = '<input type=\"text\" class=\"specimen-notes form-control form-control-sm\"' +
+                           ' style=\"width:100%;height:24px;padding:2px 6px;\"' +
+                           ' value=\"' + (data || '') + '\"' +
+                           ' placeholder=\"Add notes...\">';
+                return input;
+              }
+              return data;
+            }
+          ")
+        )
+    }
+
+    # Add metric column formatting
+    if ("quality_score" %in% names(data)) {
+      dt <- dt %>%
+        formatStyle(
+          'quality_score',
+          background = styleColorBar(c(0, max(14, max(data$quality_score, na.rm = TRUE))),
+                                     "#28a745"),
+          backgroundSize = "98% 88%",
+          backgroundRepeat = "no-repeat",
+          backgroundPosition = "center"
+        )
+    }
+
+    if ("rank" %in% names(data)) {
+      dt <- dt %>%
+        formatStyle(
+          'rank',
+          backgroundColor = styleEqual(
+            c(1:7),
+            c('#28a745', '#28a745', '#17a2b8', '#17a2b8',
+              '#ffc107', '#ffc107', '#dc3545')
+          ),
+          color = styleEqual(
+            c(1:7),
+            rep('white', 7)
+          )
+        )
+    }
+
+    # Add color coding if specified
+    if (!is.null(color_by) && color_by %in% names(data)) {
+      unique_values <- unique(data[[color_by]])
+      colors <- create_species_colors(unique_values)
+
+      if (!is.null(colors)) {
+        dt <- dt %>%
+          formatStyle(
+            color_by,
+            backgroundColor = styleEqual(unique_values, colors)
+          )
+      }
+    }
+
+    if (!is.null(logger)) {
+      logger$info("Column formatting applied successfully")
+    }
+
+    return(dt)
+
+  }, error = function(e) {
+    if (!is.null(logger)) {
+      logger$error("Error formatting table columns",
+                   details = list(error = e$message))
+    }
+    return(dt)  # Return original table if formatting fails
+  })
+}
+
+#' Prepare table data with interactive columns while preserving all existing columns
+#' @param data Input data frame
+#' @param custom_cols Preferred columns to ensure exist
+#' @param current_selections Current selections
+#' @param current_flags Current flags
+#' @param current_notes Current curator notes
+#' @param logger Optional logger instance
+#' @return Prepared data frame
+#' @keywords internal
+# Revised prepare_table_data function
+prepare_table_data <- function(data, current_selections, current_flags,
+                               current_notes, logger = NULL) {
+  if (is.null(data) || nrow(data) == 0) {
+    if (!is.null(logger)) logger$warn("Empty or invalid input data to prepare_table_data")
+    return(data.frame())
   }
 
-  if (!is.null(color_by) && color_by %in% names(data)) {
-    unique_values <- unique(data[[color_by]])
-    colors <- create_species_colors(unique_values)
-
-    dt <- dt %>%
-      formatStyle(
-        color_by,
-        backgroundColor = styleEqual(unique_values, colors)
-      )
+  # Log initial state
+  if (!is.null(logger)) {
+    logger$info("Starting prepare_table_data", details = list(
+      initial_columns = names(data),
+      data_classes = sapply(data, class),
+      row_count = nrow(data)
+    ))
   }
 
-  dt
+  # Convert to data frame and preserve row names
+  rn <- rownames(data)
+  data <- as.data.frame(data, stringsAsFactors = FALSE)
+  rownames(data) <- rn
+
+  # Convert column names to lowercase
+  original_names <- names(data)
+  names(data) <- tolower(names(data))
+
+  if (!is.null(logger)) {
+    logger$info("Column name conversion", details = list(
+      original = original_names,
+      converted = names(data)
+    ))
+  }
+
+  # Check for required processid column
+  if (!"processid" %in% names(data)) {
+    if (!is.null(logger)) logger$error("Missing required processid column")
+    return(data.frame())
+  }
+
+  # Handle specimen_rank to rank conversion
+  if ("specimen_rank" %in% names(data) && !"rank" %in% names(data)) {
+    if (!is.null(logger)) {
+      logger$info("Converting specimen_rank to rank", details = list(
+        specimen_rank_values = head(data$specimen_rank)
+      ))
+    }
+    data$rank <- data$specimen_rank
+    data$specimen_rank <- NULL
+  }
+
+  # Convert problematic types
+  for (col in names(data)) {
+    if (is.list(data[[col]]) || is.factor(data[[col]])) {
+      if (!is.null(logger)) {
+        logger$info(sprintf("Converting column %s from %s to character",
+                            col, class(data[[col]])[1]))
+      }
+      data[[col]] <- as.character(data[[col]])
+    }
+  }
+
+  # Add missing standard columns first
+  missing_cols <- setdiff(custom_cols, names(data))
+  if (length(missing_cols) > 0) {
+    if (!is.null(logger)) {
+      logger$info("Adding missing standard columns", details = list(
+        missing_columns = missing_cols
+      ))
+    }
+    for (col in missing_cols) {
+      data[[col]] <- NA_character_
+    }
+  }
+
+  # Then add/update interactive columns
+  data$selected <- FALSE
+  if (!is.null(current_selections)) {
+    data$selected <- sapply(data$processid, function(pid) {
+      !is.null(current_selections[[pid]])
+    }, USE.NAMES = FALSE)
+  }
+
+  data$flag <- ""
+  if (!is.null(current_flags)) {
+    data$flag <- sapply(data$processid, function(pid) {
+      if (!is.null(current_flags[[pid]]) && !is.null(current_flags[[pid]]$flag)) {
+        as.character(current_flags[[pid]]$flag)
+      } else {
+        ""
+      }
+    }, USE.NAMES = FALSE)
+  }
+
+  data$curator_notes <- ""
+  if (!is.null(current_notes)) {
+    data$curator_notes <- sapply(data$processid, function(pid) {
+      if (!is.null(current_notes[[pid]])) {
+        if (is.list(current_notes[[pid]])) {
+          current_notes[[pid]]$text %||% ""
+        } else {
+          as.character(current_notes[[pid]])
+        }
+      } else {
+        ""
+      }
+    }, USE.NAMES = FALSE)
+  }
+
+  if (!is.null(logger)) {
+    logger$info("Interactive columns added", details = list(
+      has_selected = "selected" %in% names(data),
+      has_flag = "flag" %in% names(data),
+      has_notes = "curator_notes" %in% names(data)
+    ))
+  }
+
+  # Final cleanup - ensure no NULL values
+  for (col in names(data)) {
+    if (any(sapply(data[[col]], is.null))) {
+      if (!is.null(logger)) {
+        logger$info(sprintf("Replacing NULL values in column %s", col))
+      }
+      data[[col]][sapply(data[[col]], is.null)] <- NA
+    }
+  }
+
+  # Ensure rank is numeric
+  if ("rank" %in% names(data)) {
+    data$rank <- as.numeric(data$rank)
+  }
+
+  # Order columns according to preference
+  data <- order_columns(data)
+
+  # Log final state
+  if (!is.null(logger)) {
+    logger$info("Prepare table data complete", details = list(
+      final_columns = names(data),
+      row_count = nrow(data),
+      column_classes = sapply(data, class),
+      rank_info = if("rank" %in% names(data)) list(
+        class = class(data$rank),
+        unique_values = unique(data$rank),
+        has_na = any(is.na(data$rank))
+      ) else NULL
+    ))
+  }
+
+  return(data)
 }
 
 #' Get table callback JavaScript
@@ -377,7 +779,8 @@ get_table_css <- function() {
   }
 
   .dataTables_scrollBody {
-    overflow-x: auto !important;
+    overflow-x: scroll !important;
+    overflow-y: scroll !important;
     white-space: nowrap !important;
     min-height: 120px !important;
     max-height: 70vh !important;
@@ -501,12 +904,41 @@ get_table_css <- function() {
 
   /* Fixed Columns */
   .DTFC_LeftWrapper {
-    border-right: 2px solid #dee2e6;
+    border-right: 2px solid #dee2e6 !important;
     background-color: #fff !important;
+    z-index: 2 !important;
   }
 
   .DTFC_LeftHeadWrapper {
-    border-bottom: 2px solid #dee2e6;
+    border-bottom: 2px solid #dee2e6 !important;
+    z-index: 3 !important;
+  }
+
+  .DTFC_LeftBodyWrapper {
+    border-right: 2px solid #dee2e6 !important;
+    box-shadow: 4px 0px 8px rgba(0,0,0,0.1) !important;
+  }
+
+  .DTFC_Cloned {
+    background-color: #fff !important;
+  }
+
+  .DTFC_LeftHeadWrapper table thead th {
+    background-color: #f8f9fa !important;
+    border-bottom: 2px solid #dee2e6 !important;
+  }
+
+  .dataTables_wrapper .DTFC_LeftWrapper {
+    z-index: 2 !important;
+  }
+
+  .dataTables_wrapper .DTFC_LeftHeadWrapper {
+    z-index: 3 !important;
+  }
+
+  .DTFC_LeftBodyLiner {
+    overflow-x: hidden !important;
+    overflow-y: hidden !important;
   }
 
   /* Button Styling */
@@ -517,6 +949,44 @@ get_table_css <- function() {
   .dt-button {
     margin-right: 5px !important;
   }
+
+  /* Fixed Columns */
+    .fixed-col {
+      background-color: white !important;
+    }
+
+  .DTFC_LeftWrapper {
+    border-right: 2px solid #dee2e6 !important;
+    z-index: 2 !important;
+  }
+
+  .DTFC_LeftHeadWrapper {
+    border-bottom: 2px solid #dee2e6 !important;
+    z-index: 3 !important;
+  }
+
+  .DTFC_LeftBodyWrapper {
+    overflow-y: hidden !important;
+  }
+
+  .DTFC_Cloned {
+    background-color: white !important;
+  }
+
+  .DTFC_LeftHeadWrapper table thead th {
+    background-color: #f8f9fa !important;
+  }
+
+  /* Shadow effect */
+    .DTFC_LeftWrapper::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      right: 0;
+      width: 4px;
+      height: 100%;
+      box-shadow: 2px 0 5px rgba(0,0,0,0.1);
+    }
   "
 }
 

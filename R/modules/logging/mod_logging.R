@@ -249,7 +249,27 @@ LoggingManager <- R6::R6Class(
       private$msgs <- list()
     },
 
+    sanitize_for_json = function(x) {
+      if (is.null(x)) return(NULL)
+      if (is.list(x)) {
+        return(lapply(x, private$sanitize_for_json))
+      }
+      # Convert if conditions to character
+      if (inherits(x, "if")) return(as.character(x))
+      # Convert factors to character
+      if (is.factor(x)) return(as.character(x))
+      # Convert other types that might cause issues
+      if (is.function(x)) return("function")
+      if (is.environment(x)) return("environment")
+      return(x)
+    },
+
     add_log_entry = function(level, message, details = NULL) {
+      # Sanitize details for JSON serialization
+      if (!is.null(details)) {
+        details <- private$sanitize_for_json(details)
+      }
+
       entry <- list(
         timestamp = Sys.time(),
         level = level,
@@ -265,9 +285,12 @@ LoggingManager <- R6::R6Class(
                   entry$message))
 
       if(!is.null(details)) {
-        cat("  Details:",
-            if(is.list(details)) jsonlite::toJSON(details, auto_unbox = TRUE)
-            else details, "\n")
+        tryCatch({
+          cat("  Details:", jsonlite::toJSON(details, auto_unbox = TRUE), "\n")
+        }, error = function(e) {
+          cat("  Details: Unable to serialize to JSON\n")
+          cat("  Error:", e$message, "\n")
+        })
       }
     }
   )

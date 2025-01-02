@@ -292,16 +292,10 @@ StateManager <- R6::R6Class(
     },
 
     convert_data_frame = function(df) {
-      if (!is.null(rownames(df)) && !all(rownames(df) == as.character(seq_len(nrow(df))))) {
-        df <- data.frame(df, stringsAsFactors = FALSE, row.names = NULL)
+      df <- as.data.frame(df, stringsAsFactors = FALSE)
+      if (!is.null(rownames(df))) {
+        rownames(df) <- NULL
       }
-
-      for (col in names(df)) {
-        if (inherits(df[[col]], "table")) {
-          df[[col]] <- private$convert_table(df[[col]])
-        }
-      }
-
       df
     },
 

@@ -9,7 +9,7 @@ validate_specimen_data <- function(data) {
     return(list(valid = FALSE, message = "No specimen data available"))
   }
 
-  required_cols <- c("processid", "bin_uri", "species", "genus", "family", "order")
+  required_cols <- c("processid", "bin_uri", "species")
   missing_cols <- setdiff(required_cols, names(data))
 
   if (length(missing_cols) > 0) {

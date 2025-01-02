@@ -133,8 +133,19 @@ process_specimen_data <- function(specimens) {
     return(data.frame())
   }
 
+  logging_manager$info("Columns before processing", list(
+    num_columns = length(names(specimens)),
+    column_names = names(specimens)
+  ))
+
   # Make a copy of the data
   processed <- as.data.frame(specimens, stringsAsFactors = FALSE)
+
+  logging_manager$info("Columns after data.frame conversion", list(
+    num_columns = length(names(processed)),
+    column_names = names(processed),
+    missing_columns = setdiff(names(specimens), names(processed))
+  ))
 
   # Clean species names
   if ("species" %in% names(processed)) {
@@ -164,6 +175,12 @@ process_specimen_data <- function(specimens) {
 
   # Sort by processid
   processed <- processed[order(processed$processid), ]
+
+  logging_manager$info("Columns after final processing", list(
+    num_columns = length(names(processed)),
+    column_names = names(processed),
+    missing_columns = setdiff(names(specimens), names(processed))
+  ))
 
   processed
 }
