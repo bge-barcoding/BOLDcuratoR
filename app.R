@@ -8,6 +8,7 @@ source("global.R")
 
 # Source required modules
 source("R/config/constants.R")
+source("R/config/column_definitions.R")
 
 # Source utility functions
 source("R/utils/bags_grading.R")
@@ -353,7 +354,7 @@ server <- function(input, output, session) {
                 species = species_local,
                 grade = grade_local,
                 quality_score = store$specimen_data[store$specimen_data$processid == selected_processid,]$quality_score,
-                specimen_rank = store$specimen_data[store$specimen_data$processid == selected_processid,]$specimen_rank
+                rank = store$specimen_data[store$specimen_data$processid == selected_processid,]$rank
               )
             )
           })

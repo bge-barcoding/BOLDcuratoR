@@ -52,23 +52,14 @@ mod_bags_grading_ui <- function(id, grade) {
         collapsible = TRUE,
 
         fluidRow(
-          column(4,
+          column(6,
                  selectInput(ns("rank_filter"),
                              "Filter by Rank:",
                              choices = c("All", "1", "2", "3", "4", "5", "6", "7"),
                              selected = "All"
                  )
           ),
-          column(4,
-                 numericInput(ns("min_quality_score"),
-                              "Minimum Quality Score:",
-                              value = 0,
-                              min = 0,
-                              max = 14,
-                              step = 1
-                 )
-          ),
-          column(4,
+          column(6,
                  selectInput(ns("criteria_filter"),
                              "Filter by Required Criteria:",
                              choices = c(

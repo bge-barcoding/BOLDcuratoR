@@ -42,22 +42,24 @@ SpecimenProcessor <- R6::R6Class(
         }
 
         # Score specimens
-        tryCatch({
-          scored <- private$scorer$score_specimens(validated)
-          if (is.null(scored)) {
-            private$logger$error("Specimen scoring failed")
-            return(NULL)
-          }
-
-          # Ensure score columns are properly formatted
-          scored <- private$format_score_columns(scored)
-
+        private$logger$info("Scoring specimens...")
+        scored <- tryCatch({
+          private$scorer$score_specimens(validated)
         }, error = function(e) {
           private$logger$error(sprintf("Scoring error: %s", e$message))
-          return(NULL)
+          NULL
         })
 
+        if (is.null(scored)) {
+          private$logger$error("Specimen scoring failed")
+          return(NULL)
+        }
+
+        # Ensure score columns exist and are properly formatted
+        scored <- private$format_score_columns(scored)
+
         # Rank specimens
+        private$logger$info("Ranking specimens...")
         ranked <- private$rank_specimens(scored)
         if (is.null(ranked)) {
           private$logger$error("Specimen ranking failed")
@@ -71,19 +73,14 @@ SpecimenProcessor <- R6::R6Class(
         # Final data cleanup
         result <- private$cleanup_data(ranked)
 
-        private$logger$info(sprintf("Successfully processed %d specimens", nrow(result)))
+        if (!is.null(result) && nrow(result) > 0) {
+          private$logger$info(sprintf("Successfully processed %d specimens", nrow(result)))
+        } else {
+          private$logger$warn("No specimens processed successfully")
+        }
+
         result
       })
-    },
-
-    #' @description Get the latest processing metrics
-    #' @return List of quality metrics
-    get_metrics = function() {
-      if (!is.null(private$last_metrics)) {
-        private$convert_metrics(private$last_metrics)
-      } else {
-        NULL
-      }
     }
   ),
 
@@ -101,44 +98,28 @@ SpecimenProcessor <- R6::R6Class(
       if (!is.data.frame(data)) {
         data <- as.data.frame(data, stringsAsFactors = FALSE)
       }
-
-      # Remove row names
       rownames(data) <- NULL
-
-      # Convert any table columns to proper format
-      for (col in names(data)) {
-        if (inherits(data[[col]], "table")) {
-          data[[col]] <- private$convert_table_column(data[[col]])
-        }
-      }
-
       data
-    },
-
-    #' @description Convert table column to vector
-    #' @param col Table column
-    #' @return Vector
-    convert_table_column = function(col) {
-      if (inherits(col, "table")) {
-        as.vector(col)
-      } else {
-        col
-      }
     },
 
     #' @description Format score columns ensuring proper types
     #' @param data Scored specimen data
     #' @return Data frame with properly formatted score columns
     format_score_columns = function(data) {
-      if ("quality_score" %in% names(data)) {
-        data$quality_score <- as.numeric(data$quality_score)
+      if (!("quality_score" %in% names(data))) {
+        data$quality_score <- rep(NA_real_, nrow(data))
       }
-      if ("specimen_rank" %in% names(data)) {
-        data$specimen_rank <- as.integer(data$specimen_rank)
+      if (!("rank" %in% names(data))) {
+        data$rank <- rep(NA_integer_, nrow(data))
       }
-      if ("criteria_met" %in% names(data)) {
-        data$criteria_met <- as.character(data$criteria_met)
+      if (!("criteria_met" %in% names(data))) {
+        data$criteria_met <- rep(NA_character_, nrow(data))
       }
+
+      data$quality_score <- as.numeric(data$quality_score)
+      data$rank <- as.integer(data$rank)
+      data$criteria_met <- as.character(data$criteria_met)
+
       data
     },
 
@@ -148,7 +129,6 @@ SpecimenProcessor <- R6::R6Class(
     convert_metrics = function(metrics) {
       if (!is.list(metrics)) return(NULL)
 
-      # Convert any table objects in metrics
       metrics <- lapply(metrics, function(x) {
         if (inherits(x, "table")) {
           as.data.frame(x, stringsAsFactors = FALSE)
@@ -170,27 +150,41 @@ SpecimenProcessor <- R6::R6Class(
         return(NULL)
       }
 
-      # Get ranking criteria from constants
-      rank_criteria <- SPECIMEN_RANK_CRITERIA
-
-      # Apply ranking based on criteria met
-      scored_specimens$specimen_rank <- sapply(scored_specimens$criteria_met, function(criteria) {
-        if (is.na(criteria) || criteria == "") return(7)
-        criteria_list <- strsplit(criteria, "; ")[[1]]
-
-        for (rank in 1:6) {
-          rank_key <- paste0("RANK_", rank)
-          if (all(rank_criteria[[rank_key]] %in% criteria_list)) {
-            return(rank)
-          }
+      tryCatch({
+        # Force reload of ranking criteria from global environment
+        rank_criteria <- get0("SPECIMEN_RANK_CRITERIA", envir = .GlobalEnv)
+        if (is.null(rank_criteria)) {
+          private$logger$error("Failed to load SPECIMEN_RANK_CRITERIA from global environment")
+          # Return specimens with default rank 7
+          scored_specimens$rank <- 7L
+          return(scored_specimens)
         }
-        return(7)
+
+        # Apply ranking based on criteria met
+        scored_specimens$rank <- sapply(scored_specimens$criteria_met, function(criteria) {
+          if (is.na(criteria) || criteria == "") return(7L)
+          criteria_list <- strsplit(criteria, "; ")[[1]]
+
+          for (rank in 1:6) {
+            rank_key <- paste0("RANK_", rank)
+            if (!is.null(rank_criteria[[rank_key]]) &&
+                all(rank_criteria[[rank_key]] %in% criteria_list)) {
+              return(as.integer(rank))
+            }
+          }
+          return(7L)
+        })
+
+        # Ensure rank is integer
+        scored_specimens$rank <- as.integer(scored_specimens$rank)
+        scored_specimens
+
+      }, error = function(e) {
+        private$logger$error(sprintf("Error in rank_specimens: %s", e$message))
+        # Return specimens with default rank on error
+        scored_specimens$rank <- 7L
+        scored_specimens
       })
-
-      # Ensure rank is numeric
-      scored_specimens$specimen_rank <- as.integer(scored_specimens$specimen_rank)
-
-      scored_specimens
     },
 
     #' @description Calculate quality metrics for specimens
@@ -199,21 +193,26 @@ SpecimenProcessor <- R6::R6Class(
     calculate_quality_metrics = function(specimens) {
       if (is.null(specimens) || nrow(specimens) == 0) return(NULL)
 
-      # Calculate basic metrics
-      metrics <- list(
-        total_specimens = nrow(specimens),
-        avg_quality_score = mean(specimens$quality_score, na.rm = TRUE),
-        median_quality_score = median(specimens$quality_score, na.rm = TRUE),
-        rank_distribution = as.data.frame(table(specimens$specimen_rank),
-                                          stringsAsFactors = FALSE),
-        species_count = length(unique(specimens$species)),
-        criteria_coverage = private$calculate_criteria_coverage(specimens)
-      )
+      tryCatch({
+        # Calculate basic metrics
+        metrics <- list(
+          total_specimens = nrow(specimens),
+          avg_quality_score = mean(specimens$quality_score, na.rm = TRUE),
+          median_quality_score = median(specimens$quality_score, na.rm = TRUE),
+          rank_distribution = as.data.frame(table(specimens$rank),
+                                            stringsAsFactors = FALSE),
+          species_count = length(unique(specimens$species)),
+          criteria_coverage = private$calculate_criteria_coverage(specimens)
+        )
 
-      # Convert any table objects in metrics
-      metrics <- private$convert_metrics(metrics)
+        # Convert table objects
+        metrics <- private$convert_metrics(metrics)
 
-      metrics
+        metrics
+      }, error = function(e) {
+        private$logger$error(sprintf("Error calculating metrics: %s", e$message))
+        NULL
+      })
     },
 
     #' @description Calculate criteria coverage metrics
@@ -222,13 +221,20 @@ SpecimenProcessor <- R6::R6Class(
     calculate_criteria_coverage = function(specimens) {
       if (is.null(specimens) || nrow(specimens) == 0) return(NULL)
 
+      # Get scoring criteria from global environment
+      scoring_criteria <- get("SPECIMEN_SCORING_CRITERIA", envir = .GlobalEnv)
+      if (is.null(scoring_criteria)) {
+        private$logger$error("Failed to load SPECIMEN_SCORING_CRITERIA")
+        return(NULL)
+      }
+
       # Calculate criteria counts
-      criteria_counts <- lapply(names(SPECIMEN_SCORING_CRITERIA), function(criterion) {
+      criteria_counts <- lapply(names(scoring_criteria), function(criterion) {
         sum(grepl(criterion, specimens$criteria_met, fixed = TRUE))
       })
-      names(criteria_counts) <- names(SPECIMEN_SCORING_CRITERIA)
+      names(criteria_counts) <- names(scoring_criteria)
 
-      # Convert to data frame
+      # Create data frame
       criteria_df <- data.frame(
         criterion = names(criteria_counts),
         count = unlist(criteria_counts),
@@ -242,42 +248,34 @@ SpecimenProcessor <- R6::R6Class(
       }))
 
       list(
-        total_criteria = length(SPECIMEN_SCORING_CRITERIA),
+        total_criteria = length(scoring_criteria),
         criteria_counts = criteria_df,
         avg_criteria_per_specimen = avg_criteria
       )
     },
 
-    #' @description Final data cleanup before returning
-    #' @param data Data frame to clean
+    #' @description Clean up processed data
+    #' @param data Processed specimen data
     #' @return Cleaned data frame
     cleanup_data = function(data) {
       if (is.null(data) || nrow(data) == 0) return(data)
 
-      # Ensure all character columns are properly encoded
-      char_cols <- sapply(data, is.character)
-      if (any(char_cols)) {
-        for (col in names(data)[char_cols]) {
-          data[[col]] <- enc2utf8(data[[col]])
+      # Ensure required columns exist
+      required_cols <- c("quality_score", "rank", "criteria_met")
+      for (col in required_cols) {
+        if (!(col %in% names(data))) {
+          data[[col]] <- NA
         }
       }
 
-      # Remove any empty numeric columns
-      num_cols <- sapply(data, is.numeric)
-      if (any(num_cols)) {
-        empty_cols <- sapply(data[num_cols], function(x) all(is.na(x)))
-        if (any(empty_cols)) {
-          data <- data[, !empty_cols, drop = FALSE]
-        }
-      }
+      # Convert numeric columns
+      data$quality_score <- as.numeric(data$quality_score)
+      data$rank <- as.integer(data$rank)
 
-      # Remove row names
-      rownames(data) <- NULL
-
-      # Sort by quality score and rank
-      if (all(c("quality_score", "specimen_rank") %in% names(data))) {
-        data <- data[order(-data$quality_score, data$specimen_rank), ]
-      }
+      # Fill NAs with appropriate values
+      data$quality_score[is.na(data$quality_score)] <- 0
+      data$rank[is.na(data$rank)] <- 7L
+      data$criteria_met[is.na(data$criteria_met)] <- ""
 
       data
     }

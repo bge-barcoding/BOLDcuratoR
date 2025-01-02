@@ -74,35 +74,60 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
       store <- state$get_store()
       req(store$specimen_data)
 
+      logger$info("Starting data filtering - Initial columns", list(
+        initial_columns = names(store$specimen_data)
+      ))
+
       data <- store$specimen_data
 
       # Apply rank filter
       if (!is.null(input$rank_filter) && input$rank_filter != "All") {
-        data <- data[data$specimen_rank == as.numeric(input$rank_filter), ]
+        data <- data[data$rank == as.numeric(input$rank_filter), ]
+        logger$info("After rank filter", list(
+          columns = names(data),
+          filter_value = input$rank_filter,
+          rows_remaining = nrow(data)
+        ))
       }
 
       # Apply quality filter
       if (!is.null(input$min_quality_score) && input$min_quality_score > 0) {
         data <- data[data$quality_score >= input$min_quality_score, ]
+        logger$info("After quality filter", list(
+          columns = names(data),
+          filter_value = input$min_quality_score,
+          rows_remaining = nrow(data)
+        ))
       }
 
       # Apply criteria filter
       if (!is.null(input$criteria_filter) && length(input$criteria_filter) > 0) {
+        before_rows <- nrow(data)
         data <- data[sapply(data$criteria_met, function(x) {
           if (is.na(x) || x == "") return(FALSE)
           criteria_list <- strsplit(x, "; ")[[1]]
           all(input$criteria_filter %in% criteria_list)
         }), ]
+        logger$info("After criteria filter", list(
+          columns = names(data),
+          filter_criteria = input$criteria_filter,
+          rows_before = before_rows,
+          rows_after = nrow(data)
+        ))
       }
 
       filtered_data(data)
       metrics(calculate_metrics(data))
 
-      logger$info("Updated filtered data", list(
+      logger$info("Complete filtered data info", list(
         total_records = nrow(store$specimen_data),
-        filtered_records = nrow(data)
+        filtered_records = nrow(data),
+        initial_columns = names(store$specimen_data),
+        final_columns = names(data),
+        dropped_columns = setdiff(names(store$specimen_data), names(data))
       ))
     })
+
 
     # Initialize from state
     observe({
@@ -112,34 +137,45 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
       }
     })
 
+    # In mod_specimen_handling_server.R, replace the output$specimen_table section:
+
     # Specimen table output
     output$specimen_table <- renderDT({
       req(filtered_data())
 
-      logger$info("Rendering specimen table", list(
-        rows = nrow(filtered_data()),
-        columns = names(filtered_data())
+      data <- filtered_data()
+      logger$info("Starting specimen table preparation", list(
+        initial_rows = nrow(data)
       ))
 
       tryCatch({
-        data <- filtered_data()
-
-        # Get current state
-        current_sel <- isolate(selected_specimens())
-        current_flags <- isolate(flagged_specimens())
-        current_notes <- isolate(curator_notes())
-
-        format_specimen_table(
+        # First prepare the data
+        prepared_data <- prepare_module_data(
           data = data,
+          current_selections = isolate(selected_specimens()),
+          current_flags = isolate(flagged_specimens()),
+          current_notes = isolate(curator_notes()),
+          logger = logger
+        )
+
+        # Then create and format the table
+        formatted_table <- format_specimen_table(
+          data = prepared_data,
           ns = ns,
           buttons = c('copy', 'csv', 'excel'),
           page_length = 50,
           selection = 'multiple',
-          current_selections = current_sel,
-          current_flags = current_flags,
-          current_notes = current_notes,
+          current_selections = isolate(selected_specimens()),
+          current_flags = isolate(flagged_specimens()),
+          current_notes = isolate(curator_notes()),
           logger = logger
         )
+
+        logger$info("Specimen table preparation complete", list(
+          final_rows = nrow(prepared_data)
+        ))
+
+        formatted_table
       }, error = function(e) {
         logger$error("Error rendering specimen table", list(
           error = e$message,
@@ -404,7 +440,7 @@ update_filtered_data <- function(data, rank_filter, quality_filter,
 
     # Apply rank filter
     if (!is.null(rank_filter) && rank_filter != "All") {
-      filtered <- filtered[filtered$specimen_rank == as.numeric(rank_filter), ]
+      filtered <- filtered[filtered$rank == as.numeric(rank_filter), ]
     }
 
     # Apply quality filter

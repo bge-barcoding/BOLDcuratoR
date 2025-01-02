@@ -46,12 +46,13 @@ filter_grade_specimens <- function(specimens, grades, target_grade,
 
   # Apply rank filter
   if (!is.null(rank_filter) && rank_filter != "All") {
-    filtered <- filtered[filtered$specimen_rank == as.numeric(rank_filter), ]
+    filtered <- filtered[filtered$rank == as.numeric(rank_filter), ]
   }
 
-  # Apply quality filter
-  if (!is.null(quality_filter) && quality_filter > 0) {
-    filtered <- filtered[filtered$quality_score >= quality_filter, ]
+  # Apply quality filter - Fix the logical comparison
+  quality_score <- as.numeric(quality_filter)
+  if (!is.null(quality_filter) && !is.na(quality_score) && quality_score > 0) {
+    filtered <- filtered[filtered$quality_score >= quality_score, ]
   }
 
   # Apply criteria filter
@@ -88,10 +89,10 @@ calculate_grade_metrics <- function(data) {
   )
 }
 
-#' Organize specimens by grade
+#' Organize specimens by grade with proper group info
 #' @param specimens Data frame of specimens
 #' @param grade BAGS grade
-#' @return Organized list of specimens
+#' @return Organized list of specimens with attributes
 #' @keywords internal
 organize_grade_specimens <- function(specimens, grade) {
   if (is.null(specimens) || nrow(specimens) == 0) return(list())
@@ -101,62 +102,182 @@ organize_grade_specimens <- function(specimens, grade) {
 
   switch(grade,
          # Grades A, B, D: Group by species
-         "A" = split(specimens, specimens$species),
-         "B" = split(specimens, specimens$species),
-         "D" = split(specimens, specimens$species),
+         "A" = {
+           groups <- split(specimens, specimens$species)
+           # Add species info to each group
+           for (species in names(groups)) {
+             attr(groups[[species]], "info") <- list(
+               species = species,
+               specimen_count = nrow(groups[[species]])
+             )
+           }
+           groups
+         },
+
+         "B" = {
+           groups <- split(specimens, specimens$species)
+           for (species in names(groups)) {
+             attr(groups[[species]], "info") <- list(
+               species = species,
+               specimen_count = nrow(groups[[species]])
+             )
+           }
+           groups
+         },
+
+         "D" = {
+           groups <- split(specimens, specimens$species)
+           for (species in names(groups)) {
+             attr(groups[[species]], "info") <- list(
+               species = species,
+               specimen_count = nrow(groups[[species]])
+             )
+           }
+           groups
+         },
+
          # Grade C: Group by species then BIN
          "C" = {
+           result <- list()
            species_groups <- split(specimens, specimens$species)
-           lapply(species_groups, function(species_group) {
-             split(species_group, species_group$bin_uri)
-           })
-         },
-         # Grade E: Group by shared BINs
-         "E" = {
-           bins <- unique(specimens$bin_uri)
-           shared_bins <- list()
 
-           for(bin in bins) {
-             bin_specimens <- specimens[specimens$bin_uri == bin,]
-             if(length(unique(bin_specimens$species)) > 1) {
-               shared_bins[[bin]] <- bin_specimens[order(-bin_specimens$quality_score),]
+           for (species in names(species_groups)) {
+             bin_groups <- split(species_groups[[species]], species_groups[[species]]$bin_uri)
+             for (bin in names(bin_groups)) {
+               group_name <- paste(species, bin, sep = "_")
+               result[[group_name]] <- bin_groups[[bin]]
+               attr(result[[group_name]], "info") <- list(
+                 species = species,
+                 bin = bin,
+                 specimen_count = nrow(bin_groups[[bin]])
+               )
              }
            }
-           shared_bins
+           result
          },
+
+         # Grade E: Group by shared BINs
+         "E" = {
+           result <- list()
+           bins <- unique(specimens$bin_uri)
+
+           for (bin in bins) {
+             bin_specimens <- specimens[specimens$bin_uri == bin,]
+             if (length(unique(bin_specimens$species)) > 1) {
+               result[[bin]] <- bin_specimens[order(-bin_specimens$quality_score),]
+               attr(result[[bin]], "info") <- list(
+                 bin = bin,
+                 species_count = length(unique(bin_specimens$species)),
+                 species = paste(sort(unique(bin_specimens$species)), collapse = ", ")
+               )
+             }
+           }
+           result
+         },
+
          # Default case
          list()
   )
 }
 
+#' Create tables for each group of specimens within a grade
+#' @param organized List of organized specimen groups
+#' @param grade BAGS grade
+#' @param ns Namespace function
+#' @param current_sel Current selections
+#' @param current_flags Current flags
+#' @param current_notes Current notes
+#' @param logger Logger instance
+#' @return List of formatted tables
+#' @keywords internal
+create_grade_tables <- function(organized, grade, ns, current_sel, current_flags,
+                                current_notes, logger) {
+
+  if (is.null(organized) || length(organized) == 0) {
+    logger$warn("No organized data to create tables")
+    return(list())
+  }
+
+  tables <- lapply(seq_along(organized), function(i) {
+    group_data <- organized[[i]]
+    group_info <- attributes(organized[[i]])$info
+
+    tryCatch({
+      logger$info(sprintf("Creating table %d for grade %s", i, grade))
+
+      # First prepare the data
+      prepared_data <- prepare_module_data(
+        data = group_data,
+        current_selections = current_sel,
+        current_flags = current_flags,
+        current_notes = current_notes,
+        logger = logger
+      )
+
+      # Create table
+      dt <- format_grade_table(
+        data = prepared_data,
+        ns = ns,
+        grade = grade
+      )
+
+      if (!is.null(dt)) {
+        div(
+          class = "specimen-table-container mb-4",
+          h4(class = "table-title", generate_table_caption(grade, group_info)),
+          dt
+        )
+      }
+
+    }, error = function(e) {
+      logger$error(sprintf("Error creating table %d for grade %s", i, grade),
+                   list(error = e$message))
+      NULL
+    })
+  })
+
+  # Remove NULL entries
+  tables[!sapply(tables, is.null)]
+}
+
 #' Format the grade tables
-#' @param species Vector of species names
-#' @return Named vector of colors
+#' @param data Data frame of specimen data
+#' @param ns Namespace function for Shiny
+#' @param grade BAGS grade
+#' @return DT datatable object
 #' @keywords internal
 format_grade_table <- function(data, ns = NULL, grade) {
-  dt <- format_specimen_table(
+  if (is.null(data) || nrow(data) == 0) return(NULL)
+
+  prepared_data <- prepare_module_data(
     data = data,
-    ns = ns,
-    buttons = c('copy', 'csv', 'excel'),
-    page_length = 50,
-    selection = 'none',
-    color_by = if(grade == "E") "species" else NULL,
     current_selections = NULL,
     current_flags = NULL,
     current_notes = NULL
   )
 
-  if(grade == "E") {
-    unique_species <- unique(data$species)
-    colors <- create_species_colors(unique_species)
+  dt <- format_specimen_table(
+    data = prepared_data,
+    ns = ns,
+    buttons = c('copy', 'csv', 'excel'),
+    page_length = 50,
+    selection = 'none'
+  )
+
+  if(grade == "E" && !is.null(dt)) {
+    unique_species <- sort(unique(as.character(prepared_data$species)))
+    n_species <- length(unique_species)
+    colors <- colorRampPalette(c("#e6f3ff", "#80bfff"))(n_species)
 
     dt <- dt %>% formatStyle(
       'species',
-      backgroundColor = function(x) colors[x],
-      height = "24px !important",
-      lineHeight = "24px !important"
+      backgroundColor = styleEqual(
+        levels = unique_species,
+        values = colors
+      )
     )
   }
+
   dt
 }
 

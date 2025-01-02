@@ -96,7 +96,7 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
           )
 
           logger$info(sprintf("Applied filters for grade %s", grade), list(
-            rank_filter = input$rank_filter,
+            rank_filter = as.character(input$rank_filter),  # Convert to character explicitly
             quality_filter = input$min_quality_score,
             criteria_count = length(input$criteria_filter),
             filtered_count = nrow(filtered)

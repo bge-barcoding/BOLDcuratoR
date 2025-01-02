@@ -46,25 +46,16 @@ mod_specimen_handling_ui <- function(id) {
 
         fluidRow(
           # Rank Filter
-          column(4,
+          column(6,
                  selectInput(ns("rank_filter"),
                              "Filter by Rank:",
                              choices = c("All", "1", "2", "3", "4", "5", "6", "7"),
                              selected = "All"
                  )
           ),
-          # Quality Score Filter
-          column(4,
-                 numericInput(ns("min_quality_score"),
-                              "Minimum Quality Score:",
-                              value = 0,
-                              min = 0,
-                              max = 14,
-                              step = 1
-                 )
-          ),
+
           # Criteria Filter
-          column(4,
+          column(6,
                  selectInput(ns("criteria_filter"),
                              "Filter by Required Criteria:",
                              choices = c(

@@ -95,7 +95,7 @@ validate_quality_metrics <- function(metrics) {
       messages = character(0)
     )
 
-    required_metrics <- c("quality_score", "specimen_rank", "criteria_met")
+    required_metrics <- c("quality_score", "rank", "criteria_met")
 
     # Check for missing metrics
     missing_metrics <- required_metrics[!required_metrics %in% names(metrics)]
@@ -117,9 +117,9 @@ validate_quality_metrics <- function(metrics) {
       }
     }
 
-    if ("specimen_rank" %in% names(metrics)) {
-      if (!is.numeric(metrics$specimen_rank) ||
-          !metrics$specimen_rank %in% 1:7) {
+    if ("rank" %in% names(metrics)) {
+      if (!is.numeric(metrics$rank) ||
+          !metrics$rank %in% 1:7) {
         validation$valid <- FALSE
         validation$messages <- c(validation$messages,
                                  "Invalid specimen rank (must be between 1-7)")
@@ -206,9 +206,9 @@ validate_content <- function(specimen) {
   }
 
   # Rank validation
-  if (!is.null(specimen$specimen_rank) && !is.na(specimen$specimen_rank)) {
-    if (!is.numeric(specimen$specimen_rank) ||
-        !specimen$specimen_rank %in% 1:7) {
+  if (!is.null(specimen$rank) && !is.na(specimen$rank)) {
+    if (!is.numeric(specimen$rank) ||
+        !specimen$rank %in% 1:7) {
       validation$valid <- FALSE
       validation$messages <- c(validation$messages,
                                "Invalid specimen rank (must be between 1-7)")
