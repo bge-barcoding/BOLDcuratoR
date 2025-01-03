@@ -128,37 +128,59 @@ format_specimen_table <- function(data, ns = NULL,
     data$curator_notes <- as.character(data$curator_notes)
   }
 
-  # Basic options for DT
+  # Updated DT options
   dt_options <- list(
     scrollX = TRUE,
     scrollY = "500px",
     pageLength = page_length,
-    autoWidth = FALSE,
+    autoWidth = FALSE,  # Changed to FALSE to ensure fixed widths
     dom = 'Bfrtip',
     buttons = buttons,
-    extensions = 'FixedColumns',
+    extensions = c('FixedColumns', 'Buttons'),
     fixedColumns = list(
       left = 3
     ),
     columnDefs = list(
+      # Selected column
+      list(
+        targets = which(names(data) == "selected") - 1,
+        width = "40px",
+        className = 'dt-center fixed-col',
+        orderable = FALSE,
+        searchable = FALSE
+      ),
+      # Flag column
+      list(
+        targets = which(names(data) == "flag") - 1,
+        width = "100px",
+        className = 'dt-center fixed-col',
+        orderable = FALSE,
+        searchable = FALSE
+      ),
+      # Curator notes column
       list(
         targets = which(names(data) == "curator_notes") - 1,
-        searchable = FALSE,
-        orderable = FALSE,
-        width = "150px",
-        className = 'dt-center fixed-col editable'
-      ),
-      list(
-        targets = which(names(data) %in% c("selected", "flag")) - 1,
-        searchable = FALSE,
-        orderable = FALSE,
         width = "100px",
-        className = 'dt-center fixed-col'
+        className = 'dt-center fixed-col editable',
+        orderable = FALSE,
+        searchable = FALSE
       ),
+      # All other columns
       list(
         targets = "_all",
-        className = "dt-body-left nowrap",
-        height = "22px"
+        className = "dt-body-left",
+        width = "100px",  # Default width
+        maxWidth = "100px",
+        render = JS("
+        function(data, type, row) {
+          if (type === 'display') {
+            return '<div class=\"cell-content\" title=\"' +
+                   (data || '').toString().replace(/\"/g, '&quot;') +
+                   '\">' + (data || '') + '</div>';
+          }
+          return data;
+        }
+      ")
       )
     )
   )
@@ -844,7 +866,43 @@ get_table_css <- function() {
     white-space: nowrap !important;
     overflow: hidden !important;
     text-overflow: ellipsis !important;
-    width: auto !important;
+    min-width: 100px !important;
+    max-width: 100px !important;
+  }
+
+  /* Fixed Column Styles */
+  .fixed-col {
+    background-color: white !important;
+    min-width: 100px !important;
+    max-width: 100px !important;
+  }
+
+  /* Column-specific widths */
+  .datatable td.selected-col {
+    width: 40px !important;
+    min-width: 40px !important;
+    max-width: 40px !important;
+  }
+
+  .datatable td.flag-col {
+    width: 100px !important;
+    min-width: 100px !important;
+    max-width: 100px !important;
+  }
+
+  .datatable td.notes-col {
+    width: 100px !important;
+    min-width: 100px !important;
+    max-width: 100px !important;
+  }
+
+  /* Content overflow handling */
+  .cell-content {
+    max-width: 100px !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    display: block !important;
   }
 
   /* Interactive Elements */
@@ -852,13 +910,13 @@ get_table_css <- function() {
     width: 16px !important;
     height: 16px !important;
     padding: 0 !important;
-    margin: 0 !important;
-    vertical-align: middle !important;
+    margin: 0 auto !important;
+    display: block !important;
   }
 
   .specimen-flag {
     width: 100% !important;
-    min-width: 120px !important;
+    min-width: 90px !important;
     height: 20px !important;
     padding: 1px 4px !important;
     font-size: 11px !important;
@@ -867,10 +925,10 @@ get_table_css <- function() {
 
   .specimen-notes {
     width: 100% !important;
-    min-width: 150px !important;
     height: 20px !important;
     font-size: 11px !important;
     line-height: 1.2 !important;
+    padding: 1px 4px !important;
     transition: all 0.2s ease-in-out !important;
   }
 
@@ -880,16 +938,6 @@ get_table_css <- function() {
     z-index: 1000 !important;
     background: white !important;
     box-shadow: 0 2px 4px rgba(0,0,0,0.2) !important;
-  }
-
-  /* Force No-Wrap */
-  .datatable td,
-  .datatable th,
-  .datatable tr,
-  .datatable div {
-    white-space: nowrap !important;
-    overflow: hidden !important;
-    text-overflow: ellipsis !important;
   }
 
   /* Scrolling */
@@ -926,23 +974,22 @@ get_table_css <- function() {
   .DTFC_LeftBodyWrapper {
     border-right: 2px solid #dee2e6 !important;
     box-shadow: 4px 0px 8px rgba(0,0,0,0.1) !important;
+    overflow-y: hidden !important;
   }
 
   .DTFC_Cloned {
-    background-color: #fff !important;
+    background-color: white !important;
+  }
+
+  .DTFC_LeftHeadWrapper table,
+  .DTFC_LeftBodyWrapper table {
+    margin-top: 0 !important;
+    border-collapse: collapse !important;
   }
 
   .DTFC_LeftHeadWrapper table thead th {
     background-color: #f8f9fa !important;
     border-bottom: 2px solid #dee2e6 !important;
-  }
-
-  .dataTables_wrapper .DTFC_LeftWrapper {
-    z-index: 2 !important;
-  }
-
-  .dataTables_wrapper .DTFC_LeftHeadWrapper {
-    z-index: 3 !important;
   }
 
   .DTFC_LeftBodyLiner {
@@ -959,43 +1006,16 @@ get_table_css <- function() {
     margin-right: 5px !important;
   }
 
-  /* Fixed Columns */
-    .fixed-col {
-      background-color: white !important;
-    }
-
-  .DTFC_LeftWrapper {
-    border-right: 2px solid #dee2e6 !important;
-    z-index: 2 !important;
-  }
-
-  .DTFC_LeftHeadWrapper {
-    border-bottom: 2px solid #dee2e6 !important;
-    z-index: 3 !important;
-  }
-
-  .DTFC_LeftBodyWrapper {
-    overflow-y: hidden !important;
-  }
-
-  .DTFC_Cloned {
-    background-color: white !important;
-  }
-
-  .DTFC_LeftHeadWrapper table thead th {
-    background-color: #f8f9fa !important;
-  }
-
   /* Shadow effect */
-    .DTFC_LeftWrapper::after {
-      content: '';
-      position: absolute;
-      top: 0;
-      right: 0;
-      width: 4px;
-      height: 100%;
-      box-shadow: 2px 0 5px rgba(0,0,0,0.1);
-    }
+  .DTFC_LeftWrapper::after {
+    content: '' !important;
+    position: absolute !important;
+    top: 0 !important;
+    right: 0 !important;
+    width: 4px !important;
+    height: 100% !important;
+    box-shadow: 2px 0 5px rgba(0,0,0,0.1) !important;
+  }
   "
 }
 
