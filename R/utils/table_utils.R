@@ -45,7 +45,6 @@ get_flag_options <- function() {
     "Misidentification" = "misidentification",
     "ID Uncertain" = "id_uncertain",
     "Data Issue" = "data_issue",
-    "Quality Issue" = "quality_issue",
     "Other Issue" = "other_issue"
   )
 }
@@ -216,9 +215,9 @@ format_specimen_table <- function(data, ns = NULL,
     )
 
     # Add interactive column formatting using new column names
-    for(col_pair in list(c("selected", "Selected"),
-                         c("flag", "Issue"),
-                         c("curator_notes", "Curator_Notes"))) {
+    for(col_pair in list(c("selected", "selected"),
+                         c("flag", "flag"),
+                         c("curator_notes", "curator_notes"))) {
       orig_col <- col_pair[1]
       new_col <- col_pair[2]
       if (orig_col %in% names(data)) {
@@ -271,26 +270,29 @@ format_interactive_column <- function(dt, col) {
         }
       ")
     )
+
+
   } else if (col == "flag") {
-    dt %>% formatStyle(
-      'flag',
-      target = "cell",
-      render = JS("
-        function(data, type, row) {
-          if(type === 'display') {
-            var select = '<select class=\"specimen-flag form-select form-select-sm\">';
-            Object.entries(flagOptions).forEach(function([label, value]) {
-              select += '<option value=\"' + value + '\"' +
-                       (data === value ? ' selected' : '') + '>' +
-                       label + '</option>';
-            });
-            select += '</select>';
-            return select;
-          }
-          return data;
+      dt %>% formatStyle(
+        'flag',
+        target = "cell",
+        render = JS(sprintf("
+      function(data, type, row) {
+        if(type === 'display') {
+          const options = %s;
+          let select = '<select class=\"specimen-flag form-select form-select-sm\">';
+          Object.entries(options).forEach(([label, value]) => {
+            select += '<option value=\"' + value + '\"' +
+                     (data === value ? ' selected' : '') + '>' +
+                     label + '</option>';
+          });
+          select += '</select>';
+          return select;
         }
-      ")
-    )
+        return data;
+      }
+    ", jsonlite::toJSON(get_flag_options(), auto_unbox = TRUE)))
+      )
   } else if (col == "curator_notes") {
     dt %>% formatStyle(
       'curator_notes',
@@ -729,13 +731,10 @@ prepare_table_data <- function(data, current_selections, current_flags,
 get_table_callback <- function(ns, flag_options = NULL) {
   if (is.null(ns)) return(NULL)
 
-  # Add flag options to JavaScript
-  flag_js <- if (!is.null(flag_options)) {
-    sprintf("var flagOptions = %s;\n",
-            jsonlite::toJSON(flag_options, auto_unbox = TRUE))
-  } else {
-    ""
-  }
+  # Get flag options directly from function
+  flags <- get_flag_options()
+  flag_js <- sprintf("const flagOptions = %s;\n",
+                     jsonlite::toJSON(flags, auto_unbox = TRUE))
 
   JS(sprintf("
     function(table) {
@@ -743,9 +742,9 @@ get_table_callback <- function(ns, flag_options = NULL) {
 
       // Handle checkbox changes
       table.on('change', 'input.specimen-select', function() {
-        var $cell = $(this).closest('td');
-        var row = table.row($cell.closest('tr'));
-        var data = row.data();
+        const $cell = $(this).closest('td');
+        const row = table.row($cell.closest('tr'));
+        const data = row.data();
         Shiny.setInputValue(
           '%s',
           {
@@ -761,14 +760,18 @@ get_table_callback <- function(ns, flag_options = NULL) {
 
       // Handle flag dropdown changes
       table.on('change', 'select.specimen-flag', function() {
-        var $cell = $(this).closest('td');
-        var row = table.row($cell.closest('tr'));
-        var data = row.data();
+        const $cell = $(this).closest('td');
+        const row = table.row($cell.closest('tr'));
+        const data = row.data();
+        const flagValue = this.value;
+        const flagLabel = $(this).find('option:selected').text();
+
         Shiny.setInputValue(
           '%s',
           {
             processid: data.processid,
-            flag: this.value,
+            flag: flagValue,
+            flag_label: flagLabel,
             species: data.species,
             bin_uri: data.bin_uri
           },
@@ -778,9 +781,9 @@ get_table_callback <- function(ns, flag_options = NULL) {
 
       // Handle curator notes changes
       table.on('change', 'input.specimen-notes', function() {
-        var $input = $(this);
-        var row = table.row($input.closest('tr'));
-        var data = row.data();
+        const $input = $(this);
+        const row = table.row($input.closest('tr'));
+        const data = row.data();
         Shiny.setInputValue(
           '%s',
           {
@@ -921,6 +924,15 @@ get_table_css <- function() {
     padding: 1px 4px !important;
     font-size: 11px !important;
     line-height: 1.2 !important;
+    border: 1px solid #ced4da !important;
+    border-radius: 4px !important;
+    background-color: #fff !important;
+  }
+
+  .specimen-flag:focus {
+    border-color: #80bdff !important;
+    outline: 0 !important;
+    box-shadow: 0 0 0 0.2rem rgba(0,123,255,.25) !important;
   }
 
   .specimen-notes {
