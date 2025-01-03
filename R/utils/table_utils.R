@@ -154,7 +154,23 @@ format_specimen_table <- function(data, ns = NULL,
         width = "100px",
         className = 'dt-center fixed-col',
         orderable = FALSE,
-        searchable = FALSE
+        searchable = FALSE,
+        render = JS(sprintf("
+    function(data, type, row) {
+      if(type === 'display') {
+        var flagOptions = %s;
+        var select = '<select class=\"specimen-flag form-select form-select-sm\">';
+        select += '<option value=\"\">None</option>';
+        select += '<option value=\"misidentification\"' + (data === 'misidentification' ? ' selected' : '') + '>Misidentification</option>';
+        select += '<option value=\"id_uncertain\"' + (data === 'id_uncertain' ? ' selected' : '') + '>ID Uncertain</option>';
+        select += '<option value=\"data_issue\"' + (data === 'data_issue' ? ' selected' : '') + '>Data Issue</option>';
+        select += '<option value=\"other_issue\"' + (data === 'other_issue' ? ' selected' : '') + '>Other Issue</option>';
+        select += '</select>';
+        return select;
+      }
+      return data;
+    }
+  ", jsonlite::toJSON(get_flag_options(), auto_unbox = TRUE)))
       ),
       # Curator notes column
       list(
@@ -200,10 +216,9 @@ format_specimen_table <- function(data, ns = NULL,
       editable = list(
         target = 'cell',
         disable = list(columns = setdiff(seq_len(ncol(data))-1,
-                                         which(names(data) %in% c("curator_notes", "flag", "selected"))-1))
+                                         which(names(data) %in% c("curator_notes"))-1))
       ),
-      extensions = c('Buttons', 'FixedColumns')
-      #escape = c("selected", "flag"), keeping if needed.
+      extensions = c('Buttons', 'FixedColumns', 'Select')
 
       # column renaming lines which break the app
       # tables don't appear and I can't figure it out
