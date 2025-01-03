@@ -89,10 +89,15 @@ format_specimen_table <- function(data, ns = NULL,
   data <- as.data.frame(data, stringsAsFactors = FALSE)
   rownames(data) <- NULL
 
-  # Add interactive columns
-  data$selected <- FALSE
-  data$flag <- ""
-  data$curator_notes <- ""
+  # previous interactive columns
+  #data$selected <- FALSE
+  #data$flag <- ""
+  #data$curator_notes <- ""
+
+  # updated interactive columns
+  data$selected <- as.character(data$selected)  # Convert logical to text "TRUE"/"FALSE"
+  data$flag <- as.character(data$flag)
+  data$curator_notes <- as.character(data$curator_notes)
 
   # Update with current values if provided
   if (!is.null(current_selections)) {
@@ -119,6 +124,10 @@ format_specimen_table <- function(data, ns = NULL,
   # order the columns properly
   data <- order_columns(data)
 
+  if("curator_notes" %in% names(data)) {
+    data$curator_notes <- as.character(data$curator_notes)
+  }
+
   # Basic options for DT
   dt_options <- list(
     scrollX = TRUE,
@@ -127,17 +136,24 @@ format_specimen_table <- function(data, ns = NULL,
     autoWidth = FALSE,
     dom = 'Bfrtip',
     buttons = buttons,
-    extensions = 'FixedColumns',  # Add this line
+    extensions = 'FixedColumns',
     fixedColumns = list(
       left = 3
     ),
     columnDefs = list(
       list(
-        targets = which(names(data) %in% c("selected", "flag", "curator_notes")) - 1,
+        targets = which(names(data) == "curator_notes") - 1,
+        searchable = FALSE,
+        orderable = FALSE,
+        width = "150px",
+        className = 'dt-center fixed-col editable'
+      ),
+      list(
+        targets = which(names(data) %in% c("selected", "flag")) - 1,
         searchable = FALSE,
         orderable = FALSE,
         width = "100px",
-        className = 'dt-center fixed-col'  # Change sticky-col to fixed-col
+        className = 'dt-center fixed-col'
       ),
       list(
         targets = "_all",
@@ -159,6 +175,14 @@ format_specimen_table <- function(data, ns = NULL,
       options = dt_options,
       selection = selection,
       rownames = FALSE,
+      escape = FALSE,
+      editable = list(
+        target = 'cell',
+        disable = list(columns = setdiff(seq_len(ncol(data))-1,
+                                         which(names(data) %in% c("curator_notes", "flag", "selected"))-1))
+      ),
+      extensions = c('Buttons', 'FixedColumns')
+      #escape = c("selected", "flag"), keeping if needed.
 
       # column renaming lines which break the app
       # tables don't appear and I can't figure it out
@@ -167,9 +191,6 @@ format_specimen_table <- function(data, ns = NULL,
       #  if(col %in% names(COLUMN_DEFINITIONS)) COLUMN_DEFINITIONS[[col]] else tools::toTitleCase(gsub("_", " ", col))
       #}),
       #escape = c("Selected", "Issue", "Curator_Notes")
-
-      escape = c("selected", "flag", "curator_notes"),
-      extensions = c('Buttons', 'FixedColumns')  # Add FixedColumns here
     )
 
     # Add interactive column formatting using new column names
@@ -251,19 +272,7 @@ format_interactive_column <- function(dt, col) {
   } else if (col == "curator_notes") {
     dt %>% formatStyle(
       'curator_notes',
-      target = "cell",
-      render = JS("
-        function(data, type, row) {
-          if(type === 'display') {
-            var input = '<input type=\"text\" class=\"specimen-notes form-control form-control-sm\"' +
-                       ' style=\"width:100%;height:24px;padding:2px 6px;\"' +
-                       ' value=\"' + (data || '') + '\"' +
-                       ' placeholder=\"Add notes...\">';
-            return input;
-          }
-          return data;
-        }
-      ")
+      cursor = 'text'
     )
   } else {
     dt
