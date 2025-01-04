@@ -158,6 +158,17 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
           logger = logger
         )
 
+        # Sync table states
+        prepared_data <- sync_table_states(
+          data = prepared_data,
+          current_state = list(
+            selections = isolate(selected_specimens()),
+            flags = isolate(flagged_specimens()),
+            notes = isolate(curator_notes())
+          )
+        )
+
+
         # Then create and format the table
         formatted_table <- format_specimen_table(
           data = prepared_data,
@@ -241,37 +252,25 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
         current_flags <- flagged_specimens()
 
         if (!is.null(flag$flag) && nchar(flag$flag) > 0) {
-          specimen_data <- filtered_data()[
-            filtered_data()$processid == flag$processid,
-          ]
-
-          if (nrow(specimen_data) > 0) {
-            current_flags[[flag$processid]] <- list(
-              flag = flag$flag,
-              timestamp = Sys.time(),
-              species = specimen_data$species[1],
-              user = state$get_store()$user_info$email
-            )
-
-            logger$info("Specimen flagged", list(
-              processid = flag$processid,
-              flag = flag$flag,
-              species = specimen_data$species[1]
-            ))
-          }
+          current_flags[[flag$processid]] <- list(
+            flag = flag$flag,
+            timestamp = Sys.time(),
+            species = flag$species,
+            user = state$get_store()$user_info$email
+          )
         } else {
           current_flags[[flag$processid]] <- NULL
-          logger$info("Flag removed", list(
-            processid = flag$processid
-          ))
         }
 
         flagged_specimens(current_flags)
         state$update_state("specimen_flags", current_flags)
+
+        # Trigger table refresh to sync states
+        invalidateLater(100)
       }
     })
 
-    # Handle curator notes
+    # Similar update for notes handler:
     observeEvent(input$specimen_notes, {
       req(input$specimen_notes)
       note <- input$specimen_notes
@@ -292,11 +291,8 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
         curator_notes(current_notes)
         state$update_state("specimen_curator_notes", current_notes)
 
-        logger$info("Curator note updated", list(
-          processid = note$processid,
-          user = state$get_store()$user_info$email,
-          has_note = !is.null(note$notes) && nchar(note$notes) > 0
-        ))
+        # Trigger table refresh to sync states
+        invalidateLater(100)
       }
     })
 
