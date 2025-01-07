@@ -5,19 +5,6 @@ if (!exists("PREFERRED_COLUMNS")) {
   source("R/config/constants.R")
 }
 
-#' Get standard table columns
-#' depreciated in favour of preferred_columns in constants.R
-#' @return Vector of standard column names
-#' @keywords internal
-# get_standard_columns <- function() {
-#  c("selected", "flag", "curator_notes",
-#    "rank", "quality_score", "processid", "bin_uri",
-#    "identification", "identified_by",
-#    "identification_method", "country.ocean",
-#    "collection_date_start", "collectors", "inst",
-#    "criteria_met")
-#}
-
 #' Order columns according to preferred configuration
 #' @param data Data frame to reorder
 #' @return Data frame with reordered columns
@@ -124,9 +111,28 @@ format_specimen_table <- function(data, ns = NULL,
     scrollX = TRUE,
     scrollY = "500px",
     pageLength = page_length,
-    autoWidth = FALSE,  # Changed to FALSE to ensure fixed widths
+    autoWidth = FALSE,
     dom = 'Bfrtip',
-    buttons = as.list(buttons), # Convert to list, was "buttons = buttons"
+    buttons = list(
+      list(
+        extend = 'csv',
+        exportOptions = list(
+          columns = ':visible',
+          rows = ':all',
+          # Ensure interactive columns are included
+          selector = 'td:not(.notexport)'
+        )
+      ),
+      list(
+        extend = 'excel',
+        exportOptions = list(
+          columns = ':visible',
+          rows = ':all',
+          selector = 'td:not(.notexport)'
+        )
+      ),
+      'copy'
+    ),
     extensions = c('FixedColumns', 'Buttons'),
     fixedColumns = list(
       left = 3
@@ -270,8 +276,12 @@ format_specimen_table <- function(data, ns = NULL,
   })
 }
 
-# Helper function to format interactive columns
-format_interactive_column <- function(dt, col) {
+#' Format interactive table columns with state integration
+#' @param dt DT datatable object
+#' @param col Column name to format
+#' @param options Optional formatting options
+#' @return Formatted DT object
+format_interactive_column <- function(dt, col, options = NULL) {
   if (col == "selected") {
     dt %>% formatStyle(
       'selected',
@@ -279,40 +289,61 @@ format_interactive_column <- function(dt, col) {
       render = JS("
         function(data, type, row) {
           if(type === 'display') {
-            return '<input type=\"checkbox\" class=\"specimen-select\"' +
-                   (data ? ' checked' : '') + '>';
+            const checked = data ? ' checked' : '';
+            return '<input type=\"checkbox\" class=\"specimen-select\"' + checked +
+                   ' data-processid=\"' + row.processid + '\">';
           }
           return data;
         }
       ")
     )
-
-
   } else if (col == "flag") {
-      dt %>% formatStyle(
-        'flag',
-        target = "cell",
-        render = JS(sprintf("
-      function(data, type, row) {
-        if(type === 'display') {
-          const options = %s;
-          let select = '<select class=\"specimen-flag form-select form-select-sm\">';
-          Object.entries(options).forEach(([label, value]) => {
-            select += '<option value=\"' + value + '\"' +
-                     (data === value ? ' selected' : '') + '>' +
-                     label + '</option>';
-          });
-          select += '</select>';
-          return select;
+    dt %>% formatStyle(
+      'flag',
+      target = "cell",
+      render = JS("
+        function(data, type, row) {
+          if(type === 'display') {
+            const options = {
+              '': 'None',
+              'misidentification': 'Misidentification',
+              'id_uncertain': 'ID Uncertain',
+              'data_issue': 'Data Issue',
+              'other_issue': 'Other Issue'
+            };
+
+            let select = '<select class=\"specimen-flag form-select form-select-sm\"' +
+                        ' data-processid=\"' + row.processid + '\">';
+
+            Object.entries(options).forEach(([value, label]) => {
+              const selected = data === value ? ' selected' : '';
+              select += '<option value=\"' + value + '\"' + selected + '>' +
+                       label + '</option>';
+            });
+
+            select += '</select>';
+            return select;
+          }
+          return data;
         }
-        return data;
-      }
-    ", jsonlite::toJSON(get_flag_options(), auto_unbox = TRUE)))
-      )
+      ")
+    )
   } else if (col == "curator_notes") {
     dt %>% formatStyle(
       'curator_notes',
-      cursor = 'text'
+      target = "cell",
+      render = JS("
+        function(data, type, row) {
+          if(type === 'display') {
+            return '<input type=\"text\" class=\"specimen-notes form-control form-control-sm\"' +
+                   ' data-processid=\"' + row.processid + '\"' +
+                   ' value=\"' + (data || '') + '\"' +
+                   ' placeholder=\"Add notes...\"' +
+                   ' style=\"width:100%;height:24px;padding:2px 6px;\">';
+          }
+          return data;
+        }
+      ")
     )
   } else {
     dt
@@ -364,173 +395,76 @@ add_color_coding <- function(dt, data, color_by) {
   )
 }
 
-#' Sync table states between specimens and bags tables
-#' @param data Data frame to update
-#' @param current_state Current state list containing selections, flags, and notes
-#' @return Updated data frame with synced states
-#' @keywords internal
-sync_table_states <- function(data, current_state) {
-  if (is.null(data) || nrow(data) == 0) return(data)
-
-  # Create mapping of processid to row indices for efficiency
-  row_map <- setNames(seq_len(nrow(data)), data$processid)
-
-  # Update selected state with error handling
-  if (!is.null(current_state$selections)) {
-    data$selected <- FALSE  # Initialize all to FALSE
-    sel_ids <- names(current_state$selections)[!sapply(current_state$selections, is.null)]
-    data$selected[row_map[sel_ids]] <- TRUE
-  }
-
-  # Update flags with robust error handling
-  if (!is.null(current_state$flags)) {
-    data$flag <- ""  # Initialize all to empty
-    for (pid in names(current_state$flags)) {
-      if (!is.null(row_map[pid])) {
-        flag_value <- current_state$flags[[pid]]
-        if (!is.null(flag_value)) {
-          data$flag[row_map[pid]] <- if (is.list(flag_value)) {
-            as.character(flag_value$flag)
-          } else {
-            as.character(flag_value)
-          }
-        }
-      }
-    }
-  }
-
-  # Update notes with robust error handling
-  if (!is.null(current_state$notes)) {
-    data$curator_notes <- ""  # Initialize all to empty
-    for (pid in names(current_state$notes)) {
-      if (!is.null(row_map[pid])) {
-        note_value <- current_state$notes[[pid]]
-        if (!is.null(note_value)) {
-          data$curator_notes[row_map[pid]] <- if (is.list(note_value)) {
-            note_value$text %||% note_value$note %||% ""
-          } else {
-            as.character(note_value)
-          }
-        }
-      }
-    }
-  }
-
-  return(data)
-}
-
-# Handles data preparation consistently
-prepare_module_data <- function(data,
-                                current_selections = NULL,
-                                current_flags = NULL,
-                                current_notes = NULL,
-                                logger = NULL) {
-
+#' Prepare module data with state integration
+#' @param data Raw data frame
+#' @param current_state Current state object from table_state_utils
+#' @param logger Optional logger instance
+#' @return Prepared data frame
+prepare_module_data <- function(data, current_state = NULL, logger = NULL) {
   if (is.null(data) || nrow(data) == 0) {
-    if (!is.null(logger)) logger$warn("Empty input data to prepare_module_data")
+    if (!is.null(logger)) logger$warn("Empty input data")
     return(data.frame())
   }
 
-  # Log initial state
+  # Log initial state if logger present
   if (!is.null(logger)) {
-    logger$info("Pre-format specimen table data", details = list(
+    logger$info("Pre-format module data", list(
       rows = nrow(data),
-      columns = names(data),
-      sample_processids = head(data$processid)
+      columns = names(data)
     ))
   }
 
-  # Convert problematic column types
-  for (col in names(data)) {
-    if (is.list(data[[col]]) || is.factor(data[[col]])) {
-      data[[col]] <- as.character(data[[col]])
-    }
-  }
+  # Ensure data frame format
+  data <- as.data.frame(data, stringsAsFactors = FALSE)
 
-  # Add missing standard columns if needed
-  missing_cols <- setdiff(PREFERRED_COLUMNS(data), names(data))
-  for (col in missing_cols) {
-    data[[col]] <- NA_character_
-  }
-
-  # Add interactive columns
+  # Initialize or reset interactive columns
   data$selected <- FALSE
   data$flag <- ""
   data$curator_notes <- ""
 
-  # Update with current values
-  if (!is.null(current_selections)) {
-    data$selected <- sapply(data$processid, function(pid) {
-      !is.null(current_selections[[pid]])
-    })
-  }
-
-  # Added error checking and proper type handling for flag persistence
-  if (!is.null(current_flags)) {
-    data$flag <- sapply(data$processid, function(pid) {
-      tryCatch({
-        if (!is.null(current_flags[[pid]])) {
-          # Updated: Handle both list and direct value formats
-          if (is.list(current_flags[[pid]])) {
-            as.character(current_flags[[pid]]$flag %||% "")
-          } else {
-            as.character(current_flags[[pid]])
-          }
-        } else {
-          ""
+  # Apply state if provided
+  if (!is.null(current_state)) {
+    # Process flags
+    if (!is.null(current_state$flags)) {
+      for (pid in names(current_state$flags)) {
+        if (pid %in% data$processid) {
+          data$flag[data$processid == pid] <-
+            current_state$flags[[pid]]$value
         }
-      }, error = function(e) "")  # Added error handling
-    }, USE.NAMES = FALSE)  # Added USE.NAMES=FALSE for consistency
-  }
+      }
+    }
 
-  # Enhanced curator notes persistence with proper type checking
-  if (!is.null(current_notes)) {
-    data$curator_notes <- sapply(data$processid, function(pid) {
-      tryCatch({
-        if (!is.null(current_notes[[pid]])) {
-          # Updated: Handle multiple note formats
-          if (is.list(current_notes[[pid]])) {
-            as.character(current_notes[[pid]]$text %||%
-                           current_notes[[pid]]$note %||% "")
-          } else {
-            as.character(current_notes[[pid]])
-          }
-        } else {
-          ""
+    # Process notes
+    if (!is.null(current_state$notes)) {
+      for (pid in names(current_state$notes)) {
+        if (pid %in% data$processid) {
+          data$curator_notes[data$processid == pid] <-
+            current_state$notes[[pid]]$text
         }
-      }, error = function(e) "")  # Added error handling
-    }, USE.NAMES = FALSE)  # Added USE.NAMES=FALSE for consistency
-  }
+      }
+    }
 
-  # Final cleanup - ensure no NULL values
-  for (col in names(data)) {
-    if (any(sapply(data[[col]], is.null))) {
-      data[[col]][sapply(data[[col]], is.null)] <- NA
+    # Process selections
+    if (!is.null(current_state$selections)) {
+      data$selected <- data$processid %in% names(current_state$selections)
     }
   }
 
-  # Log final state
-  if (!is.null(logger)) {
-    logger$info("Post-format specimen table", details = list(
-      table_class = class(data),
-      table_columns = if(is.data.frame(data)) names(data) else "Not a data frame"
-    ))
-  }
-
-  # Ensure proper types before returning
+  # Ensure consistent types
   data$selected <- as.logical(data$selected)
   data$flag <- as.character(data$flag)
   data$curator_notes <- as.character(data$curator_notes)
-  if ("quality_score" %in% names(data)) {
-    data$quality_score <- as.numeric(data$quality_score)
-  }
-  if ("rank" %in% names(data)) {
-    data$rank <- as.numeric(data$rank)
-  }
-  return(data)
 
+  # Log final state if logger present
+  if (!is.null(logger)) {
+    logger$info("Post-format module data", list(
+      rows = nrow(data),
+      columns = names(data)
+    ))
+  }
+
+  data
 }
-
 
 #' Format specific table columns with styling
 #' @param dt DT datatable object
@@ -671,319 +605,29 @@ format_table_columns <- function(dt, data, color_by = NULL, logger = NULL) {
 #' @param logger Optional logger instance
 #' @return Prepared data frame
 #' @keywords internal
-# Revised prepare_table_data function
 prepare_table_data <- function(data, current_selections, current_flags,
-                               current_notes, logger = NULL) {
-  if (is.null(data) || nrow(data) == 0) {
-    if (!is.null(logger)) logger$warn("Empty or invalid input data to prepare_table_data")
-    return(data.frame())
-  }
+                               current_notes) {
+  if (is.null(data) || nrow(data) == 0) return(data.frame())
 
-  # Log initial state
-  if (!is.null(logger)) {
-    logger$info("Starting prepare_table_data", details = list(
-      initial_columns = names(data),
-      data_classes = sapply(data, class),
-      row_count = nrow(data)
-    ))
-  }
-
-  # Convert to data frame and preserve row names
-  rn <- rownames(data)
+  # Ensure data is a data frame
   data <- as.data.frame(data, stringsAsFactors = FALSE)
-  rownames(data) <- rn
 
-  # Ensure consistent type handling for base columns
-  for (col in names(data)) {
-    if (is.list(data[[col]]) || is.factor(data[[col]])) {
-      data[[col]] <- as.character(data[[col]])
-    }
-  }
+  # Initialize interactive columns with proper types
+  data$flag <- ifelse(is.null(data$flag), "", as.character(data$flag))
+  data$curator_notes <- ifelse(is.null(data$curator_notes), "",
+                               as.character(data$curator_notes))
 
-  # Convert column names to lowercase
-  original_names <- names(data)
-  names(data) <- tolower(names(data))
+  # Update with current states using sync_table_states
+  data <- sync_table_states(data, list(
+    flags = current_flags,
+    notes = current_notes
+  ))
 
-  if (!is.null(logger)) {
-    logger$info("Column name conversion", details = list(
-      original = original_names,
-      converted = names(data)
-    ))
-  }
-
-  # Check for required processid column
-  if (!"processid" %in% names(data)) {
-    if (!is.null(logger)) logger$error("Missing required processid column")
-    return(data.frame())
-  }
-
-  # Handle specimen_rank to rank conversion
-  if ("specimen_rank" %in% names(data) && !"rank" %in% names(data)) {
-    if (!is.null(logger)) {
-      logger$info("Converting specimen_rank to rank", details = list(
-        specimen_rank_values = head(data$specimen_rank)
-      ))
-    }
-    data$rank <- data$specimen_rank
-    data$specimen_rank <- NULL
-  }
-
-  # Convert problematic types
-  for (col in names(data)) {
-    if (is.list(data[[col]]) || is.factor(data[[col]])) {
-      if (!is.null(logger)) {
-        logger$info(sprintf("Converting column %s from %s to character",
-                            col, class(data[[col]])[1]))
-      }
-      data[[col]] <- as.character(data[[col]])
-    }
-  }
-
-  # Add missing standard columns first
-  missing_cols <- setdiff(custom_cols, names(data))
-  if (length(missing_cols) > 0) {
-    if (!is.null(logger)) {
-      logger$info("Adding missing standard columns", details = list(
-        missing_columns = missing_cols
-      ))
-    }
-    for (col in missing_cols) {
-      data[[col]] <- NA_character_
-    }
-  }
-
-  # Then add/update interactive columns
-  data$selected <- FALSE
-  if (!is.null(current_selections)) {
-    data$selected <- sapply(data$processid, function(pid) {
-      !is.null(current_selections[[pid]])
-    }, USE.NAMES = FALSE)
-  }
-
-  data$flag <- ""
-  if (!is.null(current_flags)) {
-    data$flag <- sapply(data$processid, function(pid) {
-      if (!is.null(current_flags[[pid]]) && !is.null(current_flags[[pid]]$flag)) {
-        as.character(current_flags[[pid]]$flag)
-      } else {
-        ""
-      }
-    }, USE.NAMES = FALSE)
-  }
-
-  data$curator_notes <- ""
-  if (!is.null(current_notes)) {
-    data$curator_notes <- sapply(data$processid, function(pid) {
-      if (!is.null(current_notes[[pid]])) {
-        if (is.list(current_notes[[pid]])) {
-          current_notes[[pid]]$text %||% ""
-        } else {
-          as.character(current_notes[[pid]])
-        }
-      } else {
-        ""
-      }
-    }, USE.NAMES = FALSE)
-  }
-
-  if (!is.null(logger)) {
-    logger$info("Interactive columns added", details = list(
-      has_selected = "selected" %in% names(data),
-      has_flag = "flag" %in% names(data),
-      has_notes = "curator_notes" %in% names(data)
-    ))
-  }
-
-  # Final cleanup - ensure no NULL values
-  for (col in names(data)) {
-    if (any(sapply(data[[col]], is.null))) {
-      if (!is.null(logger)) {
-        logger$info(sprintf("Replacing NULL values in column %s", col))
-      }
-      data[[col]][sapply(data[[col]], is.null)] <- NA
-    }
-  }
-
-  # Ensure rank is numeric
-  if ("rank" %in% names(data)) {
-    data$rank <- as.numeric(data$rank)
-  }
-
-  # Order columns according to preference
-  data <- order_columns(data)
-
-  # Log final state
-  if (!is.null(logger)) {
-    logger$info("Prepare table data complete", details = list(
-      final_columns = names(data),
-      row_count = nrow(data),
-      column_classes = sapply(data, class),
-      rank_info = if("rank" %in% names(data)) list(
-        class = class(data$rank),
-        unique_values = unique(data$rank),
-        has_na = any(is.na(data$rank))
-      ) else NULL
-    ))
-  }
+  # Ensure proper column types
+  data$flag <- as.character(data$flag)
+  data$curator_notes <- as.character(data$curator_notes)
 
   return(data)
-}
-
-#' Get table callback JavaScript
-#' @param ns Namespace function for Shiny
-#' @param flag_options Named list of flag options
-#' @return JavaScript callback code
-#' @keywords internal
-get_table_callback <- function(ns, flag_options = NULL) {
-  if (is.null(ns)) return(NULL)
-
-  flags <- get_flag_options()
-  flag_js <- sprintf("const flagOptions = %s;\n",
-                     jsonlite::toJSON(flags, auto_unbox = TRUE))
-
-  JS(sprintf("
-    function(table) {
-        %s
-
-        // Maintain state across page changes
-        var tableState = {};
-
-        // Helper to update state
-        function updateState(processid, type, value) {
-            if (!tableState[processid]) {
-                tableState[processid] = {};
-            }
-            tableState[processid][type] = value;
-
-            // Persist state to localStorage
-            localStorage.setItem('tableState_' + processid,
-                JSON.stringify(tableState[processid]));
-        }
-
-        // Helper to load state
-        function loadState(processid) {
-            var stored = localStorage.getItem('tableState_' + processid);
-            if (stored) {
-                return JSON.parse(stored);
-            }
-            return null;
-        }
-
-        // Initialize state from localStorage
-        table.rows().every(function() {
-            var data = this.data();
-            var state = loadState(data.processid);
-            if (state) {
-                if (state.selected !== undefined) {
-                    data.selected = state.selected;
-                }
-                if (state.flag !== undefined) {
-                    data.flag = state.flag;
-                }
-                if (state.curator_notes !== undefined) {
-                    data.curator_notes = state.curator_notes;
-                }
-                this.data(data);
-            }
-        });
-
-        // Handle checkbox changes
-        table.on('change', 'input.specimen-select', function() {
-            var $cell = $(this).closest('td');
-            var row = table.row($cell.closest('tr'));
-            var data = row.data();
-
-            // Update state
-            updateState(data.processid, 'selected', this.checked);
-
-            Shiny.setInputValue(
-                '%s',
-                {
-                    processid: data.processid,
-                    selected: this.checked,
-                    species: data.species,
-                    bin_uri: data.bin_uri,
-                    quality_score: data.quality_score
-                },
-                {priority: 'event'}
-            );
-        });
-
-        // Handle flag changes
-        table.on('change', 'select.specimen-flag', function() {
-            var $cell = $(this).closest('td');
-            var row = table.row($cell.closest('tr'));
-            var data = row.data();
-            var flagValue = this.value;
-            var flagLabel = $(this).find('option:selected').text();
-
-            // Update state
-            data.flag = flagValue;
-            row.data(data);
-            updateState(data.processid, 'flag', flagValue);
-
-            Shiny.setInputValue(
-                '%s',
-                {
-                    processid: data.processid,
-                    flag: flagValue,
-                    flag_label: flagLabel,
-                    species: data.species,
-                    bin_uri: data.bin_uri,
-                    timestamp: new Date().getTime()
-                },
-                {priority: 'event'}
-            );
-        });
-
-        // Handle notes changes
-        table.on('change', 'input.specimen-notes', function() {
-            var $input = $(this);
-            var row = table.row($input.closest('tr'));
-            var data = row.data();
-            var notes = $input.val();
-
-            // Update state
-            data.curator_notes = notes;
-            row.data(data);
-            updateState(data.processid, 'curator_notes', notes);
-
-            Shiny.setInputValue(
-                '%s',
-                {
-                    processid: data.processid,
-                    notes: notes,
-                    species: data.species,
-                    bin_uri: data.bin_uri,
-                    timestamp: new Date().getTime()
-                },
-                {priority: 'event'}
-            );
-        });
-
-        // Handle search/filter events
-        table.on('search.dt', function() {
-            // Reapply states after search
-            table.rows({search: 'applied'}).every(function() {
-                var data = this.data();
-                var state = loadState(data.processid);
-                if (state) {
-                    if (state.selected !== undefined) {
-                        data.selected = state.selected;
-                    }
-                    if (state.flag !== undefined) {
-                        data.flag = state.flag;
-                    }
-                    if (state.curator_notes !== undefined) {
-                        data.curator_notes = state.curator_notes;
-                    }
-                    this.data(data);
-                }
-            });
-            table.draw();
-        });
-    }",
-             flag_js, ns("specimen_selection"), ns("specimen_flag"), ns("specimen_notes")))
 }
 
 #' Get standard table CSS
