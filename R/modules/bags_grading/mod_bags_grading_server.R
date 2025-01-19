@@ -10,14 +10,13 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
 
-    # Initialize reactive values
+    # Initialize reactive values with advanced state management
     rv <- reactiveValues(
       filtered_data = NULL,
       selected_specimens = list(),
       flagged_specimens = list(),
       curator_notes = list(),
       metrics = NULL,
-      needs_refresh = FALSE, # New reactive value for tracking refresh needs
       processing_status = list(
         is_processing = FALSE,
         message = NULL,
@@ -25,7 +24,7 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
       )
     )
 
-    # Initialize state
+    # Initialize observer for state restoration
     observe({
       logger$info(sprintf("Initializing state for BAGS grade %s module", grade))
       store <- state$get_store()
@@ -37,7 +36,7 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
       }
     })
 
-    # Main data observer
+    # Main data observer with detailed logging
     observe({
       logger$info(sprintf("Starting main data observer for grade %s", grade))
       store <- state$get_store()
@@ -97,7 +96,7 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
           )
 
           logger$info(sprintf("Applied filters for grade %s", grade), list(
-            rank_filter = as.character(input$rank_filter),
+            rank_filter = as.character(input$rank_filter),  # Convert to character explicitly
             quality_filter = input$min_quality_score,
             criteria_count = length(input$criteria_filter),
             filtered_count = nrow(filtered)
@@ -125,42 +124,47 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
       })
     })
 
-    # Specimen tables output
+    # Specimen tables output with detailed logging
     output$specimen_tables <- renderUI({
       logger$info(sprintf("Rendering specimen tables for grade %s", grade))
 
-      # Check if data exists and if a refresh is needed
       if (is.null(rv$filtered_data)) {
-        logger$warn("No filtered data available")
+        logger$warn("No filtered data available for rendering tables")
         return(NULL)
       }
 
       req(rv$filtered_data)
-      data <- isolate(rv$filtered_data)
-
-      # Clear refresh flag if set
-      if(isolate(rv$needs_refresh)) {
-        isolate({
-          rv$needs_refresh <- FALSE
-        })
-      }
 
       withProgress(message = 'Creating specimen tables', value = 0, {
         tryCatch({
-          if (nrow(data) == 0) {
+          data <- isolate(rv$filtered_data)
+
+          if (is.null(data) || nrow(data) == 0) {
             logger$warn(sprintf("No data available for grade %s tables", grade))
             return(NULL)
           }
 
           logger$info(sprintf("Creating tables for %d specimens", nrow(data)))
 
-          # Organize specimens by grade
+          # Create tables based on grade
           organized <- organize_grade_specimens(data, grade)
           logger$info(sprintf("Organized specimens into %d groups", length(organized)))
 
-          # Create tables with state syncing
+          # First sync states
+          organized <- lapply(organized, function(group_data) {
+            sync_table_states(
+              data = group_data,
+              current_state = list(
+                selections = isolate(rv$selected_specimens),
+                flags = isolate(rv$flagged_specimens),
+                notes = isolate(rv$curator_notes)
+              )
+            )
+          })
+
+          # Then create tables with synced data
           tables <- create_grade_tables(
-            organized_data = organized,
+            organized = organized,
             grade = grade,
             ns = ns,
             current_sel = isolate(rv$selected_specimens),
@@ -175,13 +179,13 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
           }
 
           logger$info(sprintf("Successfully created %d tables", length(tables)))
-
           div(class = "specimen-tables", tables)
 
         }, error = function(e) {
-          logger$error(sprintf("Error rendering grade %s tables", grade),
-                       list(error = e$message)
-          )
+          logger$error(sprintf("Error rendering grade %s tables", grade), list(
+            error = e$message,
+            stack = e$call
+          ))
           div(class = "alert alert-danger",
               "Error creating specimen tables. Please check the logs.")
         })
@@ -202,90 +206,112 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
       }
     })
 
-    # Handle flag changes
+    # Value box outputs with logging
+    output$species_count_box <- renderValueBox({
+      logger$info(sprintf("Rendering species count box for grade %s", grade))
+      data <- isolate(rv$filtered_data)
+      count <- if (is.null(data)) 0 else length(unique(data$species))
+
+      logger$info(sprintf("Species count for grade %s: %d", grade, count))
+
+      valueBox(
+        count,
+        paste("Grade", grade, "Species"),
+        icon = icon(switch(grade,
+          "A" = "trophy",
+          "B" = "medal",
+          "C" = "exclamation-circle",
+          "D" = "exclamation-triangle",
+          "E" = "times-circle"
+        )),
+        color = switch(grade,
+          "A" = "green",
+          "B" = "blue",
+          "C" = "yellow",
+          "D" = "red",
+          "E" = "red"
+        )
+      )
+    })
+
+    # Handle filter reset with logging
+    observeEvent(input$reset_filters, {
+      logger$info(sprintf("Resetting filters for grade %s", grade))
+      updateSelectInput(session, "rank_filter", selected = "All")
+      updateNumericInput(session, "min_quality_score", value = 0)
+      updateCheckboxGroupInput(session, "criteria_filter", selected = character(0))
+    })
+
+    # Watch for flag changes
     observeEvent(input$specimen_flag, {
       req(input$specimen_flag)
-      flag_data <- input$specimen_flag
+      flag <- input$specimen_flag
 
-      if (!is.null(flag_data$processid)) {
+      if (!is.null(flag$processid)) {
         current_flags <- isolate(rv$flagged_specimens)
-        user_info <- isolate(state$get_store()$user_info)
 
-        if (!is.null(flag_data$flag) && nchar(flag_data$flag) > 0) {
-          current_flags[[flag_data$processid]] <- list(
-            flag = flag_data$flag,
+        if (!is.null(flag$flag) && nchar(flag$flag) > 0) {
+          current_flags[[flag$processid]] <- list(
+            flag = flag$flag,
             timestamp = Sys.time(),
-            species = flag_data$species,
-            user = list(
-              email = user_info$email,
-              name = user_info$name,
-              orcid = user_info$orcid
-            )
+            species = flag$species,
+            user = state$get_store()$user_info$email
           )
         } else {
-          current_flags[[flag_data$processid]] <- NULL
+          current_flags[[flag$processid]] <- NULL
         }
 
         rv$flagged_specimens <- current_flags
-        # Update state (will trigger database update)
         state$update_state("specimen_flags", current_flags)
 
-        # Set refresh flag
-        rv$needs_refresh <- TRUE
+        # Force table refresh
         invalidateLater(100)
       }
     })
 
-    # Handle note changes
+    # Watch for note changes
     observeEvent(input$specimen_notes, {
       req(input$specimen_notes)
-      note_data <- input$specimen_notes
+      note <- input$specimen_notes
 
-      if (!is.null(note_data$processid)) {
+      if (!is.null(note$processid)) {
         current_notes <- isolate(rv$curator_notes)
-        user_info <- isolate(state$get_store()$user_info)
 
-        if (!is.null(note_data$notes) && nchar(note_data$notes) > 0) {
-          current_notes[[note_data$processid]] <- list(
-            text = note_data$notes,
+        if (!is.null(note$notes) && nchar(note$notes) > 0) {
+          current_notes[[note$processid]] <- list(
+            text = note$notes,
             timestamp = Sys.time(),
-            user = list(
-              email = user_info$email,
-              name = user_info$name,
-              orcid = user_info$orcid
-            )
+            user = state$get_store()$user_info$email
           )
         } else {
-          current_notes[[note_data$processid]] <- NULL
+          current_notes[[note$processid]] <- NULL
         }
 
         rv$curator_notes <- current_notes
-        # Update state (will trigger database update)
         state$update_state("specimen_curator_notes", current_notes)
 
-        # Set refresh flag
-        rv$needs_refresh <- TRUE
+        # Force table refresh
         invalidateLater(100)
       }
     })
 
-    # Session cleanup
+    # Safe session cleanup with logging
     session$onSessionEnded(function() {
       logger$info(sprintf("Grade %s session ending", grade))
 
+      # Log final state
       final_metrics <- isolate({
         list(
           filtered_specimens = if (!is.null(rv$filtered_data)) nrow(rv$filtered_data) else 0,
           selected_count = length(rv$selected_specimens),
-          flagged_count = length(rv$flagged_specimens),
-          note_count = length(rv$curator_notes)
+          flagged_count = length(rv$flagged_specimens)
         )
       })
 
       logger$info("Final state logged", final_metrics)
     })
 
-    # Return reactive values
+    # Return reactive endpoints
     list(
       filtered_data = reactive({ rv$filtered_data }),
       selected_specimens = reactive({ rv$selected_specimens }),

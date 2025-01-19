@@ -29,25 +29,30 @@ validate_bags_data <- function(specimens, grades) {
   list(valid = TRUE, message = NULL)
 }
 
-#' Filter specimens for grade tables
-#' @param specimens Specimen data
-#' @param grades BAGS grades data
+#' Filter specimens by grade and criteria
+#' @param specimens Data frame of specimens
+#' @param grades Data frame of BAGS grades
 #' @param target_grade Target BAGS grade
 #' @param rank_filter Rank filter value
 #' @param quality_filter Quality score filter
-#' @param criteria_filter Criteria filter values
+#' @param criteria_filter Vector of required criteria
+#' @return Filtered specimen data frame
+#' @keywords internal
 filter_grade_specimens <- function(specimens, grades, target_grade,
                                    rank_filter, quality_filter, criteria_filter) {
-  filtered <- specimens
+  # Get species for target grade
+  grade_species <- grades$species[grades$bags_grade == target_grade]
+  filtered <- specimens[specimens$species %in% grade_species, ]
 
   # Apply rank filter
   if (!is.null(rank_filter) && rank_filter != "All") {
     filtered <- filtered[filtered$rank == as.numeric(rank_filter), ]
   }
 
-  # Apply quality filter
-  if (!is.null(quality_filter) && quality_filter > 0) {
-    filtered <- filtered[filtered$quality_score >= quality_filter, ]
+  # Apply quality filter - Fix the logical comparison
+  quality_score <- as.numeric(quality_filter)
+  if (!is.null(quality_filter) && !is.na(quality_score) && quality_score > 0) {
+    filtered <- filtered[filtered$quality_score >= quality_score, ]
   }
 
   # Apply criteria filter
@@ -62,17 +67,25 @@ filter_grade_specimens <- function(specimens, grades, target_grade,
   filtered
 }
 
-#' Calculate metrics for grade specimens
-#' @param data Filtered specimen data
+#' Calculate grade metrics
+#' @param data Data frame of grade specimens
 #' @return List of metrics
+#' @keywords internal
 calculate_grade_metrics <- function(data) {
-  if (is.null(data) || nrow(data) == 0) return(NULL)
+  if (!is.data.frame(data) || nrow(data) == 0) {
+    return(list(
+      total_species = 0,
+      total_specimens = 0,
+      avg_quality = 0,
+      countries = 0
+    ))
+  }
 
   list(
+    total_species = length(unique(data$species)),
     total_specimens = nrow(data),
-    unique_species = length(unique(data$species)),
-    unique_bins = length(unique(data$bin_uri[!is.na(data$bin_uri)])),
-    avg_quality = mean(data$quality_score, na.rm = TRUE)
+    avg_quality = mean(data$quality_score, na.rm = TRUE),
+    countries = length(unique(data$country.ocean))
   )
 }
 
@@ -167,106 +180,92 @@ organize_grade_specimens <- function(specimens, grade) {
   )
 }
 
-#' Create grade tables with enhanced state syncing
-#' @param organized_data List of organized specimen data
+#' Create tables for each group of specimens within a grade
+#' @param organized List of organized specimen groups
 #' @param grade BAGS grade
 #' @param ns Namespace function
 #' @param current_sel Current selections
 #' @param current_flags Current flags
 #' @param current_notes Current notes
 #' @param logger Logger instance
-create_grade_tables <- function(organized_data, grade, ns,
-                                current_sel, current_flags, current_notes,
-                                logger = NULL) {
-  if (is.null(organized_data) || length(organized_data) == 0) {
-    logger$warn("No data provided to create_grade_tables")
+#' @return List of formatted tables
+#' @keywords internal
+create_grade_tables <- function(organized, grade, ns, current_sel, current_flags,
+                                current_notes, logger) {
+
+  if (is.null(organized) || length(organized) == 0) {
+    logger$warn("No organized data to create tables")
     return(list())
   }
 
-  # Create a unified state object
-  current_state <- list(
-    selections = current_sel,
-    flags = current_flags,
-    notes = current_notes
-  )
-
-  tables <- lapply(seq_along(organized_data), function(i) {
-    group_data <- organized_data[[i]]
-    group_info <- attr(group_data, "group_info")
+  tables <- lapply(seq_along(organized), function(i) {
+    group_data <- organized[[i]]
+    group_info <- attributes(organized[[i]])$info
 
     tryCatch({
       logger$info(sprintf("Creating table %d for grade %s", i, grade))
 
-      # Prepare data with new state format
+      # First prepare the data
       prepared_data <- prepare_module_data(
         data = group_data,
-        current_state = current_state,
+        current_selections = current_sel,
+        current_flags = current_flags,
+        current_notes = current_notes,
         logger = logger
       )
 
-      # Create formatted table
-      table <- format_specimen_table(
+      # Create table
+      dt <- format_grade_table(
         data = prepared_data,
         ns = ns,
-        buttons = c('copy', 'csv', 'excel'),
-        page_length = 50,
-        selection = 'multiple',
-        logger = logger
+        grade = grade
       )
 
-      # Create table container
-      caption <- generate_table_caption(grade, group_info)
-      create_table_container(table, caption)
+      if (!is.null(dt)) {
+        div(
+          class = "specimen-table-container mb-4",
+          h4(class = "table-title", generate_table_caption(grade, group_info)),
+          dt
+        )
+      }
 
     }, error = function(e) {
       logger$error(sprintf("Error creating table %d for grade %s", i, grade),
-                   list(error = e$message)
-      )
+                   list(error = e$message))
       NULL
     })
   })
 
-  # Remove any NULL tables
-  tables <- Filter(Negate(is.null), tables)
-
-  if (length(tables) == 0) {
-    logger$warn("No valid tables created")
-    return(NULL)
-  }
-
-  tables
+  # Remove NULL entries
+  tables[!sapply(tables, is.null)]
 }
 
-#' Format the grade tables with state persistence
+#' Format the grade tables
 #' @param data Data frame of specimen data
 #' @param ns Namespace function for Shiny
 #' @param grade BAGS grade
-#' @param current_selections Current selections list
-#' @param current_flags Current flags list
-#' @param current_notes Current notes list
 #' @return DT datatable object
 #' @keywords internal
-format_grade_table <- function(data, ns = NULL, grade,
-                               current_selections = NULL,
-                               current_flags = NULL,
-                               current_notes = NULL) {
+format_grade_table <- function(data, ns = NULL, grade) {
   if (is.null(data) || nrow(data) == 0) return(NULL)
 
-  # Create base table with synced states
-  dt <- format_specimen_table(
+  prepared_data <- prepare_module_data(
     data = data,
+    current_selections = NULL,
+    current_flags = NULL,
+    current_notes = NULL
+  )
+
+  dt <- format_specimen_table(
+    data = prepared_data,
     ns = ns,
     buttons = c('copy', 'csv', 'excel'),
     page_length = 50,
-    selection = 'multiple',
-    current_selections = current_selections,
-    current_flags = current_flags,
-    current_notes = current_notes
+    selection = 'none'
   )
 
-  # Add grade-specific formatting
-  if (grade == "E" && !is.null(dt)) {
-    unique_species <- sort(unique(as.character(data$species)))
+  if(grade == "E" && !is.null(dt)) {
+    unique_species <- sort(unique(as.character(prepared_data$species)))
     n_species <- length(unique_species)
     colors <- colorRampPalette(c("#e6f3ff", "#80bfff"))(n_species)
 
@@ -278,29 +277,6 @@ format_grade_table <- function(data, ns = NULL, grade,
       )
     )
   }
-
-  # Add column formatting for flags and notes
-  if (!is.null(dt)) {
-    dt <- dt %>%
-      formatStyle(
-        'flag',
-        backgroundColor = styleEqual(
-          get_flag_options(),
-          c('#fff3cd', '#f8d7da', '#d1ecf1', '#d4edda')
-        )
-      ) %>%
-      formatStyle(
-        'curator_notes',
-        target = 'cell',
-        backgroundColor = styleValue(
-          function(x) !is.na(x) && nchar(x) > 0,
-          '#e9ecef'
-        )
-      )
-  }
-
-  # Always invalidate to ensure state sync
-  invalidateLater(100)
 
   dt
 }

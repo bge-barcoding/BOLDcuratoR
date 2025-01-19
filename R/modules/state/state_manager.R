@@ -1,12 +1,10 @@
 # R/modules/state/state_manager.R
 
 #' @title StateManager R6 Class
-#' @description Manages centralized application state with validation, error handling, and database persistence
+#' @description Manages centralized application state with validation and error handling
 #' @importFrom R6 R6Class
 #' @importFrom shiny reactiveValues isolate
 #' @importFrom jsonlite toJSON fromJSON
-#' @importFrom RSQLite SQLite
-#' @importFrom DBI dbConnect dbExecute dbGetQuery
 #' @export
 StateManager <- R6::R6Class(
   "StateManager",
@@ -14,21 +12,13 @@ StateManager <- R6::R6Class(
   public = list(
     #' @description Initialize state manager
     #' @param session Shiny session object
-    #' @param db_path Path to SQLite database
     #' @param logger Optional logger instance
-    initialize = function(session, db_path, logger = NULL) {
+    initialize = function(session, logger = NULL) {
       private$session <- session
       private$logger <- logger
       private$error_boundary <- ErrorBoundary$new()
-
-      # Initialize database connection
-      private$db_con <- init_database(db_path, logger)
-
       private$initialize_store()
       private$setup_observers()
-
-      # Load initial state from database
-      private$load_db_state()
     },
 
     #' @description Get reactive store
@@ -61,7 +51,7 @@ StateManager <- R6::R6Class(
       })
     },
 
-    #' @description Update state with validation and database persistence
+    #' @description Update state with validation and data type conversion
     #' @param key State key to update
     #' @param value New value
     #' @param validation_fn Optional validation function
@@ -87,11 +77,6 @@ StateManager <- R6::R6Class(
         tryCatch({
           # Update store with converted value
           private$store[[key]] <- converted_value
-
-          # Update database if needed
-          if (key %in% c("specimen_flags", "specimen_curator_notes")) {
-            private$update_db_state(key, converted_value)
-          }
 
           # Track state change
           private$track_state_change(key, old_value, converted_value)
@@ -160,7 +145,6 @@ StateManager <- R6::R6Class(
     session = NULL,
     logger = NULL,
     store = NULL,
-    db_con = NULL,
     error_boundary = NULL,
     state_history = list(),
     initial_state = NULL,
@@ -207,53 +191,6 @@ StateManager <- R6::R6Class(
       private$store <- do.call(reactiveValues, private$initial_state)
     },
 
-    load_db_state = function() {
-      tryCatch({
-        # Load flags and notes from DB
-        flags <- get_specimen_flags(private$db_con)
-        notes <- get_specimen_notes(private$db_con)
-
-        if (length(flags) > 0) {
-          private$store$specimen_flags <- flags
-        }
-        if (length(notes) > 0) {
-          private$store$specimen_curator_notes <- notes
-        }
-
-        private$log_info("Loaded state from database",
-                         list(flags = length(flags),
-                              notes = length(notes)))
-      }, error = function(e) {
-        private$log_error("Failed to load state from database", e$message)
-      })
-    },
-
-    update_db_state = function(key, value) {
-      if (is.null(private$db_con)) return(FALSE)
-
-      tryCatch({
-        user_info <- isolate(private$store$user_info)
-
-        if (key == "specimen_flags") {
-          for (pid in names(value)) {
-            flag_data <- value[[pid]]
-            update_specimen_flag(private$db_con, pid,
-                                 flag_data$flag, user_info)
-          }
-        } else if (key == "specimen_curator_notes") {
-          for (pid in names(value)) {
-            note_data <- value[[pid]]
-            update_specimen_note(private$db_con, pid,
-                                 note_data$text, user_info)
-          }
-        }
-        TRUE
-      }, error = function(e) {
-        private$log_error("Failed to update database", e$message)
-        FALSE
-      })
-    },
-
     setup_observers = function() {
       # Monitor error state
       observe({
@@ -274,6 +211,69 @@ StateManager <- R6::R6Class(
           ))
         }
       })
+    },
+
+    # Validation functions
+    validate_curator_notes = function(notes) {
+      if (!is.list(notes)) {
+        return(list(valid = FALSE, messages = "Curator notes must be a list"))
+      }
+
+      # Validate each note
+      invalid_notes <- Filter(function(note) {
+        !is.character(note$text) || nchar(note$text) > 1000  # Max length validation
+      }, notes)
+
+      if (length(invalid_notes) > 0) {
+        return(list(
+          valid = FALSE,
+          messages = "Invalid curator note format or length"
+        ))
+      }
+
+      list(valid = TRUE, messages = NULL)
+    },
+
+    validate_flags = function(flags) {
+      if (!is.list(flags)) {
+        return(list(valid = FALSE, messages = "Flags must be a list"))
+      }
+
+      valid_flags <- c("misidentification", "ID uncertain", "issue")
+
+      invalid_flags <- Filter(function(flag) {
+        !is.null(flag$flag) && !(flag$flag %in% valid_flags)
+      }, flags)
+
+      if (length(invalid_flags) > 0) {
+        return(list(
+          valid = FALSE,
+          messages = "Invalid flag values detected"
+        ))
+      }
+
+      list(valid = TRUE, messages = NULL)
+    },
+
+    validate_selected_specimens = function(selections) {
+      if (!is.list(selections)) {
+        return(list(valid = FALSE, messages = "Selections must be a list"))
+      }
+
+      specimen_data <- isolate(private$store$specimen_data)
+      if (is.null(specimen_data)) {
+        return(list(valid = FALSE, messages = "No specimen data available"))
+      }
+
+      invalid_ids <- setdiff(names(selections), specimen_data$processid)
+      if (length(invalid_ids) > 0) {
+        return(list(
+          valid = FALSE,
+          messages = "Invalid specimen IDs in selection"
+        ))
+      }
+
+      list(valid = TRUE, messages = NULL)
     },
 
     # Value conversion functions

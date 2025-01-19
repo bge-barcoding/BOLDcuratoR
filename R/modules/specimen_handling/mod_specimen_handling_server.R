@@ -140,49 +140,58 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
     # Specimen table output
     output$specimen_table <- renderDT({
       req(filtered_data())
+
       data <- filtered_data()
+      logger$info("Starting specimen table preparation", list(
+        initial_rows = nrow(data)
+      ))
 
-      needs_refresh <- FALSE
-      if (!is.null(input$specimen_flag) || !is.null(input$specimen_notes)) {
-        needs_refresh <- TRUE
-      }
-
-      # First sync with current states
-      data <- sync_table_states(
-        data = data,
-        current_state = list(
-          flags = isolate(flagged_specimens()),
-          notes = isolate(curator_notes())
+      tryCatch({
+        # First prepare the data
+        prepared_data <- prepare_module_data(
+          data = data,
+          current_selections = isolate(selected_specimens()),
+          current_flags = isolate(flagged_specimens()),
+          current_notes = isolate(curator_notes()),
+          logger = logger
         )
-      )
 
-      # Then prepare the data with new state format
-      prepared_data <- prepare_module_data(
-        data = data,
-        current_state = list(
-          selections = isolate(selected_specimens()),
-          flags = isolate(flagged_specimens()),
-          notes = isolate(curator_notes())
-        ),
-        logger = logger
-      )
+        # Sync table states
+        prepared_data <- sync_table_states(
+          data = prepared_data,
+          current_state = list(
+            selections = isolate(selected_specimens()),
+            flags = isolate(flagged_specimens()),
+            notes = isolate(curator_notes())
+          )
+        )
 
-      # Create table with synced data
-      formatted_table <- format_specimen_table(
-        data = prepared_data,
-        ns = ns,
-        buttons = c('copy', 'csv', 'excel'),
-        page_length = 50,
-        selection = 'multiple',
-        logger = logger
-      )
 
-      # Force table refresh if needed
-      if(needs_refresh) {
-        invalidateLater(100)
-      }
+        # Then create and format the table
+        formatted_table <- format_specimen_table(
+          data = prepared_data,
+          ns = ns,
+          buttons = c('copy', 'csv', 'excel'),
+          page_length = 50,
+          selection = 'multiple',
+          current_selections = isolate(selected_specimens()),
+          current_flags = isolate(flagged_specimens()),
+          current_notes = isolate(curator_notes()),
+          logger = logger
+        )
 
-      formatted_table
+        logger$info("Specimen table preparation complete", list(
+          final_rows = nrow(prepared_data)
+        ))
+
+        formatted_table
+      }, error = function(e) {
+        logger$error("Error rendering specimen table", list(
+          error = e$message,
+          stack = e$call
+        ))
+        NULL
+      })
     })
 
     # Handle specimen selection
@@ -415,7 +424,6 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
     )
   })
 }
-
 
 #' Internal function to update filtered data
 #' @keywords internal

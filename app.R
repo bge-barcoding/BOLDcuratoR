@@ -15,7 +15,6 @@ source("R/utils/bags_grading.R")
 source("R/utils/specimen_ranking.R")
 source("R/utils/specimen_validation.R")
 source("R/utils/table_utils.R")
-source("R/utils/table_state_utils.R")
 
 # Source core modules
 source("R/modules/interfaces.R")
@@ -236,16 +235,8 @@ BinProcessor <- R6::R6Class(
 server <- function(input, output, session) {
   # Initialize core components
   logging_manager <- LoggingManager$new()
-
-  # Initialize state manager with database
-  db_path <- file.path("data", "specimen_tracking.db")
-  state <- StateManager$new(
-    session = session,
-    db_path = db_path,
-    logger = logging_manager
-  )
-
-   export_manager <- ExportManager$new(logging_manager, session$token)
+  state <- StateManager$new(session, logging_manager)
+  export_manager <- ExportManager$new(logging_manager, session$token)
 
   # Initialize processors
   bags_processor <- BagsProcessor$new(logging_manager)
