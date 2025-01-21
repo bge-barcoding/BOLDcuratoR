@@ -136,7 +136,6 @@ format_specimen_table <- function(data, ns = NULL,
       caseInsensitive = TRUE,
       search = ""
     ),
-    # In table_utils.R, update the format_specimen_table function's columnDefs section:
 
     columnDefs = list(
       # Selected column
@@ -197,9 +196,11 @@ format_specimen_table <- function(data, ns = NULL,
         render = JS("
         function(data, type, row) {
           if (type === 'display') {
+            // Preserve any existing background color style
+            var style = $(this).attr('style') || '';
             return '<div class=\"cell-content\" title=\"' +
-                   (data || '').toString().replace(/\"/g, '&quot;') +
-                   '\">' + (data || '') + '</div>';
+                   (data || '').toString().replace(/\"/g, '&quot;') + '\" style=\"' +
+                   style + '\">' + (data || '') + '</div>';
           }
           return data;
         }

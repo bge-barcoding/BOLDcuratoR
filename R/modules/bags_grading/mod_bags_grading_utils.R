@@ -265,14 +265,35 @@ format_grade_table <- function(data, ns = NULL, grade) {
   )
 
   if(grade == "E" && !is.null(dt)) {
-    unique_species <- sort(unique(as.character(prepared_data$species)))
-    n_species <- length(unique_species)
-    colors <- colorRampPalette(c("#e6f3ff", "#80bfff"))(n_species)
+    # Use identification column instead of species for coloring
+    unique_identifications <- sort(unique(as.character(prepared_data$identification)))
+    n_identifications <- length(unique_identifications)
 
+    # Define visually distinct pastel colors for better species differentiation
+    base_colors <- c(
+      "#cce6ff",  # Light blue
+      "#ffe6cc",  # Light orange
+      "#e6ffcc",  # Light green
+      "#ffcce6",  # Light pink
+      "#e6ccff",  # Light purple
+      "#ccffe6",  # Light mint
+      "#ffcccc",  # Light red
+      "#ccccff"   # Light indigo
+    )
+
+    # If we need more colors than our base set, generate them
+    colors <- if(n_identifications <= length(base_colors)) {
+      base_colors[1:n_identifications]
+    } else {
+      # For more species, generate additional colors while maintaining distinctness
+      colorRampPalette(base_colors)(n_identifications)
+    }
+
+    # Apply styling to the identification column
     dt <- dt %>% formatStyle(
-      'species',
+      'identification',  # Changed from 'species' to 'identification'
       backgroundColor = styleEqual(
-        levels = unique_species,
+        levels = unique_identifications,
         values = colors
       )
     )
