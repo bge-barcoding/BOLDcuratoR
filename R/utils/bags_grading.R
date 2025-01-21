@@ -6,17 +6,19 @@
 #' @export
 calculate_bags_grade <- function(specimens) {
   tryCatch({
-    # Filter for specimens with valid BINs and species-level identification
-    specimens <- specimens[!is.na(specimens$bin_uri) &
-                             specimens$bin_uri != "" &
-                             specimens$identification_rank %in% c("species", "subspecies"), ]
+    # Filter for specimens with species-level identification
+    specimens <- specimens[
+      specimens$identification_rank %in% c("species", "subspecies") &
+        !is.na(specimens$species) &
+        specimens$species != "",
+    ]
 
     if (nrow(specimens) == 0) {
       return(create_empty_grades_df())
     }
 
-    # Get unique species (including cf/aff variants as separate species)
-    valid_taxa <- unique(specimens$species[!is.na(specimens$species) & specimens$species != ""])
+    # Get unique species
+    valid_taxa <- unique(specimens$species)
 
     # Process each taxon
     grades <- lapply(valid_taxa, function(taxon) {
@@ -27,20 +29,19 @@ calculate_bags_grade <- function(specimens) {
         return(NULL)
       }
 
-      # Get valid BINs
-      valid_bins <- unique(taxon_specimens$bin_uri[!is.na(taxon_specimens$bin_uri)])
+      # Get valid BINs (excluding NA/empty values)
+      valid_bins <- unique(taxon_specimens$bin_uri[
+        !is.na(taxon_specimens$bin_uri) &
+          taxon_specimens$bin_uri != ""
+      ])
+
       bin_count <- length(valid_bins)
 
       # Count total specimens
       specimen_count <- nrow(taxon_specimens)
 
-      # Check for shared/discordant BINs
+      # Enhanced shared BIN detection
       has_shared_bins <- check_shared_bins(specimens, taxon, valid_bins)
-
-      # Ensure has_shared_bins is boolean
-      if (is.na(has_shared_bins)) {
-        has_shared_bins <- FALSE
-      }
 
       # Create result row
       data.frame(
@@ -56,7 +57,6 @@ calculate_bags_grade <- function(specimens) {
     result <- do.call(rbind, grades[!sapply(grades, is.null)])
     if (is.null(result)) return(create_empty_grades_df())
 
-    # Add row names
     rownames(result) <- NULL
     result
 
@@ -66,7 +66,7 @@ calculate_bags_grade <- function(specimens) {
   })
 }
 
-#' Check if BINs are shared/discordant
+#' Enhanced check for shared/discordant BINs
 #' @param specimens All specimens data frame
 #' @param taxon Species being checked
 #' @param taxon_bins BINs assigned to this taxon
@@ -75,24 +75,24 @@ calculate_bags_grade <- function(specimens) {
 check_shared_bins <- function(specimens, taxon, taxon_bins) {
   if (length(taxon_bins) == 0) return(FALSE)
 
-  # Filter for specimens with valid BINs
-  specimens <- specimens[!is.na(specimens$bin_uri) & specimens$bin_uri != "", ]
-
-  # For each BIN containing the taxon
+  # For each BIN assigned to the taxon
   shared <- sapply(taxon_bins, function(bin) {
-    # Get all specimens in this BIN
-    bin_specimens <- specimens[specimens$bin_uri == bin, ]
+    # Get all specimens in this BIN across all species
+    bin_specimens <- specimens[
+      !is.na(specimens$bin_uri) &
+        specimens$bin_uri != "" &
+        specimens$bin_uri == bin &
+        !is.na(specimens$species) &
+        specimens$species != "" &
+        specimens$identification_rank %in% c("species", "subspecies"),
+    ]
 
     if (nrow(bin_specimens) == 0) return(FALSE)
 
-    # Get unique valid species in this BIN
-    bin_species <- unique(bin_specimens$species[
-      !is.na(bin_specimens$species) &
-        bin_specimens$species != "" &
-        bin_specimens$identification_rank %in% c("species", "subspecies")
-    ])
+    # Get unique species in this BIN
+    bin_species <- unique(bin_specimens$species)
 
-    # Check if this BIN contains other species
+    # Check if this BIN contains multiple species
     length(bin_species) > 1 ||
       (length(bin_species) == 1 && bin_species != taxon)
   })
@@ -109,12 +109,15 @@ check_shared_bins <- function(specimens, taxon, taxon_bins) {
 #' @keywords internal
 determine_bags_grade <- function(specimen_count, bin_count, has_shared_bins) {
   tryCatch({
-    # Handle invalid inputs
+    # Input validation with strict type checking
+    if (!is.numeric(specimen_count) || !is.numeric(bin_count)) return('E')
     if (is.na(specimen_count) || is.na(bin_count)) return('E')
     if (is.na(has_shared_bins)) has_shared_bins <- FALSE
 
-    # Grade E: Shared BINs
-    if (has_shared_bins) return('E')
+    # Grade E conditions (highest priority):
+    # - Shared BINs
+    # - Invalid specimen/BIN counts
+    if (has_shared_bins || specimen_count < 0 || bin_count < 0) return('E')
 
     # Grade C: Multiple BINs
     if (bin_count > 1) return('C')
@@ -122,10 +125,10 @@ determine_bags_grade <- function(specimen_count, bin_count, has_shared_bins) {
     # Grade D: Less than 3 specimens
     if (specimen_count < 3) return('D')
 
-    # Grade A: More than 10 specimens
-    if (specimen_count >= 10) return('A')
+    # Grade A: 11 or more specimens
+    if (specimen_count >= 11) return('A')
 
-    # Grade B: 3-10 specimens
+    # Grade B: 3-10 specimens with single BIN
     return('B')
 
   }, error = function(e) {

@@ -150,6 +150,19 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
           organized <- organize_grade_specimens(data, grade)
           logger$info(sprintf("Organized specimens into %d groups", length(organized)))
 
+          # First sync states
+          organized <- lapply(organized, function(group_data) {
+            sync_table_states(
+              data = group_data,
+              current_state = list(
+                selections = isolate(rv$selected_specimens),
+                flags = isolate(rv$flagged_specimens),
+                notes = isolate(rv$curator_notes)
+              )
+            )
+          })
+
+          # Then create tables with synced data
           tables <- create_grade_tables(
             organized = organized,
             grade = grade,
@@ -227,6 +240,59 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
       updateSelectInput(session, "rank_filter", selected = "All")
       updateNumericInput(session, "min_quality_score", value = 0)
       updateCheckboxGroupInput(session, "criteria_filter", selected = character(0))
+    })
+
+    # Watch for flag changes
+    observeEvent(input$specimen_flag, {
+      req(input$specimen_flag)
+      flag <- input$specimen_flag
+
+      if (!is.null(flag$processid)) {
+        current_flags <- isolate(rv$flagged_specimens)
+
+        if (!is.null(flag$flag) && nchar(flag$flag) > 0) {
+          current_flags[[flag$processid]] <- list(
+            flag = flag$flag,
+            timestamp = Sys.time(),
+            species = flag$species,
+            user = state$get_store()$user_info$email
+          )
+        } else {
+          current_flags[[flag$processid]] <- NULL
+        }
+
+        rv$flagged_specimens <- current_flags
+        state$update_state("specimen_flags", current_flags)
+
+        # Force table refresh
+        invalidateLater(100)
+      }
+    })
+
+    # Watch for note changes
+    observeEvent(input$specimen_notes, {
+      req(input$specimen_notes)
+      note <- input$specimen_notes
+
+      if (!is.null(note$processid)) {
+        current_notes <- isolate(rv$curator_notes)
+
+        if (!is.null(note$notes) && nchar(note$notes) > 0) {
+          current_notes[[note$processid]] <- list(
+            text = note$notes,
+            timestamp = Sys.time(),
+            user = state$get_store()$user_info$email
+          )
+        } else {
+          current_notes[[note$processid]] <- NULL
+        }
+
+        rv$curator_notes <- current_notes
+        state$update_state("specimen_curator_notes", current_notes)
+
+        # Force table refresh
+        invalidateLater(100)
+      }
     })
 
     # Safe session cleanup with logging

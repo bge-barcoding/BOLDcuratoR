@@ -5,19 +5,6 @@ if (!exists("PREFERRED_COLUMNS")) {
   source("R/config/constants.R")
 }
 
-#' Get standard table columns
-#' depreciated in favour of preferred_columns in constants.R
-#' @return Vector of standard column names
-#' @keywords internal
-# get_standard_columns <- function() {
-#  c("selected", "flag", "curator_notes",
-#    "rank", "quality_score", "processid", "bin_uri",
-#    "identification", "identified_by",
-#    "identification_method", "country.ocean",
-#    "collection_date_start", "collectors", "inst",
-#    "criteria_met")
-#}
-
 #' Order columns according to preferred configuration
 #' @param data Data frame to reorder
 #' @return Data frame with reordered columns
@@ -45,7 +32,6 @@ get_flag_options <- function() {
     "Misidentification" = "misidentification",
     "ID Uncertain" = "id_uncertain",
     "Data Issue" = "data_issue",
-    "Quality Issue" = "quality_issue",
     "Other Issue" = "other_issue"
   )
 }
@@ -79,70 +65,146 @@ format_specimen_table <- function(data, ns = NULL,
     return(NULL)
   }
 
-  # Add this check for column definitions
-  # only if renaming columns from standard BOLD names
-  #if (!exists("COLUMN_DEFINITIONS", envir = .GlobalEnv)) {
-  #  source("R/config/column_definitions.R")
-  #}
-
   # Ensure data is a data frame and reset rownames
   data <- as.data.frame(data, stringsAsFactors = FALSE)
   rownames(data) <- NULL
+  # Convert interactive columns to proper types
+  data$selected <- as.logical(data$selected)
+  data$flag <- as.character(data$flag)
+  data$curator_notes <- as.character(data$curator_notes)
 
-  # Add interactive columns
-  data$selected <- FALSE
-  data$flag <- ""
-  data$curator_notes <- ""
-
-  # Update with current values if provided
-  if (!is.null(current_selections)) {
-    data$selected <- sapply(data$processid, function(pid) !is.null(current_selections[[pid]]))
+  # Initialize with proper types
+  data$selected <- if (!is.null(data$selected)) {
+    as.logical(data$selected)  # Updated: Convert to logical
+  } else {
+    FALSE  # Default value
   }
-  if (!is.null(current_flags)) {
-    data$flag <- sapply(data$processid, function(pid) {
-      if (!is.null(current_flags[[pid]]) && !is.null(current_flags[[pid]]$flag)) {
-        current_flags[[pid]]$flag
-      } else {
-        ""
-      }
-    })
+  data$flag <- if (!is.null(data$flag)) {
+    as.character(data$flag)  # Updated: Convert to character
+  } else {
+    ""  # Default value
   }
-  if (!is.null(current_notes)) {
-    data$curator_notes <- sapply(data$processid, function(pid) {
-      if (!is.null(current_notes[[pid]])) {
-        as.character(current_notes[[pid]])
-      } else {
-        ""
-      }
-    })
+  data$curator_notes <- if (!is.null(data$curator_notes)) {
+    as.character(data$curator_notes)  # Updated: Convert to character
+  } else {
+    ""  # Default value
   }
   # order the columns properly
   data <- order_columns(data)
 
-  # Basic options for DT
+  if("curator_notes" %in% names(data)) {
+    data$curator_notes <- as.character(data$curator_notes)
+  }
+
+  # Updated DT options
   dt_options <- list(
     scrollX = TRUE,
     scrollY = "500px",
     pageLength = page_length,
     autoWidth = FALSE,
     dom = 'Bfrtip',
-    buttons = buttons,
-    extensions = 'FixedColumns',  # Add this line
+    buttons = list(
+      list(
+        extend = 'csv',
+        exportOptions = list(
+          columns = ':visible',
+          rows = ':all',
+          # Ensure interactive columns are included
+          selector = 'td:not(.notexport)'
+        )
+      ),
+      list(
+        extend = 'excel',
+        exportOptions = list(
+          columns = ':visible',
+          rows = ':all',
+          selector = 'td:not(.notexport)'
+        )
+      ),
+      'copy'
+    ),
+    extensions = c('FixedColumns', 'Buttons'),
     fixedColumns = list(
       left = 3
     ),
+    # Add server-side processing parameters
+    processing = FALSE,
+    serverSide = FALSE, # Force client-side processing
+    # Add search configuration
+    search = list(
+      regex = FALSE,
+      caseInsensitive = TRUE,
+      search = ""
+    ),
+
     columnDefs = list(
+      # Selected column
       list(
-        targets = which(names(data) %in% c("selected", "flag", "curator_notes")) - 1,
-        searchable = FALSE,
+        targets = which(names(data) == "selected") - 1,
+        width = "40px",
+        className = 'dt-center fixed-col',
         orderable = FALSE,
-        width = "100px",
-        className = 'dt-center fixed-col'  # Change sticky-col to fixed-col
+        searchable = FALSE,
+        render = JS("
+      function(data, type, row) {
+        if(type === 'display') {
+          return '<input type=\"checkbox\" class=\"specimen-select\"' +
+                 (data == true ? ' checked' : '') + '>';
+        }
+        return data;
+      }
+    ")
       ),
+      # Flag column
+      list(
+        targets = which(names(data) == "flag") - 1,
+        width = "100px",
+        className = 'dt-center fixed-col',
+        orderable = FALSE,
+        searchable = FALSE,
+        render = JS(sprintf("
+    function(data, type, row) {
+      if(type === 'display') {
+        var flagOptions = %s;
+        var select = '<select class=\"specimen-flag form-select form-select-sm\">';
+        select += '<option value=\"\">None</option>';
+        select += '<option value=\"misidentification\"' + (data === 'misidentification' ? ' selected' : '') + '>Misidentification</option>';
+        select += '<option value=\"id_uncertain\"' + (data === 'id_uncertain' ? ' selected' : '') + '>ID Uncertain</option>';
+        select += '<option value=\"data_issue\"' + (data === 'data_issue' ? ' selected' : '') + '>Data Issue</option>';
+        select += '<option value=\"other_issue\"' + (data === 'other_issue' ? ' selected' : '') + '>Other Issue</option>';
+        select += '</select>';
+        return select;
+      }
+      return data;
+    }
+  ", jsonlite::toJSON(get_flag_options(), auto_unbox = TRUE)))
+      ),
+      # Curator notes column
+      list(
+        targets = which(names(data) == "curator_notes") - 1,
+        width = "100px",
+        className = 'dt-center fixed-col editable',
+        orderable = FALSE,
+        searchable = FALSE
+      ),
+      # All other columns
       list(
         targets = "_all",
-        className = "dt-body-left nowrap",
-        height = "22px"
+        className = "dt-body-left",
+        width = "100px",  # Default width
+        maxWidth = "100px",
+        render = JS("
+        function(data, type, row) {
+          if (type === 'display') {
+            // Preserve any existing background color style
+            var style = $(this).attr('style') || '';
+            return '<div class=\"cell-content\" title=\"' +
+                   (data || '').toString().replace(/\"/g, '&quot;') + '\" style=\"' +
+                   style + '\">' + (data || '') + '</div>';
+          }
+          return data;
+        }
+      ")
       )
     )
   )
@@ -157,31 +219,27 @@ format_specimen_table <- function(data, ns = NULL,
     dt <- DT::datatable(
       data,
       options = dt_options,
-      selection = selection,
+      selection = 'none', # changed from selection to 'none'
       rownames = FALSE,
-
-      # column renaming lines which break the app
-      # tables don't appear and I can't figure it out
-      # leaving here for future activation
-      #colnames = sapply(names(data), function(col) {
-      #  if(col %in% names(COLUMN_DEFINITIONS)) COLUMN_DEFINITIONS[[col]] else tools::toTitleCase(gsub("_", " ", col))
-      #}),
-      #escape = c("Selected", "Issue", "Curator_Notes")
-
-      escape = c("selected", "flag", "curator_notes"),
-      extensions = c('Buttons', 'FixedColumns')  # Add FixedColumns here
+      escape = FALSE,
+      editable = list(
+        target = 'cell',
+        disable = list(columns = setdiff(seq_len(ncol(data))-1,
+                                         which(names(data) %in% c("curator_notes"))-1))
+      ),
+      extensions = c('Buttons', 'FixedColumns') # Removed Select
     )
 
-    # Add interactive column formatting using new column names
-    for(col_pair in list(c("selected", "Selected"),
-                         c("flag", "Issue"),
-                         c("curator_notes", "Curator_Notes"))) {
-      orig_col <- col_pair[1]
-      new_col <- col_pair[2]
-      if (orig_col %in% names(data)) {
-        dt <- format_interactive_column(dt, new_col)
-      }
-    }
+#    # Add interactive column formatting using new column names
+#    for(col_pair in list(c("selected", "selected"),
+#                         c("flag", "flag"),
+#                         c("curator_notes", "curator_notes"))) {
+#      orig_col <- col_pair[1]
+#      new_col <- col_pair[2]
+#      if (orig_col %in% names(data)) {
+#        dt <- format_interactive_column(dt, new_col)
+#      }
+#    }
 
     # Add metric column formatting
     if ("quality_score" %in% names(data)) {
@@ -212,58 +270,58 @@ format_specimen_table <- function(data, ns = NULL,
   })
 }
 
-# Helper function to format interactive columns
+# Update this function in table_utils.R
 format_interactive_column <- function(dt, col) {
   if (col == "selected") {
     dt %>% formatStyle(
       'selected',
       target = "cell",
+      className = 'dt-center',
       render = JS("
         function(data, type, row) {
           if(type === 'display') {
             return '<input type=\"checkbox\" class=\"specimen-select\"' +
-                   (data ? ' checked' : '') + '>';
+                   (data == true ? ' checked' : '') + '>' +
+                   '<script>$(document).on(\"change\", \".specimen-select\", function() {' +
+                   'var tr = $(this).closest(\"tr\");' +
+                   'var table = $(this).closest(\"table\").DataTable();' +
+                   'var row = table.row(tr);' +
+                   'var data = row.data();' +
+                   'Shiny.setInputValue(\"specimen_selection\", {' +
+                   '  processid: data[1],' +
+                   '  selected: this.checked' +
+                   '});' +
+                   '});</script>';
           }
           return data;
         }
       ")
     )
   } else if (col == "flag") {
-    dt %>% formatStyle(
-      'flag',
-      target = "cell",
-      render = JS("
-        function(data, type, row) {
-          if(type === 'display') {
-            var select = '<select class=\"specimen-flag form-select form-select-sm\">';
-            Object.entries(flagOptions).forEach(function([label, value]) {
-              select += '<option value=\"' + value + '\"' +
-                       (data === value ? ' selected' : '') + '>' +
-                       label + '</option>';
-            });
-            select += '</select>';
-            return select;
-          }
-          return data;
+      dt %>% formatStyle(
+        'flag',
+        target = "cell",
+        render = JS(sprintf("
+      function(data, type, row) {
+        if(type === 'display') {
+          const options = %s;
+          let select = '<select class=\"specimen-flag form-select form-select-sm\">';
+          Object.entries(options).forEach(([label, value]) => {
+            select += '<option value=\"' + value + '\"' +
+                     (data === value ? ' selected' : '') + '>' +
+                     label + '</option>';
+          });
+          select += '</select>';
+          return select;
         }
-      ")
-    )
+        return data;
+      }
+    ", jsonlite::toJSON(get_flag_options(), auto_unbox = TRUE)))
+      )
   } else if (col == "curator_notes") {
     dt %>% formatStyle(
       'curator_notes',
-      target = "cell",
-      render = JS("
-        function(data, type, row) {
-          if(type === 'display') {
-            var input = '<input type=\"text\" class=\"specimen-notes form-control form-control-sm\"' +
-                       ' style=\"width:100%;height:24px;padding:2px 6px;\"' +
-                       ' value=\"' + (data || '') + '\"' +
-                       ' placeholder=\"Add notes...\">';
-            return input;
-          }
-          return data;
-        }
-      ")
+      cursor = 'text'
     )
   } else {
     dt
@@ -315,6 +373,58 @@ add_color_coding <- function(dt, data, color_by) {
   )
 }
 
+#' Sync table states between specimens and bags tables
+#' @param data Data frame to update
+#' @param current_state Current state list containing selections, flags, and notes
+#' @return Updated data frame with synced states
+#' @keywords internal
+sync_table_states <- function(data, current_state) {
+  if (is.null(data) || nrow(data) == 0) return(data)
+
+  # Create efficient lookup for row indices
+  row_map <- setNames(seq_len(nrow(data)), data$processid)
+
+  # Update flags with validation
+  if (!is.null(current_state$flags)) {
+    # Initialize with default values
+    data$flag <- ifelse(is.null(data$flag), "", as.character(data$flag))
+
+    for (pid in names(current_state$flags)) {
+      row_idx <- row_map[pid]
+      if (!is.null(row_idx) && !is.na(row_idx)) {
+        flag_value <- current_state$flags[[pid]]
+        # Added normalization of flag values to handle both formats
+        data$flag[row_idx] <- if (is.list(flag_value)) {
+          as.character(flag_value$flag %||% flag_value$value %||% "")  # Added flag_value$value as fallback
+        } else {
+          as.character(flag_value)
+        }
+      }
+    }
+  }
+
+  # Update curator notes with enhanced validation
+  if (!is.null(current_state$notes)) {
+    # Initialize with default values
+    data$curator_notes <- ifelse(is.null(data$curator_notes), "", as.character(data$curator_notes))
+
+    for (pid in names(current_state$notes)) {
+      row_idx <- row_map[pid]
+      if (!is.null(row_idx) && !is.na(row_idx)) {
+        note_value <- current_state$notes[[pid]]
+        # Added normalization of note values to handle all formats
+        data$curator_notes[row_idx] <- if (is.list(note_value)) {
+          as.character(note_value$text %||% note_value$note %||% note_value$value %||% "")
+        } else {
+          as.character(note_value)
+        }
+      }
+    }
+  }
+
+  return(data)
+}
+
 # Handles data preparation consistently
 prepare_module_data <- function(data,
                                 current_selections = NULL,
@@ -361,24 +471,41 @@ prepare_module_data <- function(data,
     })
   }
 
+  # Added error checking and proper type handling for flag persistence
   if (!is.null(current_flags)) {
     data$flag <- sapply(data$processid, function(pid) {
-      if (!is.null(current_flags[[pid]]) && !is.null(current_flags[[pid]]$flag)) {
-        current_flags[[pid]]$flag
-      } else {
-        ""
-      }
-    })
+      tryCatch({
+        if (!is.null(current_flags[[pid]])) {
+          # Updated: Handle both list and direct value formats
+          if (is.list(current_flags[[pid]])) {
+            as.character(current_flags[[pid]]$flag %||% "")
+          } else {
+            as.character(current_flags[[pid]])
+          }
+        } else {
+          ""
+        }
+      }, error = function(e) "")  # Added error handling
+    }, USE.NAMES = FALSE)  # Added USE.NAMES=FALSE for consistency
   }
 
+  # Enhanced curator notes persistence with proper type checking
   if (!is.null(current_notes)) {
     data$curator_notes <- sapply(data$processid, function(pid) {
-      if (!is.null(current_notes[[pid]])) {
-        as.character(current_notes[[pid]])
-      } else {
-        ""
-      }
-    })
+      tryCatch({
+        if (!is.null(current_notes[[pid]])) {
+          # Updated: Handle multiple note formats
+          if (is.list(current_notes[[pid]])) {
+            as.character(current_notes[[pid]]$text %||%
+                           current_notes[[pid]]$note %||% "")
+          } else {
+            as.character(current_notes[[pid]])
+          }
+        } else {
+          ""
+        }
+      }, error = function(e) "")  # Added error handling
+    }, USE.NAMES = FALSE)  # Added USE.NAMES=FALSE for consistency
   }
 
   # Final cleanup - ensure no NULL values
@@ -396,7 +523,18 @@ prepare_module_data <- function(data,
     ))
   }
 
+  # Ensure proper types before returning
+  data$selected <- as.logical(data$selected)
+  data$flag <- as.character(data$flag)
+  data$curator_notes <- as.character(data$curator_notes)
+  if ("quality_score" %in% names(data)) {
+    data$quality_score <- as.numeric(data$quality_score)
+  }
+  if ("rank" %in% names(data)) {
+    data$rank <- as.numeric(data$rank)
+  }
   return(data)
+
 }
 
 
@@ -539,153 +677,27 @@ format_table_columns <- function(dt, data, color_by = NULL, logger = NULL) {
 #' @param logger Optional logger instance
 #' @return Prepared data frame
 #' @keywords internal
-# Revised prepare_table_data function
 prepare_table_data <- function(data, current_selections, current_flags,
-                               current_notes, logger = NULL) {
-  if (is.null(data) || nrow(data) == 0) {
-    if (!is.null(logger)) logger$warn("Empty or invalid input data to prepare_table_data")
-    return(data.frame())
-  }
+                               current_notes) {
+  if (is.null(data) || nrow(data) == 0) return(data.frame())
 
-  # Log initial state
-  if (!is.null(logger)) {
-    logger$info("Starting prepare_table_data", details = list(
-      initial_columns = names(data),
-      data_classes = sapply(data, class),
-      row_count = nrow(data)
-    ))
-  }
-
-  # Convert to data frame and preserve row names
-  rn <- rownames(data)
+  # Ensure data is a data frame
   data <- as.data.frame(data, stringsAsFactors = FALSE)
-  rownames(data) <- rn
 
-  # Convert column names to lowercase
-  original_names <- names(data)
-  names(data) <- tolower(names(data))
+  # Initialize interactive columns with proper types
+  data$flag <- ifelse(is.null(data$flag), "", as.character(data$flag))
+  data$curator_notes <- ifelse(is.null(data$curator_notes), "",
+                               as.character(data$curator_notes))
 
-  if (!is.null(logger)) {
-    logger$info("Column name conversion", details = list(
-      original = original_names,
-      converted = names(data)
-    ))
-  }
+  # Update with current states using sync_table_states
+  data <- sync_table_states(data, list(
+    flags = current_flags,
+    notes = current_notes
+  ))
 
-  # Check for required processid column
-  if (!"processid" %in% names(data)) {
-    if (!is.null(logger)) logger$error("Missing required processid column")
-    return(data.frame())
-  }
-
-  # Handle specimen_rank to rank conversion
-  if ("specimen_rank" %in% names(data) && !"rank" %in% names(data)) {
-    if (!is.null(logger)) {
-      logger$info("Converting specimen_rank to rank", details = list(
-        specimen_rank_values = head(data$specimen_rank)
-      ))
-    }
-    data$rank <- data$specimen_rank
-    data$specimen_rank <- NULL
-  }
-
-  # Convert problematic types
-  for (col in names(data)) {
-    if (is.list(data[[col]]) || is.factor(data[[col]])) {
-      if (!is.null(logger)) {
-        logger$info(sprintf("Converting column %s from %s to character",
-                            col, class(data[[col]])[1]))
-      }
-      data[[col]] <- as.character(data[[col]])
-    }
-  }
-
-  # Add missing standard columns first
-  missing_cols <- setdiff(custom_cols, names(data))
-  if (length(missing_cols) > 0) {
-    if (!is.null(logger)) {
-      logger$info("Adding missing standard columns", details = list(
-        missing_columns = missing_cols
-      ))
-    }
-    for (col in missing_cols) {
-      data[[col]] <- NA_character_
-    }
-  }
-
-  # Then add/update interactive columns
-  data$selected <- FALSE
-  if (!is.null(current_selections)) {
-    data$selected <- sapply(data$processid, function(pid) {
-      !is.null(current_selections[[pid]])
-    }, USE.NAMES = FALSE)
-  }
-
-  data$flag <- ""
-  if (!is.null(current_flags)) {
-    data$flag <- sapply(data$processid, function(pid) {
-      if (!is.null(current_flags[[pid]]) && !is.null(current_flags[[pid]]$flag)) {
-        as.character(current_flags[[pid]]$flag)
-      } else {
-        ""
-      }
-    }, USE.NAMES = FALSE)
-  }
-
-  data$curator_notes <- ""
-  if (!is.null(current_notes)) {
-    data$curator_notes <- sapply(data$processid, function(pid) {
-      if (!is.null(current_notes[[pid]])) {
-        if (is.list(current_notes[[pid]])) {
-          current_notes[[pid]]$text %||% ""
-        } else {
-          as.character(current_notes[[pid]])
-        }
-      } else {
-        ""
-      }
-    }, USE.NAMES = FALSE)
-  }
-
-  if (!is.null(logger)) {
-    logger$info("Interactive columns added", details = list(
-      has_selected = "selected" %in% names(data),
-      has_flag = "flag" %in% names(data),
-      has_notes = "curator_notes" %in% names(data)
-    ))
-  }
-
-  # Final cleanup - ensure no NULL values
-  for (col in names(data)) {
-    if (any(sapply(data[[col]], is.null))) {
-      if (!is.null(logger)) {
-        logger$info(sprintf("Replacing NULL values in column %s", col))
-      }
-      data[[col]][sapply(data[[col]], is.null)] <- NA
-    }
-  }
-
-  # Ensure rank is numeric
-  if ("rank" %in% names(data)) {
-    data$rank <- as.numeric(data$rank)
-  }
-
-  # Order columns according to preference
-  data <- order_columns(data)
-
-  # Log final state
-  if (!is.null(logger)) {
-    logger$info("Prepare table data complete", details = list(
-      final_columns = names(data),
-      row_count = nrow(data),
-      column_classes = sapply(data, class),
-      rank_info = if("rank" %in% names(data)) list(
-        class = class(data$rank),
-        unique_values = unique(data$rank),
-        has_na = any(is.na(data$rank))
-      ) else NULL
-    ))
-  }
+  # Ensure proper column types
+  data$flag <- as.character(data$flag)
+  data$curator_notes <- as.character(data$curator_notes)
 
   return(data)
 }
@@ -698,71 +710,186 @@ prepare_table_data <- function(data, current_selections, current_flags,
 get_table_callback <- function(ns, flag_options = NULL) {
   if (is.null(ns)) return(NULL)
 
-  # Add flag options to JavaScript
-  flag_js <- if (!is.null(flag_options)) {
-    sprintf("var flagOptions = %s;\n",
-            jsonlite::toJSON(flag_options, auto_unbox = TRUE))
-  } else {
-    ""
-  }
+  flags <- get_flag_options()
+  flag_js <- sprintf("const flagOptions = %s;\n",
+                     jsonlite::toJSON(flags, auto_unbox = TRUE))
 
   JS(sprintf("
     function(table) {
       %s
 
-      // Handle checkbox changes
-      table.on('change', 'input.specimen-select', function() {
-        var $cell = $(this).closest('td');
-        var row = table.row($cell.closest('tr'));
-        var data = row.data();
-        Shiny.setInputValue(
-          '%s',
-          {
-            processid: data.processid,
-            selected: this.checked,
-            species: data.species,
-            bin_uri: data.bin_uri,
-            quality_score: data.quality_score
-          },
-          {priority: 'event'}
-        );
+      // Global state store with enhanced persistence
+      window.tableStates = window.tableStates || {};
+      window.stateVersion = (window.stateVersion || 0) + 1;
+
+      const stateManager = {
+        getKey: (processid) => {
+          const tableId = table.table().node().id || 'default';
+          return `${tableId}_${processid}_${window.stateVersion}`;
+        },
+
+        save: function(processid, type, value) {
+          const key = this.getKey(processid);
+          window.tableStates[key] = window.tableStates[key] || {};
+          window.tableStates[key][type] = value;
+          window.tableStates[key].timestamp = Date.now();
+          try {
+            localStorage.setItem('tableStates', JSON.stringify(window.tableStates));
+            localStorage.setItem('stateVersion', window.stateVersion.toString());
+          } catch(e) {
+            console.warn('Error saving state:', e);
+          }
+        },
+
+        load: function(processid) {
+          const key = this.getKey(processid);
+          return window.tableStates[key] || null;
+        },
+
+        notifyShiny: function(processid, type, value) {
+          const rowData = table.row(`[data-processid='${processid}']`).data();
+          if (!rowData) return;
+
+          const payload = {
+            processid,
+            [type]: value,
+            species: rowData.species || '',
+            bin_uri: rowData.bin_uri || '',
+            timestamp: Date.now(),
+            table_id: table.table().node().id || 'default',
+            state_version: window.stateVersion
+          };
+
+          if (type === 'flag') {
+            Shiny.setInputValue('%s', payload, {priority: 'event'});
+          } else if (type === 'curator_notes') {
+            Shiny.setInputValue('%s', payload, {priority: 'event'});
+          }
+        },
+
+        broadcast: function(processid, type, value) {
+          // Immediate UI update
+          table.rows().every(function() {
+            const data = this.data();
+            if (data?.processid === processid) {
+              data[type] = value;
+              this.data(data);
+              stateManager.updateDOM($(this.node()), {
+                [type]: value
+              });
+            }
+          });
+
+          document.dispatchEvent(new CustomEvent('stateChange', {
+            detail: {
+              processid,
+              type,
+              value,
+              tableId: table.table().node().id || 'default',
+              timestamp: Date.now(),
+              stateVersion: window.stateVersion
+            }
+          }));
+        },
+
+        updateDOM: function($row, state) {
+          if (!$row || !state) return;
+          if (state.flag !== undefined) {
+            $row.find('select.specimen-flag').val(state.flag);
+          }
+          if (state.curator_notes !== undefined) {
+            $row.find('input.specimen-notes').val(state.curator_notes);
+          }
+        }
+      };
+
+      // Event handlers with bubbling prevention
+      table.on('change', 'select.specimen-flag', function(e) {
+        e.stopPropagation();
+        const row = table.row($(this).closest('tr'));
+        const data = row.data();
+        if (!data?.processid) return;
+
+        const value = this.value;
+        stateManager.save(data.processid, 'flag', value);
+        stateManager.broadcast(data.processid, 'flag', value);
+        stateManager.notifyShiny(data.processid, 'flag', value);
       });
 
-      // Handle flag dropdown changes
-      table.on('change', 'select.specimen-flag', function() {
-        var $cell = $(this).closest('td');
-        var row = table.row($cell.closest('tr'));
-        var data = row.data();
-        Shiny.setInputValue(
-          '%s',
-          {
-            processid: data.processid,
-            flag: this.value,
-            species: data.species,
-            bin_uri: data.bin_uri
-          },
-          {priority: 'event'}
-        );
+      table.on('change', 'input.specimen-notes', function(e) {
+        e.stopPropagation();
+        const row = table.row($(this).closest('tr'));
+        const data = row.data();
+        if (!data?.processid) return;
+
+        const value = this.value.trim();
+        stateManager.save(data.processid, 'curator_notes', value);
+        stateManager.broadcast(data.processid, 'curator_notes', value);
+        stateManager.notifyShiny(data.processid, 'curator_notes', value);
       });
 
-      // Handle curator notes changes
-      table.on('change', 'input.specimen-notes', function() {
-        var $input = $(this);
-        var row = table.row($input.closest('tr'));
-        var data = row.data();
-        Shiny.setInputValue(
-          '%s',
-          {
-            processid: data.processid,
-            notes: $input.val(),
-            species: data.species,
-            bin_uri: data.bin_uri
-          },
-          {priority: 'event'}
-        );
+      // Enhanced state restoration with consistent delay
+      const restoreStates = () => {
+        const delay = 50;
+        setTimeout(() => {
+          table.rows({page: 'current'}).every(function() {
+            const data = this.data();
+            if (!data?.processid) return;
+
+            const state = stateManager.load(data.processid);
+            if (state) {
+              Object.assign(data, state);
+              this.data(data);
+              const $row = $(this.node());
+              stateManager.updateDOM($row, state);
+            }
+          });
+        }, delay);
+      };
+
+      // State change listener with debouncing
+      let stateChangeTimeout;
+      document.addEventListener('stateChange', function(e) {
+        if (e.detail.tableId === (table.table().node().id || 'default')) return;
+
+        clearTimeout(stateChangeTimeout);
+        stateChangeTimeout = setTimeout(() => {
+          table.rows().every(function() {
+            const data = this.data();
+            if (data?.processid === e.detail.processid) {
+              data[e.detail.type] = e.detail.value;
+              this.data(data);
+              stateManager.updateDOM($(this.node()), {
+                [e.detail.type]: e.detail.value
+              });
+            }
+          });
+        }, 50);
+      });
+
+      // Try to restore states from localStorage
+      try {
+        const stored = localStorage.getItem('tableStates');
+        const storedVersion = localStorage.getItem('stateVersion');
+        if (stored) {
+          window.tableStates = JSON.parse(stored);
+          window.stateVersion = parseInt(storedVersion) || window.stateVersion;
+        }
+      } catch(e) {
+        console.warn('Error loading stored states:', e);
+      }
+
+      // Table event bindings
+      table.on('draw.dt', restoreStates);
+      table.on('page.dt', restoreStates);
+      table.on('search.dt', restoreStates);
+
+      // Initial state application
+      table.one('init', function() {
+        restoreStates();
       });
     }
-  ", flag_js, ns("specimen_selection"), ns("specimen_flag"), ns("specimen_notes")))
+  ", flag_js, ns("specimen_flag"), ns("specimen_notes")))
 }
 
 #' Get standard table CSS
@@ -835,7 +962,43 @@ get_table_css <- function() {
     white-space: nowrap !important;
     overflow: hidden !important;
     text-overflow: ellipsis !important;
-    width: auto !important;
+    min-width: 100px !important;
+    max-width: 100px !important;
+  }
+
+  /* Fixed Column Styles */
+  .fixed-col {
+    background-color: white !important;
+    min-width: 100px !important;
+    max-width: 100px !important;
+  }
+
+  /* Column-specific widths */
+  .datatable td.selected-col {
+    width: 40px !important;
+    min-width: 40px !important;
+    max-width: 40px !important;
+  }
+
+  .datatable td.flag-col {
+    width: 100px !important;
+    min-width: 100px !important;
+    max-width: 100px !important;
+  }
+
+  .datatable td.notes-col {
+    width: 100px !important;
+    min-width: 100px !important;
+    max-width: 100px !important;
+  }
+
+  /* Content overflow handling */
+  .cell-content {
+    max-width: 100px !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    display: block !important;
   }
 
   /* Interactive Elements */
@@ -843,25 +1006,34 @@ get_table_css <- function() {
     width: 16px !important;
     height: 16px !important;
     padding: 0 !important;
-    margin: 0 !important;
-    vertical-align: middle !important;
+    margin: 0 auto !important;
+    display: block !important;
   }
 
   .specimen-flag {
     width: 100% !important;
-    min-width: 120px !important;
+    min-width: 90px !important;
     height: 20px !important;
     padding: 1px 4px !important;
     font-size: 11px !important;
     line-height: 1.2 !important;
+    border: 1px solid #ced4da !important;
+    border-radius: 4px !important;
+    background-color: #fff !important;
+  }
+
+  .specimen-flag:focus {
+    border-color: #80bdff !important;
+    outline: 0 !important;
+    box-shadow: 0 0 0 0.2rem rgba(0,123,255,.25) !important;
   }
 
   .specimen-notes {
     width: 100% !important;
-    min-width: 150px !important;
     height: 20px !important;
     font-size: 11px !important;
     line-height: 1.2 !important;
+    padding: 1px 4px !important;
     transition: all 0.2s ease-in-out !important;
   }
 
@@ -871,16 +1043,6 @@ get_table_css <- function() {
     z-index: 1000 !important;
     background: white !important;
     box-shadow: 0 2px 4px rgba(0,0,0,0.2) !important;
-  }
-
-  /* Force No-Wrap */
-  .datatable td,
-  .datatable th,
-  .datatable tr,
-  .datatable div {
-    white-space: nowrap !important;
-    overflow: hidden !important;
-    text-overflow: ellipsis !important;
   }
 
   /* Scrolling */
@@ -917,23 +1079,22 @@ get_table_css <- function() {
   .DTFC_LeftBodyWrapper {
     border-right: 2px solid #dee2e6 !important;
     box-shadow: 4px 0px 8px rgba(0,0,0,0.1) !important;
+    overflow-y: hidden !important;
   }
 
   .DTFC_Cloned {
-    background-color: #fff !important;
+    background-color: white !important;
+  }
+
+  .DTFC_LeftHeadWrapper table,
+  .DTFC_LeftBodyWrapper table {
+    margin-top: 0 !important;
+    border-collapse: collapse !important;
   }
 
   .DTFC_LeftHeadWrapper table thead th {
     background-color: #f8f9fa !important;
     border-bottom: 2px solid #dee2e6 !important;
-  }
-
-  .dataTables_wrapper .DTFC_LeftWrapper {
-    z-index: 2 !important;
-  }
-
-  .dataTables_wrapper .DTFC_LeftHeadWrapper {
-    z-index: 3 !important;
   }
 
   .DTFC_LeftBodyLiner {
@@ -950,43 +1111,16 @@ get_table_css <- function() {
     margin-right: 5px !important;
   }
 
-  /* Fixed Columns */
-    .fixed-col {
-      background-color: white !important;
-    }
-
-  .DTFC_LeftWrapper {
-    border-right: 2px solid #dee2e6 !important;
-    z-index: 2 !important;
-  }
-
-  .DTFC_LeftHeadWrapper {
-    border-bottom: 2px solid #dee2e6 !important;
-    z-index: 3 !important;
-  }
-
-  .DTFC_LeftBodyWrapper {
-    overflow-y: hidden !important;
-  }
-
-  .DTFC_Cloned {
-    background-color: white !important;
-  }
-
-  .DTFC_LeftHeadWrapper table thead th {
-    background-color: #f8f9fa !important;
-  }
-
   /* Shadow effect */
-    .DTFC_LeftWrapper::after {
-      content: '';
-      position: absolute;
-      top: 0;
-      right: 0;
-      width: 4px;
-      height: 100%;
-      box-shadow: 2px 0 5px rgba(0,0,0,0.1);
-    }
+  .DTFC_LeftWrapper::after {
+    content: '' !important;
+    position: absolute !important;
+    top: 0 !important;
+    right: 0 !important;
+    width: 4px !important;
+    height: 100% !important;
+    box-shadow: 2px 0 5px rgba(0,0,0,0.1) !important;
+  }
   "
 }
 
