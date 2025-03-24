@@ -11,6 +11,7 @@ source("R/config/constants.R")
 source("R/config/column_definitions.R")
 
 # Source utility functions
+source("R/utils/ErrorBoundary.R")
 source("R/utils/bags_grading.R")
 source("R/utils/specimen_ranking.R")
 source("R/utils/specimen_validation.R")
