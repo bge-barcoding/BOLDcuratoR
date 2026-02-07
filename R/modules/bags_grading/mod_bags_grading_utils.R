@@ -232,7 +232,7 @@ format_grade_table <- function(data, ns = NULL, grade) {
 
   if(grade == "E" && !is.null(dt)) {
     # Use identification column instead of species for coloring
-    unique_identifications <- sort(unique(as.character(prepared_data$identification)))
+    unique_identifications <- sort(unique(as.character(data$identification)))
     n_identifications <- length(unique_identifications)
 
     # Define visually distinct pastel colors for better species differentiation
