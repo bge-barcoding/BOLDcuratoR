@@ -8,7 +8,7 @@
 #' @export
 
 # Updated sync functions to better handle reactivity
-sync_state_with_rv <- function(rv, state, key) {
+sync_state_with_rv <- function(rv, state, key, logger = NULL) {
   # Map internal rv keys to state keys
   state_key <- switch(key,
                       "selected_specimens" = "selected_specimens",
@@ -32,7 +32,7 @@ sync_state_with_rv <- function(rv, state, key) {
   }
 }
 
-sync_rv_with_state <- function(rv, state, key) {
+sync_rv_with_state <- function(rv, state, key, logger = NULL) {
   # Map state keys to internal rv keys
   state_key <- switch(key,
                       "selected_specimens" = "selected_specimens",
@@ -88,11 +88,11 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
       for (key in sync_keys) {
         # Only sync if the key exists in state
         if (!is.null(state$get_store()[[key]])) {
-          sync_rv_with_state(rv, state, key)
+          sync_rv_with_state(rv, state, key, logger)
         }
         # Only sync if the key exists in rv
         if (!is.null(rv[[key]])) {
-          sync_state_with_rv(rv, state, key)
+          sync_state_with_rv(rv, state, key, logger)
         }
       }
     })
@@ -600,7 +600,7 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
       sync_state = function() {
         sync_keys <- c("selected_specimens", "flagged_specimens", "curator_notes", "metrics")
         for (key in sync_keys) {
-          sync_state_with_rv(rv, state, key)
+          sync_state_with_rv(rv, state, key, logger)
         }
       },
 
@@ -612,12 +612,12 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
 
       clear_selections = function() {
         rv$selected_specimens <- list()
-        sync_state_with_rv(rv, state, "selected_specimens")
+        sync_state_with_rv(rv, state, "selected_specimens", logger)
       },
 
       clear_flags = function() {
         rv$flagged_specimens <- list()
-        sync_state_with_rv(rv, state, "flagged_specimens")
+        sync_state_with_rv(rv, state, "flagged_specimens", logger)
       }
     )
   })
