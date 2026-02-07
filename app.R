@@ -28,6 +28,7 @@ source("R/modules/data_import/mod_data_import_server.R")
 source("R/modules/data_import/mod_data_import_utils.R")
 
 # Source analysis modules
+source("R/modules/specimen_handling/specimen_validator.R")
 source("R/modules/specimen_handling/specimen_processor.R")
 source("R/modules/specimen_handling/specimen_scorer.R")
 source("R/modules/specimen_handling/mod_specimen_handling_server.R")

@@ -425,13 +425,13 @@ Ordered for safe, incremental execution. Each item is independent and results in
 
 ### Round 2 — Fix Double-Sourcing (Critical)
 
-- [ ] **W3. Eliminate double-sourcing between global.R and app.R** `P1-critical` `architecture`
+- [x] **W3. Eliminate double-sourcing between global.R and app.R** `P1-critical` `architecture`
   - **Files:** `global.R`, `app.R`
   - **Problem:** `global.R` globs all R files, then `app.R` sources ~30 files explicitly. Everything runs twice.
   - **Fix:** Remove `.source_utils()` and `.source_modules()` from `global.R`. Keep `global.R` for package installation, directory creation, and config loading only. Keep `app.R` as the single source of truth for file loading order.
   - **Depends on:** W4 (must add missing source to `app.R` first).
 
-- [ ] **W4. Add missing `specimen_validator.R` to app.R** `P1-critical` `bug`
+- [x] **W4. Add missing `specimen_validator.R` to app.R** `P1-critical` `bug`
   - **File:** `app.R`
   - **Problem:** `app.R` sources `specimen_processor.R` and `specimen_scorer.R` but not `specimen_validator.R`. Works only because `global.R` globs it. Will break after W3.
   - **Fix:** Add `source("R/modules/specimen_handling/specimen_validator.R")` before `specimen_processor.R` in `app.R`.
