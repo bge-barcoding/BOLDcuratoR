@@ -339,8 +339,7 @@ server <- function(input, output, session) {
 
             state$update_state(
               "selected_specimens",
-              current_selections,
-              validate_selected_specimens
+              current_selections
             )
 
             # Log selection

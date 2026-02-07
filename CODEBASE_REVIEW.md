@@ -413,12 +413,12 @@ Ordered for safe, incremental execution. Each item is independent and results in
 
 ### Round 1 — Fix Runtime Errors (Critical)
 
-- [ ] **W1. Add `get_metrics()` to SpecimenProcessor** `P1-critical` `bug`
+- [x] **W1. Add `get_metrics()` to SpecimenProcessor** `P1-critical` `bug`
   - **File:** `R/modules/specimen_handling/specimen_processor.R`
   - **Problem:** `mod_specimen_handling_server.R:163` calls `processor$get_metrics()` but the method doesn't exist. Will crash at runtime.
   - **Fix:** Add `get_metrics = function() { private$last_metrics }` to `SpecimenProcessor` public methods.
 
-- [ ] **W2. Define or remove `validate_selected_specimens`** `P1-critical` `bug`
+- [x] **W2. Define or remove `validate_selected_specimens`** `P1-critical` `bug`
   - **File:** `app.R:343`
   - **Problem:** `validate_selected_specimens` is passed to `state$update_state()` as a validation callback but is never defined anywhere. Will error when specimens are selected from BAGS tabs.
   - **Fix:** Either define the function or remove the third argument from the `update_state()` call.

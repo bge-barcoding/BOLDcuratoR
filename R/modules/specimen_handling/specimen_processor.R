@@ -81,6 +81,12 @@ SpecimenProcessor <- R6::R6Class(
 
         result
       })
+    },
+
+    #' @description Get metrics from last processing run
+    #' @return List of quality metrics or NULL if no processing has occurred
+    get_metrics = function() {
+      private$last_metrics
     }
   ),
 
