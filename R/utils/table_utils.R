@@ -486,12 +486,10 @@ get_table_callback <- function(ns, flag_options = NULL) {
 
       // Global state store with enhanced persistence
       window.tableStates = window.tableStates || {};
-      window.stateVersion = (window.stateVersion || 0) + 1;
 
       const stateManager = {
         getKey: (processid) => {
-          const tableId = table.table().node().id || 'default';
-          return `${tableId}_${processid}_${window.stateVersion}`;
+          return `specimen_${processid}`;
         },
 
         save: function(processid, type, value) {
@@ -501,7 +499,6 @@ get_table_callback <- function(ns, flag_options = NULL) {
           window.tableStates[key].timestamp = Date.now();
           try {
             localStorage.setItem('tableStates', JSON.stringify(window.tableStates));
-            localStorage.setItem('stateVersion', window.stateVersion.toString());
           } catch(e) {
             console.warn('Error saving state:', e);
           }
@@ -522,8 +519,7 @@ get_table_callback <- function(ns, flag_options = NULL) {
             species: rowData.species || '',
             bin_uri: rowData.bin_uri || '',
             timestamp: Date.now(),
-            table_id: table.table().node().id || 'default',
-            state_version: window.stateVersion
+            table_id: table.table().node().id || 'default'
           };
 
           if (type === 'flag') {
@@ -552,8 +548,7 @@ get_table_callback <- function(ns, flag_options = NULL) {
               type,
               value,
               tableId: table.table().node().id || 'default',
-              timestamp: Date.now(),
-              stateVersion: window.stateVersion
+              timestamp: Date.now()
             }
           }));
         },
@@ -636,10 +631,10 @@ get_table_callback <- function(ns, flag_options = NULL) {
       // Try to restore states from localStorage
       try {
         const stored = localStorage.getItem('tableStates');
-        const storedVersion = localStorage.getItem('stateVersion');
         if (stored) {
-          window.tableStates = JSON.parse(stored);
-          window.stateVersion = parseInt(storedVersion) || window.stateVersion;
+          const parsed = JSON.parse(stored);
+          // Merge with in-memory state (in-memory wins on conflict)
+          window.tableStates = Object.assign(parsed, window.tableStates);
         }
       } catch(e) {
         console.warn('Error loading stored states:', e);

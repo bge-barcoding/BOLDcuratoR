@@ -28,12 +28,29 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
     observe({
       logger$info(sprintf("Initializing state for BAGS grade %s module", grade))
       store <- state$get_store()
-      if (!is.null(store$specimen_curator_notes)) {
-        isolate({
+
+      isolate({
+        # Restore selections from state
+        if (!is.null(store$selected_specimens)) {
+          rv$selected_specimens <- store$selected_specimens
+          logger$info("Restored selected specimens from state",
+                      list(count = length(store$selected_specimens)))
+        }
+
+        # Restore flags from state
+        if (!is.null(store$specimen_flags)) {
+          rv$flagged_specimens <- store$specimen_flags
+          logger$info("Restored specimen flags from state",
+                      list(count = length(store$specimen_flags)))
+        }
+
+        # Restore curator notes from state
+        if (!is.null(store$specimen_curator_notes)) {
           rv$curator_notes <- store$specimen_curator_notes
-          logger$info("Restored curator notes from state")
-        })
-      }
+          logger$info("Restored curator notes from state",
+                      list(count = length(store$specimen_curator_notes)))
+        }
+      })
     })
 
     # Main data observer with detailed logging

@@ -471,16 +471,17 @@ Ordered for safe, incremental execution. Each item is independent and results in
 
 ### Round 5 — Structural Improvements (Medium, Optional)
 
-- [ ] **W10. Remove or convert `interfaces.R`** `P3-medium` `cleanup`
+- [x] **W10. Remove `interfaces.R`** `P3-medium` `cleanup`
   - **File:** `R/modules/interfaces.R`
   - **Problem:** Defines interface stubs (`api_interface`, `specimen_interface`, etc.) that are never checked, implemented, or referenced. R doesn't enforce these.
-  - **Options:** Delete, or convert to a reference comment block.
+  - **Fix:** Deleted file and removed `source()` call from `app.R`.
 
-- [ ] **W11. Simplify state management** `P3-medium` `architecture`
-  - **Files:** `mod_specimen_handling_server.R`, `mod_bags_grading_server.R`
-  - **Problem:** Three overlapping state layers (StateManager R6, per-module reactiveValues, JS localStorage) with bidirectional sync and inconsistent key names (`flagged_specimens` ↔ `specimen_flags`).
-  - **Fix:** Use StateManager as single source of truth. Remove redundant local rv copies of shared state. Standardize key names. Remove `sync_state_with_rv()` / `sync_rv_with_state()`.
-  - **Note:** This is the most complex change. Should be done carefully with manual testing.
+- [x] **W11. Fix state persistence across views and filtering** `P3-medium` `architecture`
+  - **Files:** `app.R`, `mod_bags_grading_server.R`, `R/utils/table_utils.R`
+  - **Problems fixed:**
+    - **(a) Species-vs-processid key mismatch (app.R):** Cross-module selection handler used `species` as dictionary key but specimen handling expected `processid`. Fixed to key by processid with full metadata, and deselect previous representative for same species (radio button = one per species).
+    - **(b) BAGS module only restored curator_notes from state, not selections or flags.** Added restoration of `selected_specimens` and `specimen_flags` from StateManager on init, so switching BAGS tabs preserves all annotations.
+    - **(c) JS localStorage keys invalidated on every table re-render.** `stateVersion` was incremented on each render, making localStorage keys stale. Fixed by using stable `specimen_{processid}` keys shared across all tables. Removed `stateVersion` tracking entirely.
 
 ---
 
