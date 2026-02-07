@@ -407,6 +407,83 @@ to `app.R` before `specimen_processor.R`.
 
 ---
 
+## Work Items
+
+Ordered for safe, incremental execution. Each item is independent and results in one commit/PR.
+
+### Round 1 — Fix Runtime Errors (Critical)
+
+- [ ] **W1. Add `get_metrics()` to SpecimenProcessor** `P1-critical` `bug`
+  - **File:** `R/modules/specimen_handling/specimen_processor.R`
+  - **Problem:** `mod_specimen_handling_server.R:163` calls `processor$get_metrics()` but the method doesn't exist. Will crash at runtime.
+  - **Fix:** Add `get_metrics = function() { private$last_metrics }` to `SpecimenProcessor` public methods.
+
+- [ ] **W2. Define or remove `validate_selected_specimens`** `P1-critical` `bug`
+  - **File:** `app.R:343`
+  - **Problem:** `validate_selected_specimens` is passed to `state$update_state()` as a validation callback but is never defined anywhere. Will error when specimens are selected from BAGS tabs.
+  - **Fix:** Either define the function or remove the third argument from the `update_state()` call.
+
+### Round 2 — Fix Double-Sourcing (Critical)
+
+- [ ] **W3. Eliminate double-sourcing between global.R and app.R** `P1-critical` `architecture`
+  - **Files:** `global.R`, `app.R`
+  - **Problem:** `global.R` globs all R files, then `app.R` sources ~30 files explicitly. Everything runs twice.
+  - **Fix:** Remove `.source_utils()` and `.source_modules()` from `global.R`. Keep `global.R` for package installation, directory creation, and config loading only. Keep `app.R` as the single source of truth for file loading order.
+  - **Depends on:** W4 (must add missing source to `app.R` first).
+
+- [ ] **W4. Add missing `specimen_validator.R` to app.R** `P1-critical` `bug`
+  - **File:** `app.R`
+  - **Problem:** `app.R` sources `specimen_processor.R` and `specimen_scorer.R` but not `specimen_validator.R`. Works only because `global.R` globs it. Will break after W3.
+  - **Fix:** Add `source("R/modules/specimen_handling/specimen_validator.R")` before `specimen_processor.R` in `app.R`.
+
+### Round 3 — Delete Orphan Files (High Priority)
+
+- [ ] **W5. Delete orphan and legacy files** `P2-high` `cleanup`
+  - **Files to delete:**
+    - `R/modules/bags_grading/old_mod_bags_table_utils.R` (legacy copy)
+    - `R/modules/bags_grading/mod_bags_table_utils.R` (superseded, zero callers)
+    - `R/modules/state/table_state_handler.R` (empty)
+    - `R/utils/table_state_utils.R` (zero callers, alternative implementation never wired in)
+    - `R/utils/specimen_ranking.R` (duplicated by SpecimenProcessor)
+    - `R/utils/specimen_validation.R` (duplicated by SpecimenValidator)
+  - **Verify:** Confirm no caller exists for any function in these files (already verified in this review).
+
+- [ ] **W6. Decide fate of `db_handler.R`** `P2-high` `architecture`
+  - **File:** `R/utils/db_handler.R`
+  - **Problem:** Full SQLite persistence layer (init_database, get/update specimen flags/notes) with zero callers. `LoggingManager` handles its own DB separately.
+  - **Options:** (a) Wire into modules for persistent flag/note storage across sessions, or (b) delete if persistence is not needed.
+
+### Round 4 — Clean Dead Functions in Active Files (Medium)
+
+- [ ] **W7. Remove orphan functions from `table_utils.R`** `P3-medium` `cleanup`
+  - **File:** `R/utils/table_utils.R`
+  - **Remove:** `format_interactive_column()`, `format_table_columns()`, `prepare_table_data()`, `format_specimen_fields()`, `format_metrics()`, `create_download_filename()`, `validate_table_input()`
+  - **Keep:** All functions that ARE called (`format_specimen_table()`, `get_table_callback()`, `sync_table_states()`, `prepare_module_data()`, `order_columns()`, `get_flag_options()`, `get_table_css()`, `create_table_container()`, formatting helpers, and the `format_*_table()` family).
+
+- [ ] **W8. Remove orphan functions from `mod_bags_grading_utils.R`** `P3-medium` `cleanup`
+  - **File:** `R/modules/bags_grading/mod_bags_grading_utils.R`
+  - **Remove:** `validate_bags_data()`, `prepare_download_data()`, `find_specimen_in_groups()`, `calculate_selection_metrics()`, `calculate_flag_metrics()`, `validate_specimen_selection()`
+  - **Keep:** `filter_grade_specimens()`, `calculate_grade_metrics()`, `organize_grade_specimens()`, `create_grade_tables()`, `format_grade_table()`, `generate_table_caption()`
+
+- [ ] **W9. Remove orphan functions from `mod_specimen_handling_server.R`** `P3-medium` `cleanup`
+  - **File:** `R/modules/specimen_handling/mod_specimen_handling_server.R`
+  - **Remove:** `update_filtered_data()` (line 628), `validate_specimen_data()` (line 666) — both defined outside the `moduleServer()` block and never called.
+
+### Round 5 — Structural Improvements (Medium, Optional)
+
+- [ ] **W10. Remove or convert `interfaces.R`** `P3-medium` `cleanup`
+  - **File:** `R/modules/interfaces.R`
+  - **Problem:** Defines interface stubs (`api_interface`, `specimen_interface`, etc.) that are never checked, implemented, or referenced. R doesn't enforce these.
+  - **Options:** Delete, or convert to a reference comment block.
+
+- [ ] **W11. Simplify state management** `P3-medium` `architecture`
+  - **Files:** `mod_specimen_handling_server.R`, `mod_bags_grading_server.R`
+  - **Problem:** Three overlapping state layers (StateManager R6, per-module reactiveValues, JS localStorage) with bidirectional sync and inconsistent key names (`flagged_specimens` ↔ `specimen_flags`).
+  - **Fix:** Use StateManager as single source of truth. Remove redundant local rv copies of shared state. Standardize key names. Remove `sync_state_with_rv()` / `sync_rv_with_state()`.
+  - **Note:** This is the most complex change. Should be done carefully with manual testing.
+
+---
+
 ## Summary of Issues by Severity
 
 | Severity | Count | Issues |
