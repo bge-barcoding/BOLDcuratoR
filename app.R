@@ -13,8 +13,6 @@ source("R/config/column_definitions.R")
 # Source utility functions
 source("R/utils/ErrorBoundary.R")
 source("R/utils/bags_grading.R")
-source("R/utils/specimen_ranking.R")
-source("R/utils/specimen_validation.R")
 source("R/utils/table_utils.R")
 
 # Source core modules

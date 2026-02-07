@@ -438,7 +438,7 @@ Ordered for safe, incremental execution. Each item is independent and results in
 
 ### Round 3 — Delete Orphan Files (High Priority)
 
-- [ ] **W5. Delete orphan and legacy files** `P2-high` `cleanup`
+- [x] **W5. Delete orphan and legacy files** `P2-high` `cleanup`
   - **Files to delete:**
     - `R/modules/bags_grading/old_mod_bags_table_utils.R` (legacy copy)
     - `R/modules/bags_grading/mod_bags_table_utils.R` (superseded, zero callers)
@@ -448,10 +448,10 @@ Ordered for safe, incremental execution. Each item is independent and results in
     - `R/utils/specimen_validation.R` (duplicated by SpecimenValidator)
   - **Verify:** Confirm no caller exists for any function in these files (already verified in this review).
 
-- [ ] **W6. Decide fate of `db_handler.R`** `P2-high` `architecture`
+- [x] **W6. Decide fate of `db_handler.R`** `P2-high` `architecture`
   - **File:** `R/utils/db_handler.R`
   - **Problem:** Full SQLite persistence layer (init_database, get/update specimen flags/notes) with zero callers. `LoggingManager` handles its own DB separately.
-  - **Options:** (a) Wire into modules for persistent flag/note storage across sessions, or (b) delete if persistence is not needed.
+  - **Decision:** Deleted. Zero callers, recoverable from git history if persistence is needed later.
 
 ### Round 4 — Clean Dead Functions in Active Files (Medium)
 
