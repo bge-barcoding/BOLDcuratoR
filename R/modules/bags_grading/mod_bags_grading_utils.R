@@ -220,15 +220,10 @@ create_grade_tables <- function(organized, grade, ns, current_sel, current_flags
 format_grade_table <- function(data, ns = NULL, grade) {
   if (is.null(data) || nrow(data) == 0) return(NULL)
 
-  prepared_data <- prepare_module_data(
-    data = data,
-    current_selections = NULL,
-    current_flags = NULL,
-    current_notes = NULL
-  )
-
+  # Data arrives already prepared with annotations from create_grade_tables.
+  # Go straight to formatting.
   dt <- format_specimen_table(
-    data = prepared_data,
+    data = data,
     ns = ns,
     buttons = c('copy', 'csv', 'excel'),
     page_length = 50,

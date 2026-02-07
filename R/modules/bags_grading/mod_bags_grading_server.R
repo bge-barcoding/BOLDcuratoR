@@ -136,9 +136,10 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
     })
 
     # Specimen tables output.
-    # Reactive to: rv$filtered_data, rv$selected_specimens,
-    #              rv$flagged_specimens, rv$curator_notes
-    # so annotations from other modules (via state sync) trigger a re-render.
+    # Reactive only to rv$filtered_data (filter/data changes).
+    # Annotations read via isolate() so flag/note changes don't cause
+    # a full re-render (which would destroy DT search state).
+    # Annotations are current because the sync observer keeps rv in sync.
     output$specimen_tables <- renderUI({
       logger$info(sprintf("Rendering specimen tables for grade %s", grade))
 
@@ -149,15 +150,13 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
 
       req(rv$filtered_data)
 
-      # Take reactive dependencies on annotations so tables re-render
-      # when they change (e.g. synced from specimen module via StateManager)
-      current_sel   <- rv$selected_specimens
-      current_flags <- rv$flagged_specimens
-      current_notes <- rv$curator_notes
+      current_sel   <- isolate(rv$selected_specimens)
+      current_flags <- isolate(rv$flagged_specimens)
+      current_notes <- isolate(rv$curator_notes)
 
       withProgress(message = 'Creating specimen tables', value = 0, {
         tryCatch({
-          data <- isolate(rv$filtered_data)
+          data <- rv$filtered_data
 
           if (is.null(data) || nrow(data) == 0) {
             logger$warn(sprintf("No data available for grade %s tables", grade))
@@ -283,9 +282,6 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
 
         rv$flagged_specimens <- current_flags
         state$update_state("specimen_flags", current_flags)
-
-        # Force table refresh
-        invalidateLater(100)
       }
     })
 
@@ -309,9 +305,6 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
 
         rv$curator_notes <- current_notes
         state$update_state("specimen_curator_notes", current_notes)
-
-        # Force table refresh
-        invalidateLater(100)
       }
     })
 

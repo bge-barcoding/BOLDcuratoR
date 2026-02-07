@@ -178,42 +178,43 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
       ))
     })
 
-    # Render the specimen table.
-    # Reactive to: rv$filtered_data, rv$selected_specimens,
-    #              rv$flagged_specimens, rv$curator_notes
-    # so that annotation changes (including from other modules via state sync)
-    # trigger a re-render with the latest values.
-    output$specimen_table <- renderDT({
-      req(rv$filtered_data)
-
-      # Take reactive dependencies on annotations so table re-renders
-      # when they change (e.g. synced from BAGS module via StateManager)
+    # Helper: build the prepared data frame with current annotations injected.
+    build_prepared_data <- function(data) {
       current_sel   <- rv$selected_specimens
       current_flags <- rv$flagged_specimens
       current_notes <- rv$curator_notes
 
-      data <- isolate(rv$filtered_data)
+      prepared <- prepare_module_data(
+        data = data,
+        current_selections = current_sel,
+        current_flags = current_flags,
+        current_notes = current_notes,
+        logger = logger
+      )
+
+      sync_table_states(
+        data = prepared,
+        current_state = list(
+          selections = current_sel,
+          flags = current_flags,
+          notes = current_notes
+        )
+      )
+    }
+
+    # Render the specimen table.
+    # Only reactive to rv$filtered_data so that filter changes trigger a
+    # full re-render. Annotation changes are pushed via DT proxy below.
+    output$specimen_table <- renderDT({
+      req(rv$filtered_data)
+      data <- rv$filtered_data
+
       logger$info("Starting specimen table preparation", list(
         initial_rows = nrow(data)
       ))
 
       tryCatch({
-        prepared_data <- prepare_module_data(
-          data = data,
-          current_selections = current_sel,
-          current_flags = current_flags,
-          current_notes = current_notes,
-          logger = logger
-        )
-
-        prepared_data <- sync_table_states(
-          data = prepared_data,
-          current_state = list(
-            selections = current_sel,
-            flags = current_flags,
-            notes = current_notes
-          )
-        )
+        prepared_data <- isolate(build_prepared_data(data))
 
         formatted_table <- format_specimen_table(
           data = prepared_data,
@@ -221,9 +222,9 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
           buttons = c('copy', 'csv', 'excel'),
           page_length = 50,
           selection = 'multiple',
-          current_selections = current_sel,
-          current_flags = current_flags,
-          current_notes = current_notes,
+          current_selections = isolate(rv$selected_specimens),
+          current_flags = isolate(rv$flagged_specimens),
+          current_notes = isolate(rv$curator_notes),
           logger = logger
         )
 
@@ -239,6 +240,23 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
         ))
         NULL
       })
+    })
+
+    # DT proxy: push annotation changes to the existing table without
+    # a full widget replacement. Preserves search, scroll, and page state.
+    specimen_proxy <- dataTableProxy("specimen_table")
+
+    observe({
+      # Reactive dependencies: re-fire when annotations change
+      sel   <- rv$selected_specimens
+      flags <- rv$flagged_specimens
+      notes <- rv$curator_notes
+
+      data <- isolate(rv$filtered_data)
+      if (is.null(data) || nrow(data) == 0) return()
+
+      prepared <- isolate(build_prepared_data(data))
+      replaceData(specimen_proxy, prepared, resetPaging = FALSE, clearSelection = "none")
     })
 
     # Update specimen selection handler
@@ -329,8 +347,6 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
             global_count = length(state$get_store()$selected_specimens)
           ))
 
-          # Force table refresh to reflect changes
-          invalidateLater(100)
         })
       }
     })
@@ -360,8 +376,6 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
           rv$flagged_specimens <- current_flags
           state$update_state("specimen_flags", current_flags)
 
-          # Trigger table refresh to sync states
-          invalidateLater(100)
         })
       }
     })
@@ -390,8 +404,6 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
           rv$curator_notes <- current_notes
           state$update_state("specimen_curator_notes", current_notes)
 
-          # Trigger table refresh to sync states
-          invalidateLater(100)
         })
       }
     })
