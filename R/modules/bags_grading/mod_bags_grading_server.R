@@ -24,31 +24,25 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
       )
     )
 
-    # Initialize observer for state restoration
+    # Sync annotations from StateManager into local rv.
+    # This fires whenever StateManager flags/notes/selections change
+    # (e.g. when specimen handling module writes to state), keeping rv in sync.
     observe({
-      logger$info(sprintf("Initializing state for BAGS grade %s module", grade))
       store <- state$get_store()
 
+      state_selections <- store$selected_specimens
+      state_flags      <- store$specimen_flags
+      state_notes      <- store$specimen_curator_notes
+
       isolate({
-        # Restore selections from state
-        if (!is.null(store$selected_specimens)) {
-          rv$selected_specimens <- store$selected_specimens
-          logger$info("Restored selected specimens from state",
-                      list(count = length(store$selected_specimens)))
+        if (!is.null(state_selections) && !identical(rv$selected_specimens, state_selections)) {
+          rv$selected_specimens <- state_selections
         }
-
-        # Restore flags from state
-        if (!is.null(store$specimen_flags)) {
-          rv$flagged_specimens <- store$specimen_flags
-          logger$info("Restored specimen flags from state",
-                      list(count = length(store$specimen_flags)))
+        if (!is.null(state_flags) && !identical(rv$flagged_specimens, state_flags)) {
+          rv$flagged_specimens <- state_flags
         }
-
-        # Restore curator notes from state
-        if (!is.null(store$specimen_curator_notes)) {
-          rv$curator_notes <- store$specimen_curator_notes
-          logger$info("Restored curator notes from state",
-                      list(count = length(store$specimen_curator_notes)))
+        if (!is.null(state_notes) && !identical(rv$curator_notes, state_notes)) {
+          rv$curator_notes <- state_notes
         }
       })
     })
@@ -141,7 +135,10 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
       })
     })
 
-    # Specimen tables output with detailed logging
+    # Specimen tables output.
+    # Reactive to: rv$filtered_data, rv$selected_specimens,
+    #              rv$flagged_specimens, rv$curator_notes
+    # so annotations from other modules (via state sync) trigger a re-render.
     output$specimen_tables <- renderUI({
       logger$info(sprintf("Rendering specimen tables for grade %s", grade))
 
@@ -151,6 +148,12 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
       }
 
       req(rv$filtered_data)
+
+      # Take reactive dependencies on annotations so tables re-render
+      # when they change (e.g. synced from specimen module via StateManager)
+      current_sel   <- rv$selected_specimens
+      current_flags <- rv$flagged_specimens
+      current_notes <- rv$curator_notes
 
       withProgress(message = 'Creating specimen tables', value = 0, {
         tryCatch({
@@ -172,9 +175,9 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
             sync_table_states(
               data = group_data,
               current_state = list(
-                selections = isolate(rv$selected_specimens),
-                flags = isolate(rv$flagged_specimens),
-                notes = isolate(rv$curator_notes)
+                selections = current_sel,
+                flags = current_flags,
+                notes = current_notes
               )
             )
           })
@@ -184,9 +187,9 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
             organized = organized,
             grade = grade,
             ns = ns,
-            current_sel = isolate(rv$selected_specimens),
-            current_flags = isolate(rv$flagged_specimens),
-            current_notes = isolate(rv$curator_notes),
+            current_sel = current_sel,
+            current_flags = current_flags,
+            current_notes = current_notes,
             logger = logger
           )
 

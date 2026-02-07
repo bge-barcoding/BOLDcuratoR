@@ -7,55 +7,6 @@
 #' @param logger Logger instance
 #' @export
 
-# Updated sync functions to better handle reactivity
-sync_state_with_rv <- function(rv, state, key, logger = NULL) {
-  # Map internal rv keys to state keys
-  state_key <- switch(key,
-                      "selected_specimens" = "selected_specimens",
-                      "flagged_specimens" = "specimen_flags",
-                      "curator_notes" = "specimen_curator_notes",
-                      key  # default to same key if no mapping needed
-  )
-
-  # Only sync if values are different to prevent unnecessary updates
-  if (!identical(isolate(rv[[key]]), isolate(state$get_store()[[state_key]]))) {
-    # Update state manager with current rv value
-    state$update_state(state_key, isolate(rv[[key]]))
-
-    # Log the sync for debugging
-    if (!is.null(logger)) {
-      logger$info(sprintf("Synced %s to state", key), list(
-        rv_length = length(isolate(rv[[key]])),
-        state_length = length(isolate(state$get_store()[[state_key]]))
-      ))
-    }
-  }
-}
-
-sync_rv_with_state <- function(rv, state, key, logger = NULL) {
-  # Map state keys to internal rv keys
-  state_key <- switch(key,
-                      "selected_specimens" = "selected_specimens",
-                      "flagged_specimens" = "specimen_flags",
-                      "curator_notes" = "specimen_curator_notes",
-                      key  # default to same key if no mapping needed
-  )
-
-  store <- state$get_store()
-  if (!identical(isolate(rv[[key]]), isolate(store[[state_key]]))) {
-    # Update reactive values with current state value
-    rv[[key]] <- isolate(store[[state_key]])
-
-    # Log the sync for debugging
-    if (!is.null(logger)) {
-      logger$info(sprintf("Synced %s from state", key), list(
-        rv_length = length(rv[[key]]),
-        state_length = length(store[[state_key]])
-      ))
-    }
-  }
-}
-
 mod_specimen_handling_server <- function(id, state, processor, logger) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
@@ -74,68 +25,28 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
       )
     )
 
-    # Add state synchronization observer right after rv initialization
+    # Sync annotations from StateManager into local rv.
+    # This fires whenever StateManager flags/notes/selections change
+    # (e.g. when another module writes to state), keeping rv in sync.
     observe({
-      # Define which keys need to be synced between rv and state
-      sync_keys <- c(
-        "selected_specimens",
-        "flagged_specimens",
-        "curator_notes",
-        "metrics"
-      )
-
-      # Sync all keys in both directions
-      for (key in sync_keys) {
-        # Only sync if the key exists in state
-        if (!is.null(state$get_store()[[key]])) {
-          sync_rv_with_state(rv, state, key, logger)
-        }
-        # Only sync if the key exists in rv
-        if (!is.null(rv[[key]])) {
-          sync_state_with_rv(rv, state, key, logger)
-        }
-      }
-    })
-
-    # Replace the state restoration observer with this updated version
-    # This ensures consistent key names and proper state restoration
-    observe({
-      logger$info("Initializing specimen handling state")
       store <- state$get_store()
 
-      # Add validation of store contents
-      logger$info("Current store keys", list(
-        available_keys = names(store)
-      ))
+      # Read state using correct StateManager key names
+      state_selections <- store$selected_specimens
+      state_flags      <- store$specimen_flags
+      state_notes      <- store$specimen_curator_notes
 
-      # Restore selected specimens from state
-      # Changed key name to match the one used in state updates
-      if (!is.null(store$selected_specimens)) {
-        isolate({
-          rv$selected_specimens <- store$selected_specimens
-          logger$info("Restored selected specimens from state",
-                      list(count = length(store$selected_specimens)))
-        })
-      }
-
-      # Restore flags from state
-      # Use consistent key name 'specimen_flags'
-      if (!is.null(store$specimen_flags)) {
-        isolate({
-          rv$flagged_specimens <- store$specimen_flags
-          logger$info("Restored specimen flags from state",
-                      list(count = length(store$specimen_flags)))
-        })
-      }
-
-      # Restore curator notes from state
-      if (!is.null(store$specimen_curator_notes)) {
-        isolate({
-          rv$curator_notes <- store$specimen_curator_notes
-          logger$info("Restored curator notes from state",
-                      list(count = length(store$specimen_curator_notes)))
-        })
-      }
+      isolate({
+        if (!is.null(state_selections) && !identical(rv$selected_specimens, state_selections)) {
+          rv$selected_specimens <- state_selections
+        }
+        if (!is.null(state_flags) && !identical(rv$flagged_specimens, state_flags)) {
+          rv$flagged_specimens <- state_flags
+        }
+        if (!is.null(state_notes) && !identical(rv$curator_notes, state_notes)) {
+          rv$curator_notes <- state_notes
+        }
+      })
     })
 
     # Update specimen processing observer to use rv instead of processing_status function
@@ -267,45 +178,52 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
       ))
     })
 
-    # Update the specimen table output to use rv
+    # Render the specimen table.
+    # Reactive to: rv$filtered_data, rv$selected_specimens,
+    #              rv$flagged_specimens, rv$curator_notes
+    # so that annotation changes (including from other modules via state sync)
+    # trigger a re-render with the latest values.
     output$specimen_table <- renderDT({
-      req(rv$filtered_data)  # Changed from filtered_data()
+      req(rv$filtered_data)
 
-      data <- rv$filtered_data  # Changed from filtered_data()
+      # Take reactive dependencies on annotations so table re-renders
+      # when they change (e.g. synced from BAGS module via StateManager)
+      current_sel   <- rv$selected_specimens
+      current_flags <- rv$flagged_specimens
+      current_notes <- rv$curator_notes
+
+      data <- isolate(rv$filtered_data)
       logger$info("Starting specimen table preparation", list(
         initial_rows = nrow(data)
       ))
 
       tryCatch({
-        # First prepare the data - updated to use rv
         prepared_data <- prepare_module_data(
           data = data,
-          current_selections = isolate(rv$selected_specimens),  # Changed from selected_specimens()
-          current_flags = isolate(rv$flagged_specimens),      # Changed from flagged_specimens()
-          current_notes = isolate(rv$curator_notes),          # Changed from curator_notes()
+          current_selections = current_sel,
+          current_flags = current_flags,
+          current_notes = current_notes,
           logger = logger
         )
 
-        # Sync table states - updated to use rv
         prepared_data <- sync_table_states(
           data = prepared_data,
           current_state = list(
-            selections = isolate(rv$selected_specimens),
-            flags = isolate(rv$flagged_specimens),
-            notes = isolate(rv$curator_notes)
+            selections = current_sel,
+            flags = current_flags,
+            notes = current_notes
           )
         )
 
-        # Then create and format the table - updated to use rv
         formatted_table <- format_specimen_table(
           data = prepared_data,
           ns = ns,
           buttons = c('copy', 'csv', 'excel'),
           page_length = 50,
           selection = 'multiple',
-          current_selections = isolate(rv$selected_specimens),
-          current_flags = isolate(rv$flagged_specimens),
-          current_notes = isolate(rv$curator_notes),
+          current_selections = current_sel,
+          current_flags = current_flags,
+          current_notes = current_notes,
           logger = logger
         )
 
@@ -596,14 +514,7 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
       metrics = reactive({ rv$metrics }),
       processing_status = reactive({ rv$processing_status }),
 
-      # Add helper functions for state management
-      sync_state = function() {
-        sync_keys <- c("selected_specimens", "flagged_specimens", "curator_notes", "metrics")
-        for (key in sync_keys) {
-          sync_state_with_rv(rv, state, key, logger)
-        }
-      },
-
+      # Helper functions for state management
       reset_filters = function() {
         updateSelectInput(session, "rank_filter", selected = "All")
         updateNumericInput(session, "min_quality_score", value = 0)
@@ -612,12 +523,12 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
 
       clear_selections = function() {
         rv$selected_specimens <- list()
-        sync_state_with_rv(rv, state, "selected_specimens", logger)
+        state$update_state("selected_specimens", list())
       },
 
       clear_flags = function() {
         rv$flagged_specimens <- list()
-        sync_state_with_rv(rv, state, "flagged_specimens", logger)
+        state$update_state("specimen_flags", list())
       }
     )
   })
