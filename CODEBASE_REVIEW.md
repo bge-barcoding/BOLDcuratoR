@@ -455,17 +455,17 @@ Ordered for safe, incremental execution. Each item is independent and results in
 
 ### Round 4 — Clean Dead Functions in Active Files (Medium)
 
-- [ ] **W7. Remove orphan functions from `table_utils.R`** `P3-medium` `cleanup`
+- [x] **W7. Remove orphan functions from `table_utils.R`** `P3-medium` `cleanup`
   - **File:** `R/utils/table_utils.R`
   - **Remove:** `format_interactive_column()`, `format_table_columns()`, `prepare_table_data()`, `format_specimen_fields()`, `format_metrics()`, `create_download_filename()`, `validate_table_input()`
   - **Keep:** All functions that ARE called (`format_specimen_table()`, `get_table_callback()`, `sync_table_states()`, `prepare_module_data()`, `order_columns()`, `get_flag_options()`, `get_table_css()`, `create_table_container()`, formatting helpers, and the `format_*_table()` family).
 
-- [ ] **W8. Remove orphan functions from `mod_bags_grading_utils.R`** `P3-medium` `cleanup`
+- [x] **W8. Remove orphan functions from `mod_bags_grading_utils.R`** `P3-medium` `cleanup`
   - **File:** `R/modules/bags_grading/mod_bags_grading_utils.R`
   - **Remove:** `validate_bags_data()`, `prepare_download_data()`, `find_specimen_in_groups()`, `calculate_selection_metrics()`, `calculate_flag_metrics()`, `validate_specimen_selection()`
   - **Keep:** `filter_grade_specimens()`, `calculate_grade_metrics()`, `organize_grade_specimens()`, `create_grade_tables()`, `format_grade_table()`, `generate_table_caption()`
 
-- [ ] **W9. Remove orphan functions from `mod_specimen_handling_server.R`** `P3-medium` `cleanup`
+- [x] **W9. Remove orphan functions from `mod_specimen_handling_server.R`** `P3-medium` `cleanup`
   - **File:** `R/modules/specimen_handling/mod_specimen_handling_server.R`
   - **Remove:** `update_filtered_data()` (line 628), `validate_specimen_data()` (line 666) — both defined outside the `moduleServer()` block and never called.
 
