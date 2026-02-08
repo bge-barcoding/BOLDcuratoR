@@ -266,11 +266,18 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
         paste0("filtered_specimens_", format(Sys.time(), "%Y%m%d_%H%M"), ".tsv")
       },
       content = function(file) {
-        # Change from filtered_data() to rv$filtered_data
         data <- rv$filtered_data
         if (is.null(data) || nrow(data) == 0) {
           return(NULL)
         }
+
+        store <- state$get_store()
+        data <- merge_annotations_for_export(
+          data,
+          selections = store$selected_specimens,
+          flags = store$specimen_flags,
+          notes = store$specimen_curator_notes
+        )
 
         write.table(data, file, sep = "\t", row.names = FALSE, quote = FALSE)
         logger$info("Downloaded filtered specimens", list(count = nrow(data)))

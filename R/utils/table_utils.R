@@ -904,6 +904,53 @@ create_species_colors <- function(species) {
   setNames(colors[1:length(unique_species)], unique_species)
 }
 
+#' Merge curator annotations into specimen data for export
+#'
+#' Produces clean text columns for selected, flag, curator_notes, and
+#' audit-trail fields (flag_user, flag_timestamp). Used by all export
+#' paths (ExportManager, download handlers) to ensure consistent
+#' annotation inclusion.
+#'
+#' @param data Data frame of specimen data (must contain processid column)
+#' @param selections Named list of selections keyed by processid
+#' @param flags Named list of flags keyed by processid (each entry has $flag, $user, $timestamp)
+#' @param notes Named list of curator notes keyed by processid (each entry has $text, $user, $timestamp)
+#' @return Data frame with clean text annotation columns appended
+#' @export
+merge_annotations_for_export <- function(data, selections = NULL, flags = NULL, notes = NULL) {
+  if (is.null(data) || nrow(data) == 0) return(data)
+
+  data$selected <- data$processid %in% names(selections)
+
+  data$flag <- sapply(data$processid, function(pid) {
+    if (!is.null(flags[[pid]])) {
+      f <- flags[[pid]]
+      if (is.list(f)) as.character(f$flag %||% "") else as.character(f)
+    } else ""
+  }, USE.NAMES = FALSE)
+
+  data$curator_notes <- sapply(data$processid, function(pid) {
+    if (!is.null(notes[[pid]])) {
+      n <- notes[[pid]]
+      if (is.list(n)) as.character(n$text %||% n$note %||% "") else as.character(n)
+    } else ""
+  }, USE.NAMES = FALSE)
+
+  data$flag_user <- sapply(data$processid, function(pid) {
+    if (!is.null(flags[[pid]]) && is.list(flags[[pid]])) {
+      as.character(flags[[pid]]$user %||% "")
+    } else ""
+  }, USE.NAMES = FALSE)
+
+  data$flag_timestamp <- sapply(data$processid, function(pid) {
+    if (!is.null(flags[[pid]]) && is.list(flags[[pid]])) {
+      as.character(flags[[pid]]$timestamp %||% "")
+    } else ""
+  }, USE.NAMES = FALSE)
+
+  data
+}
+
 #' Create table container with title and controls
 #' @param table DT datatable object
 #' @param title Table title
