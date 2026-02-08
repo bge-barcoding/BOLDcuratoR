@@ -9,6 +9,15 @@ mod_user_info_server <- function(id, state, logger) {
   moduleServer(id, function(input, output, session) {
     ns <- NS(id)
 
+    # Hide the shared key button if no fallback key is configured
+    observe({
+      if (is.null(get_fallback_api_key())) {
+        shinyjs::hide("use_shared_key")
+      } else {
+        shinyjs::show("use_shared_key")
+      }
+    }) |> bindEvent(TRUE, once = TRUE)
+
     # Validation message output
     output$validation_message <- renderUI({
       messages <- validate_inputs()
@@ -101,6 +110,25 @@ mod_user_info_server <- function(id, state, logger) {
                          type = "error")
         logger$error("Failed to save user information", e$message)
       })
+    })
+
+    # Handle shared/fallback API key
+    observeEvent(input$use_shared_key, {
+      fallback_key <- get_fallback_api_key()
+
+      if (is.null(fallback_key)) {
+        showNotification(
+          "No shared API key configured. Set the BOLD_API_KEY environment variable or create a .bold_api_key file.",
+          type = "warning",
+          duration = 8
+        )
+        logger$warn("Shared API key requested but none configured")
+        return()
+      }
+
+      updateTextInput(session, "bold_api_key", value = fallback_key)
+      showNotification("Shared API key loaded. Press Save to apply.", type = "message")
+      logger$info("Shared API key loaded from fallback source")
     })
 
     # Initialize user info from state if available

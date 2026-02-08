@@ -3,3 +3,4 @@ R/utils/table_utils working.R
 R/modules/state/state_manager_working.R
 R/utils/broken_table_utils.R
 .Rproj.user
+.bold_api_key

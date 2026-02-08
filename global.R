@@ -180,6 +180,28 @@ required_packages <- c(
   })
 }
 
+#' Get fallback BOLD API key for testing or shared use
+#'
+#' Checks in order:
+#'   1. BOLD_API_KEY environment variable
+#'   2. .bold_api_key file in app root (one line, gitignored)
+#'
+#' @return API key string or NULL if not found
+get_fallback_api_key <- function() {
+  # 1. Environment variable
+  key <- Sys.getenv("BOLD_API_KEY", unset = "")
+  if (nchar(key) > 0) return(key)
+
+  # 2. Local file
+  key_file <- ".bold_api_key"
+  if (file.exists(key_file)) {
+    key <- trimws(readLines(key_file, n = 1, warn = FALSE))
+    if (nchar(key) > 0) return(key)
+  }
+
+  NULL
+}
+
 # Main initialization
 tryCatch({
   # First install and load all required packages
