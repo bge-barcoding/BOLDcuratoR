@@ -514,15 +514,18 @@ Recommended sequencing based on dependencies and impact:
 ```
 Phase 1 - Foundation
   ├── #2 Annotation merge utility (shared dependency for #5, #6)
-  └── #1 Remove BAGS filters (independent, clean refactor)
+  ├── #1 Remove BAGS filters (independent, clean refactor)
+  └── #8a Wire up existing SQLite for annotation persistence
 
-Phase 2 - Downloads
+Phase 2 - Downloads & Persistence
   ├── #5 Download annotated records (depends on #2)
-  └── #6 Fix selected records download (depends on #2)
+  ├── #6 Fix selected records download (depends on #2)
+  └── #8b RDS persistence for specimen data + session metadata
 
 Phase 3 - UI Enhancements
   ├── #3 Dynamic pagination in BAGS tabs (independent)
-  └── #7 Read-only annotations in specimen table (independent)
+  ├── #7 Read-only annotations in specimen table (independent)
+  └── #8c Session resume UI + auto-save timer
 
 Phase 4 - New Feature
   └── #4 Species checklist / gap analysis panel (largest scope, independent)
@@ -566,4 +569,275 @@ search_taxa = NULL
 
 # In mod_data_import_server.R after successful search:
 state$update_state("search_taxa", params$taxonomy)
+```
+
+---
+
+## Issue #8: Saved session state — resume work across sessions
+
+**Priority:** High
+**Labels:** `feature`, `infrastructure`, `state-management`, `persistence`
+
+### Description
+
+Users need to be able to resume their work after closing the browser, losing internet, or returning the next day. This requires persisting application state (specimen data, annotations, selections, search parameters) to disk and providing a mechanism to restore it. Auto-saving as actions are made is essential to prevent data loss from unexpected disconnections.
+
+### Current State — What Exists Already
+
+The codebase has **significant infrastructure already built** for this but **none of it is wired up**:
+
+| Component | Status | Location |
+|-----------|--------|----------|
+| **SQLite database handler** | Fully implemented, **never called** | `R/utils/db_handler.R` |
+| SQLite database file | Exists on disk (98KB) | `data/specimen_tracking.db` |
+| Tables: `specimen_flags`, `specimen_notes`, `specimen_selections` | Schema defined, tables created | `db_handler.R:18-61` |
+| CRUD functions: `get_specimen_flags()`, `update_specimen_flag()`, etc. | Implemented with parameterised queries | `db_handler.R:77-179` |
+| **RDS save/load for table state** | Implemented, **never called** | `R/utils/table_state_utils.R:346-397` |
+| `save_table_state()` / `load_table_state()` | Working, with integrity verification | `table_state_utils.R:350-369` |
+| `verify_state_integrity()` | Checks for required fields | `table_state_utils.R:374-380` |
+| **StateManager** | In-memory only, no persistence | `R/modules/state/state_manager.R` |
+| State history tracking | Records changes but discards on session end | `state_manager.R:327-336` |
+| Session token (`session$token`) | Used for logging, not persistence | `app.R:240,351,404,420` |
+| `session$onSessionEnded` | Calls `state$reset_state()` — **destroys all state** | `app.R:417-424` |
+| **Directories** | `data/`, `logs/`, `output/`, `temp/` created at startup | `global.R:141-148` |
+| DBI + RSQLite | Listed as dependencies, loaded | `global.R:31-32` |
+
+### What Needs to Be Persisted
+
+| Data | Size Estimate | Volatility | Storage Strategy |
+|------|---------------|------------|------------------|
+| `specimen_data` (data frame) | 1-50 MB (hundreds to tens of thousands of rows, ~20+ columns including `nuc` sequences) | Set once per import, rarely changes | RDS file (fast serialization of large data frames) |
+| `selected_specimens` | < 100 KB | Changes frequently (user clicks) | SQLite (row-level updates) |
+| `specimen_flags` | < 100 KB | Changes frequently | SQLite (already has table schema) |
+| `specimen_curator_notes` | < 500 KB | Changes occasionally | SQLite (already has table schema) |
+| `bags_grades` | < 500 KB | Set once after processing | RDS file (alongside specimen data) |
+| `bin_analysis` | 1-5 MB | Set once after analysis | RDS file |
+| `user_info` (minus API key) | < 1 KB | Set once | SQLite or JSON |
+| `search_taxa` (input list) | < 10 KB | Set once per search | RDS or JSON |
+| `specimen_metrics` | < 1 KB | Derived, can be recalculated | Skip — recalculate on restore |
+
+### Options
+
+#### Option A (Recommended): Hybrid SQLite + RDS with auto-save
+
+Use the **existing SQLite database** for annotation state (flags, notes, selections) since it supports row-level updates efficiently, and **RDS files** for large data frames (specimen data, analysis results) since R serialization is much faster and smaller than SQLite for bulk data.
+
+**Architecture:**
+
+```
+data/sessions/{session_id}/
+  ├── session_meta.json     # session metadata, user info, search params, timestamps
+  ├── specimen_data.rds     # large data frame
+  ├── bags_grades.rds       # BAGS grade assignments
+  └── bin_analysis.rds      # BIN analysis results (if run)
+
+data/specimen_tracking.db   # shared across sessions (existing file)
+  ├── specimen_flags         # (existing table)
+  ├── specimen_notes         # (existing table)
+  ├── specimen_selections    # (existing table)
+  └── sessions               # NEW: session registry table
+```
+
+**Session registry table (new):**
+```sql
+CREATE TABLE sessions (
+  session_id TEXT PRIMARY KEY,
+  user_email TEXT,
+  user_name TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  search_taxa TEXT,          -- JSON array of input taxa
+  specimen_count INTEGER,
+  status TEXT DEFAULT 'active'  -- active, completed, abandoned
+);
+```
+
+**Annotation tables (modify existing):**
+Add `session_id` column to existing tables so annotations are scoped to sessions:
+```sql
+ALTER TABLE specimen_flags ADD COLUMN session_id TEXT;
+ALTER TABLE specimen_notes ADD COLUMN session_id TEXT;
+ALTER TABLE specimen_selections ADD COLUMN session_id TEXT;
+```
+
+**Auto-save triggers:**
+
+| Event | What to Save | Method |
+|-------|-------------|--------|
+| Specimen data imported | `specimen_data`, `bags_grades`, session metadata | `saveRDS()` + SQLite session row |
+| BIN analysis completed | `bin_analysis` | `saveRDS()` |
+| Specimen selected/deselected | Selection state | SQLite `update_specimen_selection()` (immediate) |
+| Flag changed | Flag state | SQLite `update_specimen_flag()` (already implemented) |
+| Curator note changed | Note state | SQLite `update_specimen_note()` (already implemented) |
+| Periodic (every 60s if dirty) | Full state snapshot | `saveRDS()` of complete state |
+
+**Session restore flow:**
+1. On app start, show a "Resume Session" panel if saved sessions exist
+2. User picks a session from a list (showing date, taxa searched, record count)
+3. Load `specimen_data.rds`, `bags_grades.rds`, `bin_analysis.rds`
+4. Query SQLite for flags/notes/selections scoped to that session_id
+5. Populate `StateManager` with loaded data
+6. Skip directly to the specimen/BAGS tabs
+
+#### Option B: Pure SQLite (everything in the database)
+
+Store specimen data as a SQLite table instead of RDS. This is more "database-native" but has drawbacks:
+- **Slower**: Inserting thousands of rows with 20+ columns is significantly slower than `saveRDS()`
+- **Schema rigidity**: Column names from BOLD API can vary; SQLite requires fixed schemas
+- **Larger on disk**: SQLite stores text less efficiently than R's native serialization
+- **Advantage**: SQL queries enable partial loading and filtering at the database level
+
+#### Option C: Shiny bookmarking (`enableBookmarking`)
+
+Shiny's built-in bookmarking serializes `input` values to URL params or server-side files. However:
+- **Not suitable**: It only saves `input` widget values, not reactive data or computed state
+- `specimen_data` (megabytes) cannot go in a URL or even server-side bookmark
+- Annotations and selections are stored in `reactiveValues`, not `input`
+- Would need to be combined with another approach anyway
+- **Not recommended** as a primary mechanism, but could supplement Option A for widget state (filter values, active tab, etc.)
+
+#### Option D: Browser-side persistence (shinyStore / cookies)
+
+Use `shinyStore` or localStorage via JavaScript to cache state in the user's browser:
+- **Advantage**: No server-side storage needed, survives page refresh
+- **Disadvantage**: 5-10 MB localStorage limit is too small for specimen data with sequences; data is tied to the browser/device; won't work across devices
+- **Not recommended** as primary approach, but could be useful for small UI state (active tab, filter selections)
+
+### Recommended Approach: Option A with phased implementation
+
+**Phase 1 — Wire up existing SQLite for annotations (lowest effort, highest impact)**
+
+This alone solves the "lost annotations" problem during internet drops.
+
+1. Initialize DB connection in `app.R` server function:
+   ```r
+   db_con <- init_database("data/specimen_tracking.db", logging_manager)
+   session$onSessionEnded(function() { dbDisconnect(db_con) })
+   ```
+
+2. In `mod_bags_grading_server.R`, after each flag/note/selection change, call the existing DB functions:
+   ```r
+   # In the flag observer (lines 246-270):
+   update_specimen_flag(db_con, flag$processid, flag$flag, user_info)
+
+   # In the note observer (lines 272-296):
+   update_specimen_note(db_con, note$processid, note$notes, user_info)
+   ```
+
+3. On session start, load existing annotations from DB and merge into state.
+
+**Phase 2 — RDS persistence for specimen data**
+
+1. After data import succeeds, save to RDS:
+   ```r
+   session_dir <- file.path("data", "sessions", session$token)
+   dir.create(session_dir, recursive = TRUE, showWarnings = FALSE)
+   saveRDS(processed_data, file.path(session_dir, "specimen_data.rds"))
+   ```
+
+2. After BAGS grading:
+   ```r
+   saveRDS(grades, file.path(session_dir, "bags_grades.rds"))
+   ```
+
+3. Write session metadata:
+   ```r
+   jsonlite::write_json(list(
+     session_id = session$token,
+     user_email = store$user_info$email,
+     created_at = format(Sys.time(), "%Y-%m-%dT%H:%M:%S"),
+     search_taxa = store$search_taxa,
+     specimen_count = nrow(processed_data)
+   ), file.path(session_dir, "session_meta.json"), auto_unbox = TRUE)
+   ```
+
+**Phase 3 — Session resume UI**
+
+1. Add a "Resume Session" panel to the data import tab sidebar:
+   ```r
+   # Scan for saved sessions
+   session_dirs <- list.dirs("data/sessions", recursive = FALSE)
+   session_list <- lapply(session_dirs, function(d) {
+     meta_file <- file.path(d, "session_meta.json")
+     if (file.exists(meta_file)) jsonlite::fromJSON(meta_file) else NULL
+   })
+   ```
+
+2. Render as a selectInput or DT table with columns: Date, User, Taxa, Records
+3. "Resume" button loads the selected session's state
+
+**Phase 4 — Auto-save on state change (resilience)**
+
+1. Add a debounced observer that watches for state changes and saves dirty state:
+   ```r
+   # In app.R, after state initialization:
+   auto_save_timer <- reactiveTimer(60000)  # every 60 seconds
+
+   observe({
+     auto_save_timer()
+     isolate({
+       store <- state$get_store()
+       if (!is.null(store$specimen_data)) {
+         save_session_state(session$token, store, db_con)
+       }
+     })
+   })
+   ```
+
+2. For annotations, save immediately (no debounce) since SQLite handles concurrent writes well and each annotation is a single row upsert.
+
+### Files to Create/Modify
+
+| File | Action | Phase |
+|------|--------|-------|
+| `R/utils/session_persistence.R` | **Create** — `save_session_state()`, `load_session_state()`, `list_saved_sessions()`, `cleanup_old_sessions()` | 2 |
+| `R/utils/db_handler.R` | **Modify** — add `session_id` to existing tables, add sessions table, add session-scoped query functions | 1 |
+| `R/modules/state/state_manager.R` | **Modify** — add `save_to_disk()` / `restore_from_disk()` methods, accept DB connection | 1-2 |
+| `app.R` | **Modify** — initialize DB connection, wire auto-save, add session resume logic, change `onSessionEnded` to save instead of destroy | 1-2 |
+| `R/modules/bags_grading/mod_bags_grading_server.R` | **Modify** — call DB write functions after flag/note/selection changes | 1 |
+| `R/modules/specimen_handling/mod_specimen_handling_server.R` | **Modify** — call DB write functions after changes | 1 |
+| `R/modules/data_import/mod_data_import_ui.R` | **Modify** — add "Resume Session" panel | 3 |
+| `R/modules/data_import/mod_data_import_server.R` | **Modify** — add session restore handler, save session after import | 2-3 |
+
+### Key Considerations
+
+- **Session ID strategy**: `session$token` is Shiny's built-in session identifier. It changes each time the user connects. For resume capability, we need a **user-facing session ID** (e.g., a short UUID stored in a cookie or shown to the user) so they can reconnect to a previous session even with a new `session$token`.
+- **Multi-user**: If the app is deployed on a server with multiple users, session directories should be user-scoped. Consider `data/sessions/{user_email_hash}/{session_id}/`.
+- **Cleanup**: Old sessions accumulate on disk. Add a `cleanup_old_sessions(max_age_days = 30)` function called on app start.
+- **Security**: Session data may contain sensitive specimen data. Ensure session directories are not web-accessible. Consider encryption if deployed on shared infrastructure.
+- **`onSessionEnded` change**: Currently destroys state (`state$reset_state()`). This must be changed to save state instead. The reset should only happen when the user explicitly starts a new session.
+- **Specimen data size**: The `nuc` column (DNA sequences) can be very large. Consider storing it in a separate RDS file or offering an option to exclude sequences from the session save.
+- **Concurrency**: SQLite supports concurrent reads but only one writer. For single-user or low-concurrency use this is fine. For multi-user deployment, consider WAL mode: `dbExecute(con, "PRAGMA journal_mode=WAL")`.
+
+### Session Lifecycle (with persistence)
+
+```
+┌─ NEW SESSION ──────────────────────────────────────────────┐
+│                                                            │
+│  1. App start                                              │
+│  2. Check for saved sessions → show resume panel if found  │
+│  3a. User starts fresh → normal flow                       │
+│  3b. User resumes → load RDS + SQLite state                │
+│                                                            │
+├─ WORKING SESSION ──────────────────────────────────────────┤
+│                                                            │
+│  4. Data imported → save specimen_data.rds + session meta  │
+│  5. BAGS graded → save bags_grades.rds                     │
+│  6. Each annotation → immediate SQLite write               │
+│  7. Periodic timer → snapshot full state                   │
+│                                                            │
+├─ SESSION INTERRUPTED ──────────────────────────────────────┤
+│                                                            │
+│  8a. Browser closed → onSessionEnded saves final state     │
+│  8b. Internet drop → last auto-save preserved              │
+│  8c. Server crash → last auto-save preserved               │
+│                                                            │
+├─ SESSION RESUMED ──────────────────────────────────────────┤
+│                                                            │
+│  9. User returns → picks session from list                 │
+│  10. Load RDS files into StateManager                      │
+│  11. Load annotations from SQLite                          │
+│  12. Continue working                                      │
+│                                                            │
+└────────────────────────────────────────────────────────────┘
 ```
