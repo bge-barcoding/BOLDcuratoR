@@ -89,7 +89,12 @@ mod_user_info_ui <- function(id) {
             actionButton(ns("save"),
                          "Save Information",
                          class = "btn-primary btn-sm",
-                         icon = icon("save"))
+                         icon = icon("save")),
+            actionButton(ns("use_shared_key"),
+                         "Use shared key",
+                         class = "btn-default btn-sm",
+                         icon = icon("key"),
+                         title = "Use a pre-configured shared API key for testing")
           ),
 
           uiOutput(ns("validation_message")),
