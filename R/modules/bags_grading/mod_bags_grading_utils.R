@@ -1,43 +1,5 @@
 # R/modules/bags_grading/mod_bags_grading_utils.R
 
-#' Filter specimens by grade and criteria
-#' @param specimens Data frame of specimens
-#' @param grades Data frame of BAGS grades
-#' @param target_grade Target BAGS grade
-#' @param rank_filter Rank filter value
-#' @param quality_filter Quality score filter
-#' @param criteria_filter Vector of required criteria
-#' @return Filtered specimen data frame
-#' @keywords internal
-filter_grade_specimens <- function(specimens, grades, target_grade,
-                                   rank_filter, quality_filter, criteria_filter) {
-  # Get species for target grade
-  grade_species <- grades$species[grades$bags_grade == target_grade]
-  filtered <- specimens[specimens$species %in% grade_species, ]
-
-  # Apply rank filter
-  if (!is.null(rank_filter) && rank_filter != "All") {
-    filtered <- filtered[filtered$rank == as.numeric(rank_filter), ]
-  }
-
-  # Apply quality filter - Fix the logical comparison
-  quality_score <- as.numeric(quality_filter)
-  if (!is.null(quality_filter) && !is.na(quality_score) && quality_score > 0) {
-    filtered <- filtered[filtered$quality_score >= quality_score, ]
-  }
-
-  # Apply criteria filter
-  if (!is.null(criteria_filter) && length(criteria_filter) > 0) {
-    filtered <- filtered[sapply(filtered$criteria_met, function(x) {
-      if (is.na(x) || x == "") return(FALSE)
-      criteria_list <- strsplit(x, "; ")[[1]]
-      all(criteria_filter %in% criteria_list)
-    }), ]
-  }
-
-  filtered
-}
-
 #' Calculate grade metrics
 #' @param data Data frame of grade specimens
 #' @return List of metrics
