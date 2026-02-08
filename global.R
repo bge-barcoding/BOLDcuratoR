@@ -102,41 +102,6 @@ required_packages <- c(
   return(TRUE)
 }
 
-# Source utility functions with error handling
-.source_utils <- function() {
-  tryCatch({
-    utils_path <- "R/utils"
-    utils_files <- list.files(utils_path, pattern = "\\.R$", full.names = TRUE)
-    if(length(utils_files) == 0) {
-      warning("No utility files found in ", utils_path)
-      return(FALSE)
-    }
-    invisible(lapply(utils_files, source))
-    return(TRUE)
-  }, error = function(e) {
-    warning("Error sourcing utility files: ", e$message)
-    return(FALSE)
-  })
-}
-
-# Source modules with error handling
-.source_modules <- function() {
-  tryCatch({
-    modules_path <- "R/modules"
-    module_files <- list.files(modules_path, pattern = "\\.R$",
-                               recursive = TRUE, full.names = TRUE)
-    if(length(module_files) == 0) {
-      warning("No module files found in ", modules_path)
-      return(FALSE)
-    }
-    invisible(lapply(module_files, source))
-    return(TRUE)
-  }, error = function(e) {
-    warning("Error sourcing module files: ", e$message)
-    return(FALSE)
-  })
-}
-
 # Create required directories
 .create_directories <- function() {
   required_dirs <- c("data", "logs", "output", "temp", "config")
@@ -195,28 +160,17 @@ tryCatch({
   # Create required directories
   .create_directories()
 
-  # Load configuration first
+  # Load configuration
   source("R/config/constants.R")
 
-  # Source utilities and modules
-  if(!.source_utils()) {
-    stop("Failed to source utility files")
-  }
-  if(!.source_modules()) {
-    stop("Failed to source module files")
-  }
-
-  # Initialize components that depend on loaded packages
+  # Initialize analysis parameters
   analysis_params <- .initialize_analysis_params()
   if(is.null(analysis_params)) {
     stop("Failed to initialize analysis parameters")
   }
 
-  # Create logging manager after ensuring R6 is loaded
-  if (!exists("R6Class")) {
-    stop("R6 package not properly loaded")
-  }
-  logging_manager <- LoggingManager$new()
+  # Note: R source files (utils + modules) are loaded by app.R in explicit order.
+  # Do NOT glob-source here — app.R controls the load order.
 
   options(
     shiny.maxRequestSize = 30*1024^2,  # 30MB

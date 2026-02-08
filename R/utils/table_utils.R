@@ -230,17 +230,6 @@ format_specimen_table <- function(data, ns = NULL,
       extensions = c('Buttons', 'FixedColumns') # Removed Select
     )
 
-#    # Add interactive column formatting using new column names
-#    for(col_pair in list(c("selected", "selected"),
-#                         c("flag", "flag"),
-#                         c("curator_notes", "curator_notes"))) {
-#      orig_col <- col_pair[1]
-#      new_col <- col_pair[2]
-#      if (orig_col %in% names(data)) {
-#        dt <- format_interactive_column(dt, new_col)
-#      }
-#    }
-
     # Add metric column formatting
     if ("quality_score" %in% names(data)) {
       dt <- format_quality_score(dt, data)
@@ -268,64 +257,6 @@ format_specimen_table <- function(data, ns = NULL,
     }
     return(NULL)
   })
-}
-
-# Update this function in table_utils.R
-format_interactive_column <- function(dt, col) {
-  if (col == "selected") {
-    dt %>% formatStyle(
-      'selected',
-      target = "cell",
-      className = 'dt-center',
-      render = JS("
-        function(data, type, row) {
-          if(type === 'display') {
-            return '<input type=\"checkbox\" class=\"specimen-select\"' +
-                   (data == true ? ' checked' : '') + '>' +
-                   '<script>$(document).on(\"change\", \".specimen-select\", function() {' +
-                   'var tr = $(this).closest(\"tr\");' +
-                   'var table = $(this).closest(\"table\").DataTable();' +
-                   'var row = table.row(tr);' +
-                   'var data = row.data();' +
-                   'Shiny.setInputValue(\"specimen_selection\", {' +
-                   '  processid: data[1],' +
-                   '  selected: this.checked' +
-                   '});' +
-                   '});</script>';
-          }
-          return data;
-        }
-      ")
-    )
-  } else if (col == "flag") {
-      dt %>% formatStyle(
-        'flag',
-        target = "cell",
-        render = JS(sprintf("
-      function(data, type, row) {
-        if(type === 'display') {
-          const options = %s;
-          let select = '<select class=\"specimen-flag form-select form-select-sm\">';
-          Object.entries(options).forEach(([label, value]) => {
-            select += '<option value=\"' + value + '\"' +
-                     (data === value ? ' selected' : '') + '>' +
-                     label + '</option>';
-          });
-          select += '</select>';
-          return select;
-        }
-        return data;
-      }
-    ", jsonlite::toJSON(get_flag_options(), auto_unbox = TRUE)))
-      )
-  } else if (col == "curator_notes") {
-    dt %>% formatStyle(
-      'curator_notes',
-      cursor = 'text'
-    )
-  } else {
-    dt
-  }
 }
 
 # Helper function to format quality score
@@ -537,171 +468,6 @@ prepare_module_data <- function(data,
 
 }
 
-
-#' Format specific table columns with styling
-#' @param dt DT datatable object
-#' @param data Original data frame
-#' @param color_by Optional column for color coding
-#' @param logger Optional logger instance
-#' @return Formatted datatable
-#' @keywords internal
-format_table_columns <- function(dt, data, color_by = NULL, logger = NULL) {
-  if (is.null(dt)) return(NULL)
-
-  tryCatch({
-    # Add interactive column formatting
-    if ("selected" %in% names(data)) {
-      dt <- dt %>%
-        formatStyle(
-          'selected',
-          target = "cell",
-          render = JS("
-            function(data, type, row) {
-              if(type === 'display') {
-                return '<input type=\"checkbox\" class=\"specimen-select\"' +
-                       (data ? ' checked' : '') + '>';
-              }
-              return data;
-            }
-          ")
-        )
-    }
-
-    if ("flag" %in% names(data)) {
-      dt <- dt %>%
-        formatStyle(
-          'flag',
-          target = "cell",
-          render = JS("
-            function(data, type, row) {
-              if(type === 'display') {
-                var select = '<select class=\"specimen-flag form-select form-select-sm\">';
-                Object.entries(flagOptions).forEach(function([label, value]) {
-                  select += '<option value=\"' + value + '\"' +
-                           (data === value ? ' selected' : '') + '>' +
-                           label + '</option>';
-                });
-                select += '</select>';
-                return select;
-              }
-              return data;
-            }
-          ")
-        )
-    }
-
-    if ("curator_notes" %in% names(data)) {
-      dt <- dt %>%
-        formatStyle(
-          'curator_notes',
-          target = "cell",
-          render = JS("
-            function(data, type, row) {
-              if(type === 'display') {
-                var input = '<input type=\"text\" class=\"specimen-notes form-control form-control-sm\"' +
-                           ' style=\"width:100%;height:24px;padding:2px 6px;\"' +
-                           ' value=\"' + (data || '') + '\"' +
-                           ' placeholder=\"Add notes...\">';
-                return input;
-              }
-              return data;
-            }
-          ")
-        )
-    }
-
-    # Add metric column formatting
-    if ("quality_score" %in% names(data)) {
-      dt <- dt %>%
-        formatStyle(
-          'quality_score',
-          background = styleColorBar(c(0, max(14, max(data$quality_score, na.rm = TRUE))),
-                                     "#28a745"),
-          backgroundSize = "98% 88%",
-          backgroundRepeat = "no-repeat",
-          backgroundPosition = "center"
-        )
-    }
-
-    if ("rank" %in% names(data)) {
-      dt <- dt %>%
-        formatStyle(
-          'rank',
-          backgroundColor = styleEqual(
-            c(1:7),
-            c('#28a745', '#28a745', '#17a2b8', '#17a2b8',
-              '#ffc107', '#ffc107', '#dc3545')
-          ),
-          color = styleEqual(
-            c(1:7),
-            rep('white', 7)
-          )
-        )
-    }
-
-    # Add color coding if specified
-    if (!is.null(color_by) && color_by %in% names(data)) {
-      unique_values <- unique(data[[color_by]])
-      colors <- create_species_colors(unique_values)
-
-      if (!is.null(colors)) {
-        dt <- dt %>%
-          formatStyle(
-            color_by,
-            backgroundColor = styleEqual(unique_values, colors)
-          )
-      }
-    }
-
-    if (!is.null(logger)) {
-      logger$info("Column formatting applied successfully")
-    }
-
-    return(dt)
-
-  }, error = function(e) {
-    if (!is.null(logger)) {
-      logger$error("Error formatting table columns",
-                   details = list(error = e$message))
-    }
-    return(dt)  # Return original table if formatting fails
-  })
-}
-
-#' Prepare table data with interactive columns while preserving all existing columns
-#' @param data Input data frame
-#' @param custom_cols Preferred columns to ensure exist
-#' @param current_selections Current selections
-#' @param current_flags Current flags
-#' @param current_notes Current curator notes
-#' @param logger Optional logger instance
-#' @return Prepared data frame
-#' @keywords internal
-prepare_table_data <- function(data, current_selections, current_flags,
-                               current_notes) {
-  if (is.null(data) || nrow(data) == 0) return(data.frame())
-
-  # Ensure data is a data frame
-  data <- as.data.frame(data, stringsAsFactors = FALSE)
-
-  # Initialize interactive columns with proper types
-  data$flag <- ifelse(is.null(data$flag), "", as.character(data$flag))
-  data$curator_notes <- ifelse(is.null(data$curator_notes), "",
-                               as.character(data$curator_notes))
-
-  # Update with current states using sync_table_states
-  data <- sync_table_states(data, list(
-    flags = current_flags,
-    notes = current_notes
-  ))
-
-  # Ensure proper column types
-  data$flag <- as.character(data$flag)
-  data$curator_notes <- as.character(data$curator_notes)
-
-  return(data)
-}
-
 #' Get table callback JavaScript
 #' @param ns Namespace function for Shiny
 #' @param flag_options Named list of flag options
@@ -720,12 +486,10 @@ get_table_callback <- function(ns, flag_options = NULL) {
 
       // Global state store with enhanced persistence
       window.tableStates = window.tableStates || {};
-      window.stateVersion = (window.stateVersion || 0) + 1;
 
       const stateManager = {
         getKey: (processid) => {
-          const tableId = table.table().node().id || 'default';
-          return `${tableId}_${processid}_${window.stateVersion}`;
+          return `specimen_${processid}`;
         },
 
         save: function(processid, type, value) {
@@ -735,7 +499,6 @@ get_table_callback <- function(ns, flag_options = NULL) {
           window.tableStates[key].timestamp = Date.now();
           try {
             localStorage.setItem('tableStates', JSON.stringify(window.tableStates));
-            localStorage.setItem('stateVersion', window.stateVersion.toString());
           } catch(e) {
             console.warn('Error saving state:', e);
           }
@@ -756,8 +519,7 @@ get_table_callback <- function(ns, flag_options = NULL) {
             species: rowData.species || '',
             bin_uri: rowData.bin_uri || '',
             timestamp: Date.now(),
-            table_id: table.table().node().id || 'default',
-            state_version: window.stateVersion
+            table_id: table.table().node().id || 'default'
           };
 
           if (type === 'flag') {
@@ -786,8 +548,7 @@ get_table_callback <- function(ns, flag_options = NULL) {
               type,
               value,
               tableId: table.table().node().id || 'default',
-              timestamp: Date.now(),
-              stateVersion: window.stateVersion
+              timestamp: Date.now()
             }
           }));
         },
@@ -870,10 +631,10 @@ get_table_callback <- function(ns, flag_options = NULL) {
       // Try to restore states from localStorage
       try {
         const stored = localStorage.getItem('tableStates');
-        const storedVersion = localStorage.getItem('stateVersion');
         if (stored) {
-          window.tableStates = JSON.parse(stored);
-          window.stateVersion = parseInt(storedVersion) || window.stateVersion;
+          const parsed = JSON.parse(stored);
+          // Merge with in-memory state (in-memory wins on conflict)
+          window.tableStates = Object.assign(parsed, window.tableStates);
         }
       } catch(e) {
         console.warn('Error loading stored states:', e);
@@ -1491,79 +1252,3 @@ generate_table_caption <- function(grade, group_info) {
   )
 }
 
-#' Format specimen fields for display
-#' @param specimen Specimen data
-#' @return List of formatted fields
-#' @keywords internal
-format_specimen_fields <- function(specimen) {
-  if (is.null(specimen)) return(list())
-
-  list(
-    processid = specimen$processid %||% NA,
-    quality_score = if (!is.null(specimen$quality_score))
-      sprintf("%.1f", specimen$quality_score) else NA,
-    identification_rank = specimen$identification_rank %||% NA,
-    bin_uri = specimen$bin_uri %||% "",
-    species = specimen$species %||% "",
-    collection_date = if (!is.null(specimen$collection_date_start))
-      format(specimen$collection_date_start, "%Y-%m-%d") else NA,
-    country = specimen$country.ocean %||% ""
-  )
-}
-
-#' Format metrics for display
-#' @param metrics List of metrics
-#' @return Formatted metrics list
-#' @keywords internal
-format_metrics <- function(metrics) {
-  if (is.null(metrics)) return(list())
-
-  list(
-    specimen_count = format(metrics$specimen_count %||% 0, big.mark = ","),
-    bin_count = format(metrics$bin_count %||% 0, big.mark = ","),
-    selected_count = format(metrics$selected_count %||% 0, big.mark = ","),
-    quality_avg = sprintf("%.2f", metrics$quality_avg %||% 0)
-  )
-}
-
-#' Create download filename
-#' @param grade BAGS grade
-#' @param type Export type
-#' @return Formatted filename
-#' @keywords internal
-create_download_filename <- function(grade, type = "csv") {
-  paste0(
-    "bags_grade_",
-    tolower(grade %||% ""),
-    "_",
-    format(Sys.time(), "%Y%m%d_%H%M"),
-    ".",
-    type
-  )
-}
-
-#' Validate table input
-#' @param data Input data frame
-#' @param required_cols Required columns
-#' @return List with validation results
-#' @keywords internal
-validate_table_input <- function(data, required_cols) {
-  if (is.null(data) || nrow(data) == 0) {
-    return(list(valid = FALSE, message = "Empty data"))
-  }
-
-  if (is.null(required_cols) || length(required_cols) == 0) {
-    return(list(valid = FALSE, message = "No required columns specified"))
-  }
-
-  missing_cols <- setdiff(required_cols, names(data))
-  if (length(missing_cols) > 0) {
-    return(list(
-      valid = FALSE,
-      message = sprintf("Missing columns: %s",
-                        paste(missing_cols, collapse = ", "))
-    ))
-  }
-
-  list(valid = TRUE, message = NULL)
-}

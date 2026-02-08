@@ -7,65 +7,13 @@
 #' @param logger Logger instance
 #' @export
 
-# Updated sync functions to better handle reactivity
-sync_state_with_rv <- function(rv, state, key) {
-  # Map internal rv keys to state keys
-  state_key <- switch(key,
-                      "selected_specimens" = "selected_specimens",
-                      "flagged_specimens" = "specimen_flags",
-                      "curator_notes" = "specimen_curator_notes",
-                      key  # default to same key if no mapping needed
-  )
-
-  # Only sync if values are different to prevent unnecessary updates
-  if (!identical(isolate(rv[[key]]), isolate(state$get_store()[[state_key]]))) {
-    # Update state manager with current rv value
-    state$update_state(state_key, isolate(rv[[key]]))
-
-    # Log the sync for debugging
-    if (!is.null(logger)) {
-      logger$info(sprintf("Synced %s to state", key), list(
-        rv_length = length(isolate(rv[[key]])),
-        state_length = length(isolate(state$get_store()[[state_key]]))
-      ))
-    }
-  }
-}
-
-sync_rv_with_state <- function(rv, state, key) {
-  # Map state keys to internal rv keys
-  state_key <- switch(key,
-                      "selected_specimens" = "selected_specimens",
-                      "flagged_specimens" = "specimen_flags",
-                      "curator_notes" = "specimen_curator_notes",
-                      key  # default to same key if no mapping needed
-  )
-
-  store <- state$get_store()
-  if (!identical(isolate(rv[[key]]), isolate(store[[state_key]]))) {
-    # Update reactive values with current state value
-    rv[[key]] <- isolate(store[[state_key]])
-
-    # Log the sync for debugging
-    if (!is.null(logger)) {
-      logger$info(sprintf("Synced %s from state", key), list(
-        rv_length = length(rv[[key]]),
-        state_length = length(store[[state_key]])
-      ))
-    }
-  }
-}
-
 mod_specimen_handling_server <- function(id, state, processor, logger) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
 
-    # Initialize reactive values with centralized state management
+    # Initialize reactive values
     rv <- reactiveValues(
       filtered_data = NULL,
-      selected_specimens = list(),
-      flagged_specimens = list(),
-      curator_notes = list(),
       metrics = NULL,
       processing_status = list(
         is_processing = FALSE,
@@ -73,70 +21,6 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
         error = NULL
       )
     )
-
-    # Add state synchronization observer right after rv initialization
-    observe({
-      # Define which keys need to be synced between rv and state
-      sync_keys <- c(
-        "selected_specimens",
-        "flagged_specimens",
-        "curator_notes",
-        "metrics"
-      )
-
-      # Sync all keys in both directions
-      for (key in sync_keys) {
-        # Only sync if the key exists in state
-        if (!is.null(state$get_store()[[key]])) {
-          sync_rv_with_state(rv, state, key)
-        }
-        # Only sync if the key exists in rv
-        if (!is.null(rv[[key]])) {
-          sync_state_with_rv(rv, state, key)
-        }
-      }
-    })
-
-    # Replace the state restoration observer with this updated version
-    # This ensures consistent key names and proper state restoration
-    observe({
-      logger$info("Initializing specimen handling state")
-      store <- state$get_store()
-
-      # Add validation of store contents
-      logger$info("Current store keys", list(
-        available_keys = names(store)
-      ))
-
-      # Restore selected specimens from state
-      # Changed key name to match the one used in state updates
-      if (!is.null(store$selected_specimens)) {
-        isolate({
-          rv$selected_specimens <- store$selected_specimens
-          logger$info("Restored selected specimens from state",
-                      list(count = length(store$selected_specimens)))
-        })
-      }
-
-      # Restore flags from state
-      # Use consistent key name 'specimen_flags'
-      if (!is.null(store$specimen_flags)) {
-        isolate({
-          rv$flagged_specimens <- store$specimen_flags
-          logger$info("Restored specimen flags from state",
-                      list(count = length(store$specimen_flags)))
-        })
-      }
-
-      # Restore curator notes from state
-      if (!is.null(store$specimen_curator_notes)) {
-        isolate({
-          rv$curator_notes <- store$specimen_curator_notes
-          logger$info("Restored curator notes from state",
-                      list(count = length(store$specimen_curator_notes)))
-        })
-      }
-    })
 
     # Update specimen processing observer to use rv instead of processing_status function
     observe({
@@ -267,53 +151,56 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
       ))
     })
 
-    # Update the specimen table output to use rv
+    # Render the specimen table (view-only).
+    # Annotations (flags, notes, selections) are managed in the BAGS grade
+    # tables. This table shows specimen data with filtering only.
     output$specimen_table <- renderDT({
-      req(rv$filtered_data)  # Changed from filtered_data()
+      req(rv$filtered_data)
+      data <- rv$filtered_data
 
-      data <- rv$filtered_data  # Changed from filtered_data()
-      logger$info("Starting specimen table preparation", list(
-        initial_rows = nrow(data)
-      ))
+      logger$info("Rendering specimen table", list(rows = nrow(data)))
 
       tryCatch({
-        # First prepare the data - updated to use rv
-        prepared_data <- prepare_module_data(
-          data = data,
-          current_selections = isolate(rv$selected_specimens),  # Changed from selected_specimens()
-          current_flags = isolate(rv$flagged_specimens),      # Changed from flagged_specimens()
-          current_notes = isolate(rv$curator_notes),          # Changed from curator_notes()
-          logger = logger
+        # Prepare data for display (no interactive annotation columns)
+        data <- as.data.frame(data, stringsAsFactors = FALSE)
+        rownames(data) <- NULL
+        data <- order_columns(data)
+
+        DT::datatable(
+          data,
+          options = list(
+            scrollX = TRUE,
+            scrollY = "500px",
+            pageLength = 50,
+            autoWidth = FALSE,
+            dom = 'Bfrtip',
+            buttons = list('copy', 'csv', 'excel'),
+            processing = FALSE,
+            serverSide = FALSE,
+            search = list(regex = FALSE, caseInsensitive = TRUE),
+            columnDefs = list(
+              list(
+                targets = "_all",
+                className = "dt-body-left",
+                width = "100px",
+                render = JS("
+                  function(data, type, row) {
+                    if (type === 'display') {
+                      return '<div class=\"cell-content\" title=\"' +
+                             (data || '').toString().replace(/\\\"/g, '&quot;') +
+                             '\">' + (data || '') + '</div>';
+                    }
+                    return data;
+                  }
+                ")
+              )
+            )
+          ),
+          selection = 'none',
+          rownames = FALSE,
+          escape = FALSE,
+          extensions = c('Buttons')
         )
-
-        # Sync table states - updated to use rv
-        prepared_data <- sync_table_states(
-          data = prepared_data,
-          current_state = list(
-            selections = isolate(rv$selected_specimens),
-            flags = isolate(rv$flagged_specimens),
-            notes = isolate(rv$curator_notes)
-          )
-        )
-
-        # Then create and format the table - updated to use rv
-        formatted_table <- format_specimen_table(
-          data = prepared_data,
-          ns = ns,
-          buttons = c('copy', 'csv', 'excel'),
-          page_length = 50,
-          selection = 'multiple',
-          current_selections = isolate(rv$selected_specimens),
-          current_flags = isolate(rv$flagged_specimens),
-          current_notes = isolate(rv$curator_notes),
-          logger = logger
-        )
-
-        logger$info("Specimen table preparation complete", list(
-          final_rows = nrow(prepared_data)
-        ))
-
-        formatted_table
       }, error = function(e) {
         logger$error("Error rendering specimen table", list(
           error = e$message,
@@ -321,161 +208,6 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
         ))
         NULL
       })
-    })
-
-    # Update specimen selection handler
-    # This version ensures proper state synchronization and adds validation
-    observeEvent(input$specimen_selection, {
-      req(input$specimen_selection)
-      selection <- input$specimen_selection
-
-      logger$info("Processing selection event", list(
-        processid = selection$processid,
-        selected = selection$selected
-      ))
-
-      if (!is.null(selection$processid)) {
-        # Isolate the current state update to prevent reactivity cycles
-        isolate({
-          # First get current selections from both local and global state
-          current_selections <- rv$selected_specimens
-          global_selections <- state$get_store()$selected_specimens
-
-          # Merge global selections if they exist and differ from local
-          if (!is.null(global_selections) && !identical(current_selections, global_selections)) {
-            current_selections <- global_selections
-            logger$info("Merged global selections with local state")
-          }
-
-          if (selection$selected) {
-            # Get specimen data with proper error handling
-            tryCatch({
-              specimen_data <- rv$filtered_data[
-                rv$filtered_data$processid == selection$processid,
-              ]
-
-              if (nrow(specimen_data) > 0) {
-                # Create properly formatted selection entry
-                current_selections[[selection$processid]] <- list(
-                  timestamp = Sys.time(),
-                  species = specimen_data$species[1],
-                  quality_score = specimen_data$quality_score[1],
-                  user = state$get_store()$user_info$email,
-                  selected = TRUE
-                )
-
-                logger$info("Specimen selected", list(
-                  processid = selection$processid,
-                  species = specimen_data$species[1],
-                  quality_score = specimen_data$quality_score[1]
-                ))
-              } else {
-                logger$warn("Selected specimen not found in filtered data", list(
-                  processid = selection$processid
-                ))
-                return()
-              }
-            }, error = function(e) {
-              logger$error("Error processing specimen selection", list(
-                error = e$message,
-                processid = selection$processid
-              ))
-              return()
-            })
-          } else {
-            # Handle deselection
-            current_selections[[selection$processid]] <- NULL
-            logger$info("Specimen deselected", list(
-              processid = selection$processid
-            ))
-          }
-
-          # Update local state first
-          rv$selected_specimens <- current_selections
-
-          # Then update global state with validation
-          state$update_state(
-            "selected_specimens",
-            current_selections,
-            validation_fn = function(value) {
-              if (!is.list(value)) {
-                return(list(valid = FALSE, messages = "Selections must be a list"))
-              }
-              list(valid = TRUE, messages = NULL)
-            }
-          )
-
-          # Log the sync status
-          logger$info("Selection state synchronized", list(
-            local_count = length(rv$selected_specimens),
-            global_count = length(state$get_store()$selected_specimens)
-          ))
-
-          # Force table refresh to reflect changes
-          invalidateLater(100)
-        })
-      }
-    })
-
-    # Handle specimen flagging
-    observeEvent(input$specimen_flag, {
-      req(input$specimen_flag)
-      flag <- input$specimen_flag
-
-      if (!is.null(flag$processid)) {
-        # Change from flagged_specimens() to rv$flagged_specimens
-        isolate({
-          current_flags <- rv$flagged_specimens
-
-          if (!is.null(flag$flag) && nchar(flag$flag) > 0) {
-            current_flags[[flag$processid]] <- list(
-              flag = flag$flag,
-              timestamp = Sys.time(),
-              species = flag$species,
-              user = state$get_store()$user_info$email
-            )
-          } else {
-            current_flags[[flag$processid]] <- NULL
-          }
-
-          # Update rv instead of using flagged_specimens()
-          rv$flagged_specimens <- current_flags
-          state$update_state("specimen_flags", current_flags)
-
-          # Trigger table refresh to sync states
-          invalidateLater(100)
-        })
-      }
-    })
-
-    # Similar update for notes handler:
-    observeEvent(input$specimen_notes, {
-      req(input$specimen_notes)
-      note <- input$specimen_notes
-
-      if (!is.null(note$processid)) {
-        # Change from curator_notes() to rv$curator_notes
-        isolate({
-          current_notes <- rv$curator_notes
-
-          if (!is.null(note$notes) && nchar(note$notes) > 0) {
-            current_notes[[note$processid]] <- list(
-              text = note$notes,
-              timestamp = Sys.time(),
-              user = state$get_store()$user_info$email
-            )
-          } else {
-            current_notes[[note$processid]] <- NULL
-          }
-
-          # Update rv instead of using curator_notes()
-          rv$curator_notes <- current_notes
-          state$update_state("specimen_curator_notes", current_notes)
-
-          # Trigger table refresh to sync states
-          invalidateLater(100)
-        })
-      }
     })
 
     # Value box outputs
@@ -545,24 +277,6 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
       }
     )
 
-    output$download_selected <- downloadHandler(
-      filename = function() {
-        paste0("selected_specimens_", format(Sys.time(), "%Y%m%d_%H%M"), ".tsv")
-      },
-      content = function(file) {
-        # Change from selected_specimens() and filtered_data() to rv
-        selected <- rv$selected_specimens
-        if (is.null(selected) || length(selected) == 0) return(NULL)
-
-        data <- rv$filtered_data
-        if (is.null(data) || nrow(data) == 0) return(NULL)
-
-        selected_data <- data[data$processid %in% names(selected), ]
-        write.table(selected_data, file, sep = "\t", row.names = FALSE, quote = FALSE)
-        logger$info("Downloaded selected specimens", list(count = nrow(selected_data)))
-      }
-    )
-
     # Calculate metrics helper
     calculate_metrics <- function(data) {
       list(
@@ -574,112 +288,26 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
       )
     }
 
-    # Session cleanup with rv
+    # Session cleanup
     session$onSessionEnded(function() {
       logger$info("Specimen handling session ended")
       isolate({
         rv$filtered_data <- NULL
-        rv$selected_specimens <- NULL
-        rv$flagged_specimens <- NULL
-        rv$curator_notes <- NULL
         rv$metrics <- NULL
       })
     })
 
-    # Return reactive values and functions using rv
-    # Update module return values
+    # Return reactive values
     list(
       filtered_data = reactive({ rv$filtered_data }),
-      selected_specimens = reactive({ rv$selected_specimens }),
-      flagged_specimens = reactive({ rv$flagged_specimens }),
-      curator_notes = reactive({ rv$curator_notes }),
       metrics = reactive({ rv$metrics }),
       processing_status = reactive({ rv$processing_status }),
-
-      # Add helper functions for state management
-      sync_state = function() {
-        sync_keys <- c("selected_specimens", "flagged_specimens", "curator_notes", "metrics")
-        for (key in sync_keys) {
-          sync_state_with_rv(rv, state, key)
-        }
-      },
 
       reset_filters = function() {
         updateSelectInput(session, "rank_filter", selected = "All")
         updateNumericInput(session, "min_quality_score", value = 0)
         updateCheckboxGroupInput(session, "criteria_filter", selected = character(0))
-      },
-
-      clear_selections = function() {
-        rv$selected_specimens <- list()
-        sync_state_with_rv(rv, state, "selected_specimens")
-      },
-
-      clear_flags = function() {
-        rv$flagged_specimens <- list()
-        sync_state_with_rv(rv, state, "flagged_specimens")
       }
     )
   })
-}
-
-#' Internal function to update filtered data
-#' @keywords internal
-update_filtered_data <- function(data, rank_filter, quality_filter,
-                                 criteria_filter, filtered_data, logger) {
-  tryCatch({
-    filtered <- data
-
-    # Apply rank filter
-    if (!is.null(rank_filter) && rank_filter != "All") {
-      filtered <- filtered[filtered$rank == as.numeric(rank_filter), ]
-    }
-
-    # Apply quality filter
-    if (!is.null(quality_filter) && quality_filter > 0) {
-      filtered <- filtered[filtered$quality_score >= quality_filter, ]
-    }
-
-    # Apply criteria filter
-    if (!is.null(criteria_filter) && length(criteria_filter) > 0) {
-      filtered <- filtered[sapply(filtered$criteria_met, function(x) {
-        if (is.na(x) || x == "") return(FALSE)
-        criteria_list <- strsplit(x, "; ")[[1]]
-        all(criteria_filter %in% criteria_list)
-      }), ]
-    }
-
-    filtered_data(filtered)
-    logger$info("Updated filtered data", list(
-      total_records = nrow(data),
-      filtered_records = nrow(filtered)
-    ))
-
-  }, error = function(e) {
-    logger$error(sprintf("Error filtering data: %s", e$message))
-    filtered_data(data.frame())
-  })
-}
-
-#' Validate specimen data
-#' @keywords internal
-validate_specimen_data <- function(data) {
-  if (is.null(data) || nrow(data) == 0) {
-    return(list(valid = FALSE, messages = "No specimen data"))
-  }
-
-  messages <- character()
-
-  # Check required columns
-  required_cols <- c("processid", "quality_score")
-  missing_cols <- setdiff(required_cols, names(data))
-  if (length(missing_cols) > 0) {
-    messages <- c(messages, sprintf("Missing required columns: %s",
-                                    paste(missing_cols, collapse = ", ")))
-  }
-
-  list(
-    valid = length(messages) == 0,
-    messages = messages
-  )
 }

@@ -24,16 +24,27 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
       )
     )
 
-    # Initialize observer for state restoration
+    # Sync annotations from StateManager into local rv.
+    # This fires whenever StateManager flags/notes/selections change
+    # (e.g. when specimen handling module writes to state), keeping rv in sync.
     observe({
-      logger$info(sprintf("Initializing state for BAGS grade %s module", grade))
       store <- state$get_store()
-      if (!is.null(store$specimen_curator_notes)) {
-        isolate({
-          rv$curator_notes <- store$specimen_curator_notes
-          logger$info("Restored curator notes from state")
-        })
-      }
+
+      state_selections <- store$selected_specimens
+      state_flags      <- store$specimen_flags
+      state_notes      <- store$specimen_curator_notes
+
+      isolate({
+        if (!is.null(state_selections) && !identical(rv$selected_specimens, state_selections)) {
+          rv$selected_specimens <- state_selections
+        }
+        if (!is.null(state_flags) && !identical(rv$flagged_specimens, state_flags)) {
+          rv$flagged_specimens <- state_flags
+        }
+        if (!is.null(state_notes) && !identical(rv$curator_notes, state_notes)) {
+          rv$curator_notes <- state_notes
+        }
+      })
     })
 
     # Main data observer with detailed logging
@@ -124,7 +135,11 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
       })
     })
 
-    # Specimen tables output with detailed logging
+    # Specimen tables output.
+    # Reactive only to rv$filtered_data (filter/data changes).
+    # Annotations read via isolate() so flag/note changes don't cause
+    # a full re-render (which would destroy DT search state).
+    # Annotations are current because the sync observer keeps rv in sync.
     output$specimen_tables <- renderUI({
       logger$info(sprintf("Rendering specimen tables for grade %s", grade))
 
@@ -135,9 +150,13 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
 
       req(rv$filtered_data)
 
+      current_sel   <- isolate(rv$selected_specimens)
+      current_flags <- isolate(rv$flagged_specimens)
+      current_notes <- isolate(rv$curator_notes)
+
       withProgress(message = 'Creating specimen tables', value = 0, {
         tryCatch({
-          data <- isolate(rv$filtered_data)
+          data <- rv$filtered_data
 
           if (is.null(data) || nrow(data) == 0) {
             logger$warn(sprintf("No data available for grade %s tables", grade))
@@ -155,9 +174,9 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
             sync_table_states(
               data = group_data,
               current_state = list(
-                selections = isolate(rv$selected_specimens),
-                flags = isolate(rv$flagged_specimens),
-                notes = isolate(rv$curator_notes)
+                selections = current_sel,
+                flags = current_flags,
+                notes = current_notes
               )
             )
           })
@@ -167,9 +186,9 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
             organized = organized,
             grade = grade,
             ns = ns,
-            current_sel = isolate(rv$selected_specimens),
-            current_flags = isolate(rv$flagged_specimens),
-            current_notes = isolate(rv$curator_notes),
+            current_sel = current_sel,
+            current_flags = current_flags,
+            current_notes = current_notes,
             logger = logger
           )
 
@@ -263,9 +282,6 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
 
         rv$flagged_specimens <- current_flags
         state$update_state("specimen_flags", current_flags)
-
-        # Force table refresh
-        invalidateLater(100)
       }
     })
 
@@ -289,9 +305,6 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
 
         rv$curator_notes <- current_notes
         state$update_state("specimen_curator_notes", current_notes)
-
-        # Force table refresh
-        invalidateLater(100)
       }
     })
 

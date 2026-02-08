@@ -13,12 +13,9 @@ source("R/config/column_definitions.R")
 # Source utility functions
 source("R/utils/ErrorBoundary.R")
 source("R/utils/bags_grading.R")
-source("R/utils/specimen_ranking.R")
-source("R/utils/specimen_validation.R")
 source("R/utils/table_utils.R")
 
 # Source core modules
-source("R/modules/interfaces.R")
 source("R/modules/state/state_manager.R")
 source("R/modules/logging/mod_logging.R")
 
@@ -28,6 +25,7 @@ source("R/modules/data_import/mod_data_import_server.R")
 source("R/modules/data_import/mod_data_import_utils.R")
 
 # Source analysis modules
+source("R/modules/specimen_handling/specimen_validator.R")
 source("R/modules/specimen_handling/specimen_processor.R")
 source("R/modules/specimen_handling/specimen_scorer.R")
 source("R/modules/specimen_handling/mod_specimen_handling_server.R")
@@ -333,14 +331,33 @@ server <- function(input, output, session) {
           observeEvent(input[[input_id]], {
             selected_processid <- input[[input_id]]
 
-            # Update selected specimens
-            current_selections <- store$selected_specimens
-            current_selections[[species_local]] <- selected_processid
+            # Update selected specimens - keyed by processid for consistency
+            current_selections <- isolate(state$get_store()$selected_specimens)
+            if (is.null(current_selections)) current_selections <- list()
+
+            # Remove previous representative for this species (radio = one per species)
+            for (pid in names(current_selections)) {
+              entry <- current_selections[[pid]]
+              if (is.list(entry) && identical(entry$species, species_local)) {
+                current_selections[[pid]] <- NULL
+              }
+            }
+
+            # Get specimen metadata
+            specimen_row <- store$specimen_data[store$specimen_data$processid == selected_processid, ]
+
+            # Add new selection keyed by processid
+            current_selections[[selected_processid]] <- list(
+              timestamp = Sys.time(),
+              species = species_local,
+              quality_score = if (nrow(specimen_row) > 0) specimen_row$quality_score[1] else NA,
+              user = store$user_info$email,
+              selected = TRUE
+            )
 
             state$update_state(
               "selected_specimens",
-              current_selections,
-              validate_selected_specimens
+              current_selections
             )
 
             # Log selection
@@ -354,8 +371,8 @@ server <- function(input, output, session) {
               metadata = list(
                 species = species_local,
                 grade = grade_local,
-                quality_score = store$specimen_data[store$specimen_data$processid == selected_processid,]$quality_score,
-                rank = store$specimen_data[store$specimen_data$processid == selected_processid,]$rank
+                quality_score = if (nrow(specimen_row) > 0) specimen_row$quality_score[1] else NA,
+                rank = if (nrow(specimen_row) > 0) specimen_row$rank[1] else NA
               )
             )
           })
