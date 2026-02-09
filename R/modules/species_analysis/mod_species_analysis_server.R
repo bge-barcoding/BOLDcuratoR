@@ -78,7 +78,7 @@ mod_species_analysis_server <- function(id, state, logger) {
     output$input_taxa_found_box <- renderValueBox({
       store <- state$get_store()
       if (!is.null(rv$gap_analysis)) {
-        found <- sum(rv$gap_analysis$status %in% c("Found", "Found (higher taxon)"))
+        found <- sum(rv$gap_analysis$status == "Found")
         total <- nrow(rv$gap_analysis)
         valueBox(
           sprintf("%d / %d", found, total),
@@ -165,8 +165,8 @@ mod_species_analysis_server <- function(id, state, logger) {
         formatStyle(
           'status',
           backgroundColor = styleEqual(
-            c("Found", "Found (higher taxon)", "Partial (genus match)", "Missing"),
-            c('#d4edda', '#d1ecf1', '#fff3cd', '#f8d7da')
+            c("Found", "Missing"),
+            c('#d4edda', '#f8d7da')
           ),
           fontWeight = 'bold'
         )

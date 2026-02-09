@@ -78,39 +78,12 @@ perform_gap_analysis <- function(input_taxa, specimen_data) {
     taxon <- trimws(input_taxa[i])
     if (nchar(taxon) == 0) next
 
-    # Exact species match
+    # Exact species match only
     exact <- specimen_data[specimen_data$species == taxon & !is.na(specimen_data$species), ]
     if (nrow(exact) > 0) {
       results$status[i] <- "Found"
       results$matched_species[i] <- taxon
       results$specimen_count[i] <- nrow(exact)
-      next
-    }
-
-    # Genus-level match (input is binomial but exact species not found)
-    genus <- strsplit(taxon, " ")[[1]][1]
-    genus_matches <- specimen_data[
-      grepl(paste0("^", genus, " "), specimen_data$species, ignore.case = TRUE) &
-        !is.na(specimen_data$species), ]
-    if (nrow(genus_matches) > 0) {
-      results$status[i] <- "Partial (genus match)"
-      results$matched_species[i] <- paste(unique(genus_matches$species), collapse = "; ")
-      results$specimen_count[i] <- nrow(genus_matches)
-      results$notes[i] <- "Exact species not found but genus present"
-      next
-    }
-
-    # Higher taxonomy match (input is a single word — genus or family)
-    if (!grepl(" ", taxon)) {
-      family_matches <- specimen_data[
-        (specimen_data$family == taxon | specimen_data$genus == taxon) &
-          (!is.na(specimen_data$family) | !is.na(specimen_data$genus)), ]
-      if (nrow(family_matches) > 0) {
-        results$status[i] <- "Found (higher taxon)"
-        matched_spp <- unique(family_matches$species[!is.na(family_matches$species)])
-        results$matched_species[i] <- paste(matched_spp, collapse = "; ")
-        results$specimen_count[i] <- nrow(family_matches)
-      }
     }
   }
 
