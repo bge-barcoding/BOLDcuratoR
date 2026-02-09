@@ -4,10 +4,11 @@ Tracking document for planned codebase updates. Each item is formatted as a GitH
 
 ---
 
-## Issue #1: Remove filtering panel and logic from BAGS tabs
+## Issue #1: Remove filtering panel and logic from BAGS tabs ✅ DONE
 
 **Priority:** Medium
 **Labels:** `ui`, `refactor`, `bags-grading`
+**Status:** Implemented in commit `30ce517`
 
 ### Description
 
@@ -50,10 +51,11 @@ Keep the code but wrap filters in a collapsible panel, hidden by default. Lower 
 
 ---
 
-## Issue #2: Ensure curator annotations are present in all download formats
+## Issue #2: Ensure curator annotations are present in all download formats ✅ DONE
 
 **Priority:** High
 **Labels:** `bug`, `export`, `annotations`
+**Status:** Implemented in commit `c6fed00` — created `merge_annotations_for_export()`, updated ExportManager
 
 ### Description
 
@@ -106,10 +108,11 @@ A single function that takes raw specimen data + state and produces a clean expo
 
 ---
 
-## Issue #3: Dynamic species section sizing with pagination in BAGS tabs
+## Issue #3: Dynamic species section sizing with pagination in BAGS tabs ✅ DONE
 
 **Priority:** Medium
 **Labels:** `ui`, `enhancement`, `bags-grading`
+**Status:** Implemented in commit `84ebdeb` — dynamic page_length (max 25), `dom` parameter added
 
 ### Description
 
@@ -166,10 +169,11 @@ options <- list(
 
 ---
 
-## Issue #4: Species checklist / gap analysis panel
+## Issue #4: Species checklist / gap analysis panel ✅ DONE
 
 **Priority:** High
 **Labels:** `feature`, `new-panel`, `analysis`
+**Status:** Implemented in commit `6e39a9e` — new `species_analysis` module with checklist, gap analysis, and summary stats
 
 ### Description
 
@@ -294,10 +298,11 @@ perform_gap_analysis <- function(input_taxa, specimen_data) {
 
 ---
 
-## Issue #5: Download records marked with issues/annotations in TSV format
+## Issue #5: Download records marked with issues/annotations in TSV format ✅ DONE
 
 **Priority:** Medium
 **Labels:** `feature`, `export`, `annotations`
+**Status:** Implemented in commit `7c8978e` — "Download Annotated Records" button added to specimen tab
 
 ### Description
 
@@ -369,10 +374,11 @@ Extend the same button to each BAGS grade tab, downloading annotated records for
 
 ---
 
-## Issue #6: Download records marked as selected in TSV format
+## Issue #6: Download records marked as selected in TSV format ✅ DONE
 
 **Priority:** Low
 **Labels:** `enhancement`, `export`
+**Status:** Implemented in commit `7c8978e` — fixed download_selected handler with merge_annotations_for_export()
 
 ### Description
 
@@ -415,10 +421,11 @@ Route selected downloads through `ExportManager$export_tsv()` for consistency. R
 
 ---
 
-## Issue #7: Read-only annotations in specimen table
+## Issue #7: Read-only annotations in specimen table ✅ DONE
 
 **Priority:** Medium
 **Labels:** `feature`, `ui`, `annotations`, `investigation`
+**Status:** Implemented in commit `b56689b` — `read_only` parameter added to `format_specimen_table()`
 
 ### Description
 
@@ -509,26 +516,28 @@ Make annotations editable in both places with a sync mechanism. Most complex opt
 
 ## Implementation Order
 
-Recommended sequencing based on dependencies and impact:
+### Completed (Phase 1-4)
+
+All original issues #1-#8 have been implemented.
+
+| Issue | Commit | Summary |
+|-------|--------|---------|
+| #1 Remove BAGS filters | `30ce517` | Removed filter UI, logic, and `filter_grade_specimens()` |
+| #2 Annotation merge utility | `c6fed00` | Created `merge_annotations_for_export()`, updated ExportManager |
+| #3 Dynamic pagination | `84ebdeb` | Dynamic page_length (max 25), `dom` parameter |
+| #4 Species analysis panel | `6e39a9e` | New module with checklist, gap analysis, summary stats |
+| #5 Download annotated records | `7c8978e` | "Download Annotated Records" button |
+| #6 Fix selected download | `7c8978e` | Fixed handler with merge utility |
+| #7 Read-only annotations | `b56689b` | `read_only` mode in `format_specimen_table()` |
+| #8 Session persistence | `e0c86e4` | RDS-based save/load, auto-save, resume UI |
+
+### Remaining
 
 ```
-Phase 1 - Foundation
-  ├── #2 Annotation merge utility (shared dependency for #5, #6)
-  ├── #1 Remove BAGS filters (independent, clean refactor)
-  └── #8a Wire up existing SQLite for annotation persistence
-
-Phase 2 - Downloads & Persistence
-  ├── #5 Download annotated records (depends on #2)
-  ├── #6 Fix selected records download (depends on #2)
-  └── #8b RDS persistence for specimen data + session metadata
-
-Phase 3 - UI Enhancements
-  ├── #3 Dynamic pagination in BAGS tabs (independent)
-  ├── #7 Read-only annotations in specimen table (independent)
-  └── #8c Session resume UI + auto-save timer
-
-Phase 4 - New Feature
-  └── #4 Species checklist / gap analysis panel (largest scope, independent)
+Phase 5 - Search & Data Quality
+  ├── #9  BIN expansion in search procedure (high priority)
+  ├── #10 Species-level only matching in gap analysis
+  └── #11 Fix BAGS tab download buttons (missing downloadHandler)
 ```
 
 ---
@@ -573,10 +582,11 @@ state$update_state("search_taxa", params$taxonomy)
 
 ---
 
-## Issue #8: Saved session state — resume work across sessions
+## Issue #8: Saved session state — resume work across sessions ✅ DONE
 
 **Priority:** High
 **Labels:** `feature`, `infrastructure`, `state-management`, `persistence`
+**Status:** Implemented in commit `e0c86e4` — RDS-based persistence, auto-save on session end, resume UI in Data Import
 
 ### Description
 
@@ -841,3 +851,147 @@ This alone solves the "lost annotations" problem during internet drops.
 │                                                            │
 └────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## Issue #9: Add BIN-expansion step to search procedure
+
+**Priority:** High
+**Labels:** `feature`, `data-import`, `search`
+**Status:** Planned
+
+### Description
+
+The search procedure should follow this logic for all searches:
+1. Search based on input parameters (taxonomy, project code, country, etc.)
+2. Download all matching records
+3. Extract the list of `bin_uri` values from the results
+4. Download ALL records in those BINs (even if they don't match the original request)
+
+This ensures complete BIN coverage — if a BIN contains specimens from other species or regions, those are included so the curator can evaluate the full BIN context.
+
+### Current State
+
+The current implementation in `mod_data_import_server.R` does **not** perform BIN expansion:
+- `process_taxonomy_search()` (lines 329-354): searches by taxonomy, fetches matching records by processid, stops there
+- `fetch_specimens()` (lines 278-326): fetches by dataset/project codes, stops there
+- `merge_specimens()` (lines 357-365): deduplicates, but no BIN expansion
+
+The old codebase (v7_4_22) had a BIN expansion step using `bold.fetch(get_by="bin_uris")` but this was not carried forward.
+
+### Implementation Plan
+
+Add a BIN expansion step after all initial searches complete but before data processing.
+
+**File:** `R/modules/data_import/mod_data_import_server.R`
+
+After the three search parts (dataset, project, taxonomy) complete and `combined_specimens` is built:
+
+```r
+# Step 4: BIN expansion — fetch all records in the BINs found so far
+if (!is.null(combined_specimens) && nrow(combined_specimens) > 0) {
+  bin_uris <- unique(combined_specimens$bin_uri[
+    !is.na(combined_specimens$bin_uri) & combined_specimens$bin_uri != ""
+  ])
+
+  if (length(bin_uris) > 0) {
+    state$update_state("processing", list(
+      active = TRUE,
+      progress = 70,
+      message = sprintf("Expanding BIN coverage (%d BINs)...", length(bin_uris))
+    ))
+
+    # Fetch in batches to avoid API limits
+    batch_size <- 50
+    bin_batches <- split(bin_uris, ceiling(seq_along(bin_uris) / batch_size))
+
+    for (batch in bin_batches) {
+      bin_specimens <- tryCatch({
+        BOLDconnectR::bold.fetch(
+          get_by = "bin",
+          identifiers = paste(batch, collapse = ",")
+        )
+      }, error = function(e) {
+        logger$warn("BIN batch fetch failed", list(error = e$message))
+        NULL
+      })
+
+      if (!is.null(bin_specimens)) {
+        combined_specimens <- merge_specimens(combined_specimens, bin_specimens)
+      }
+    }
+
+    logger$info("BIN expansion complete", list(
+      bins_queried = length(bin_uris),
+      total_specimens = nrow(combined_specimens)
+    ))
+  }
+}
+```
+
+### Notes
+
+- BIN expansion can significantly increase data volume — a single BIN may contain hundreds of specimens across multiple species
+- Batch processing (50 BINs per request) prevents API timeouts
+- `merge_specimens()` deduplication by processid prevents double-counting
+- Progress UI should indicate this is a separate step so users understand the delay
+- The `get_by` parameter value for BINs in `BOLDconnectR::bold.fetch()` needs to be verified — it may be `"bin"`, `"bin_uri"`, or `"bin_uris"` depending on the package version
+
+---
+
+## Issue #10: Species analysis should only match at species level
+
+**Priority:** Medium
+**Labels:** `bug`, `species-analysis`
+**Status:** Planned
+
+### Description
+
+The species gap analysis currently supports genus-level and higher-taxonomy partial matching. This should be restricted to species-level only — if a taxon is not found as an exact species match, it should be reported as "Missing".
+
+### Current State
+
+`R/modules/species_analysis/mod_species_analysis_utils.R` — `perform_gap_analysis()` has three matching modes:
+1. **Exact species match** (lines 81-88) — keep this
+2. **Genus-level match** (lines 90-101) — remove
+3. **Higher taxonomy match** (lines 103-114) — remove
+
+### Fix
+
+Remove the genus and higher taxonomy matching blocks. Only exact species matches should return "Found".
+
+### Files to Modify
+
+| File | Change |
+|------|--------|
+| `R/modules/species_analysis/mod_species_analysis_utils.R` | Remove genus match block (lines 90-101) and higher taxonomy block (lines 103-114) from `perform_gap_analysis()` |
+
+---
+
+## Issue #11: BAGS tab download buttons not working
+
+**Priority:** High
+**Labels:** `bug`, `bags-grading`, `export`
+**Status:** Planned
+
+### Description
+
+The "Download Data" button on each BAGS grade tab (A-E) does nothing when clicked. The UI defines a `downloadButton(ns("download_data"))` but there is no corresponding `downloadHandler` in the server module.
+
+### Current State
+
+- **UI:** `R/modules/bags_grading/mod_bags_grading_ui.R` line 56 — `downloadButton(ns("download_data"), "Download Data")`
+- **Server:** `R/modules/bags_grading/mod_bags_grading_server.R` — no `output$download_data` handler exists anywhere in the file
+
+### Fix
+
+Add a `downloadHandler` to `mod_bags_grading_server.R` that:
+1. Takes `rv$filtered_data` (the grade-filtered specimens)
+2. Merges annotations using `merge_annotations_for_export()`
+3. Exports as TSV
+
+### Files to Modify
+
+| File | Change |
+|------|--------|
+| `R/modules/bags_grading/mod_bags_grading_server.R` | Add `output$download_data <- downloadHandler(...)` |
