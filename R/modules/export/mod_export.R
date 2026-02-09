@@ -9,7 +9,8 @@ ExportManager <- R6::R6Class("ExportManager",
                                  private$session_id <- session_id
                                },
 
-                               export_excel = function(data, filename, user_info = NULL) {
+                               export_excel = function(data, filename, user_info = NULL,
+                                                        annotations = NULL) {
                                  tryCatch({
                                    sheets <- list()
                                    record_count <- 0
@@ -20,7 +21,17 @@ ExportManager <- R6::R6Class("ExportManager",
                                    }
 
                                    if (!is.null(data$specimen_data)) {
-                                     sheets$Specimens <- data$specimen_data[, private$get_specimen_columns()]
+                                     specimen_export <- data$specimen_data
+                                     if (!is.null(annotations)) {
+                                       specimen_export <- merge_annotations_for_export(
+                                         specimen_export,
+                                         annotations$selections,
+                                         annotations$flags,
+                                         annotations$notes
+                                       )
+                                     }
+                                     cols <- intersect(private$get_specimen_columns(), names(specimen_export))
+                                     sheets$Specimens <- specimen_export[, cols]
                                      record_count <- record_count + nrow(data$specimen_data)
                                    }
 
@@ -71,10 +82,19 @@ ExportManager <- R6::R6Class("ExportManager",
                                  })
                                },
 
-                               export_tsv = function(data, filename, include_sequences = FALSE, user_info = NULL) {
+                               export_tsv = function(data, filename, include_sequences = FALSE,
+                                                      user_info = NULL, annotations = NULL) {
                                  tryCatch({
                                    specimen_data <- data$specimen_data
                                    if (!is.null(specimen_data)) {
+                                     if (!is.null(annotations)) {
+                                       specimen_data <- merge_annotations_for_export(
+                                         specimen_data,
+                                         annotations$selections,
+                                         annotations$flags,
+                                         annotations$notes
+                                       )
+                                     }
                                      cols <- private$get_specimen_columns()
                                      if (!include_sequences) {
                                        cols <- setdiff(cols, "nuc")
@@ -201,7 +221,8 @@ ExportManager <- R6::R6Class("ExportManager",
                                    "bin_uri", "identified_by", "identification_method",
                                    "collectors", "collection_date_start", "country.ocean",
                                    "coord", "institution", "voucher_type", "quality_score",
-                                   "criteria_met", "nuc")
+                                   "criteria_met", "nuc",
+                                   "selected", "flag", "curator_notes")
                                },
 
                                prepare_bin_summary = function(bin_analysis) {

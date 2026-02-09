@@ -48,6 +48,8 @@ get_flag_options <- function() {
 #' @param current_flags Current flags list
 #' @param current_notes Current curator notes list
 #' @param logger Optional logger instance
+#' @param dom DT dom option string controlling which elements are displayed
+#' @param read_only If TRUE, render annotation columns as plain text instead of interactive widgets
 #' @return DT datatable object or NULL if processing fails
 #' @export
 format_specimen_table <- function(data, ns = NULL,
@@ -58,7 +60,9 @@ format_specimen_table <- function(data, ns = NULL,
                                   current_selections = NULL,
                                   current_flags = NULL,
                                   current_notes = NULL,
-                                  logger = NULL) {
+                                  logger = NULL,
+                                  dom = 'Bfrtip',
+                                  read_only = FALSE) {
 
   if (is.null(data) || nrow(data) == 0) {
     if (!is.null(logger)) logger$warn("Empty input data")
@@ -102,7 +106,7 @@ format_specimen_table <- function(data, ns = NULL,
     scrollY = "500px",
     pageLength = page_length,
     autoWidth = FALSE,
-    dom = 'Bfrtip',
+    dom = dom,
     buttons = list(
       list(
         extend = 'csv',
@@ -137,98 +141,171 @@ format_specimen_table <- function(data, ns = NULL,
       search = ""
     ),
 
-    columnDefs = list(
-      # Selected column
+    columnDefs = if (read_only) {
+      # Read-only mode: plain text for annotation columns
       list(
-        targets = which(names(data) == "selected") - 1,
-        width = "40px",
-        className = 'dt-center fixed-col',
-        orderable = FALSE,
-        searchable = FALSE,
-        render = JS("
-      function(data, type, row) {
-        if(type === 'display') {
-          return '<input type=\"checkbox\" class=\"specimen-select\"' +
-                 (data == true ? ' checked' : '') + '>';
-        }
-        return data;
-      }
-    ")
-      ),
-      # Flag column
+        # Selected column — display checkmark or empty
+        list(
+          targets = which(names(data) == "selected") - 1,
+          width = "40px",
+          className = 'dt-center fixed-col',
+          orderable = TRUE,
+          searchable = FALSE,
+          render = JS("
+            function(data, type, row) {
+              if (type === 'display') return data === true ? '\u2713' : '';
+              return data;
+            }
+          ")
+        ),
+        # Flag column — display label text
+        list(
+          targets = which(names(data) == "flag") - 1,
+          width = "100px",
+          className = 'dt-center fixed-col',
+          orderable = TRUE,
+          searchable = TRUE,
+          render = JS("
+            function(data, type, row) {
+              if (type === 'display') {
+                var labels = {
+                  'misidentification': 'Misidentification',
+                  'id_uncertain': 'ID Uncertain',
+                  'data_issue': 'Data Issue',
+                  'other_issue': 'Other Issue'
+                };
+                return labels[data] || '';
+              }
+              return data;
+            }
+          ")
+        ),
+        # Curator notes — plain text
+        list(
+          targets = which(names(data) == "curator_notes") - 1,
+          width = "150px",
+          className = 'dt-body-left fixed-col',
+          orderable = FALSE,
+          searchable = TRUE
+        ),
+        # All other columns
+        list(
+          targets = "_all",
+          className = "dt-body-left",
+          width = "100px",
+          maxWidth = "100px",
+          render = JS("
+            function(data, type, row) {
+              if (type === 'display') {
+                return '<div class=\"cell-content\" title=\"' +
+                       (data || '').toString().replace(/\\\"/g, '&quot;') + '\">' +
+                       (data || '') + '</div>';
+              }
+              return data;
+            }
+          ")
+        )
+      )
+    } else {
+      # Interactive mode: checkboxes, dropdowns, editable fields
       list(
-        targets = which(names(data) == "flag") - 1,
-        width = "100px",
-        className = 'dt-center fixed-col',
-        orderable = FALSE,
-        searchable = FALSE,
-        render = JS(sprintf("
-    function(data, type, row) {
-      if(type === 'display') {
-        var flagOptions = %s;
-        var select = '<select class=\"specimen-flag form-select form-select-sm\">';
-        select += '<option value=\"\">None</option>';
-        select += '<option value=\"misidentification\"' + (data === 'misidentification' ? ' selected' : '') + '>Misidentification</option>';
-        select += '<option value=\"id_uncertain\"' + (data === 'id_uncertain' ? ' selected' : '') + '>ID Uncertain</option>';
-        select += '<option value=\"data_issue\"' + (data === 'data_issue' ? ' selected' : '') + '>Data Issue</option>';
-        select += '<option value=\"other_issue\"' + (data === 'other_issue' ? ' selected' : '') + '>Other Issue</option>';
-        select += '</select>';
-        return select;
-      }
-      return data;
-    }
-  ", jsonlite::toJSON(get_flag_options(), auto_unbox = TRUE)))
-      ),
-      # Curator notes column
-      list(
-        targets = which(names(data) == "curator_notes") - 1,
-        width = "100px",
-        className = 'dt-center fixed-col editable',
-        orderable = FALSE,
-        searchable = FALSE
-      ),
-      # All other columns
-      list(
-        targets = "_all",
-        className = "dt-body-left",
-        width = "100px",  # Default width
-        maxWidth = "100px",
-        render = JS("
+        # Selected column
+        list(
+          targets = which(names(data) == "selected") - 1,
+          width = "40px",
+          className = 'dt-center fixed-col',
+          orderable = FALSE,
+          searchable = FALSE,
+          render = JS("
         function(data, type, row) {
-          if (type === 'display') {
-            // Preserve any existing background color style
-            var style = $(this).attr('style') || '';
-            return '<div class=\"cell-content\" title=\"' +
-                   (data || '').toString().replace(/\"/g, '&quot;') + '\" style=\"' +
-                   style + '\">' + (data || '') + '</div>';
+          if(type === 'display') {
+            return '<input type=\"checkbox\" class=\"specimen-select\"' +
+                   (data == true ? ' checked' : '') + '>';
           }
           return data;
         }
       ")
+        ),
+        # Flag column
+        list(
+          targets = which(names(data) == "flag") - 1,
+          width = "100px",
+          className = 'dt-center fixed-col',
+          orderable = FALSE,
+          searchable = FALSE,
+          render = JS(sprintf("
+      function(data, type, row) {
+        if(type === 'display') {
+          var flagOptions = %s;
+          var select = '<select class=\"specimen-flag form-select form-select-sm\">';
+          select += '<option value=\"\">None</option>';
+          select += '<option value=\"misidentification\"' + (data === 'misidentification' ? ' selected' : '') + '>Misidentification</option>';
+          select += '<option value=\"id_uncertain\"' + (data === 'id_uncertain' ? ' selected' : '') + '>ID Uncertain</option>';
+          select += '<option value=\"data_issue\"' + (data === 'data_issue' ? ' selected' : '') + '>Data Issue</option>';
+          select += '<option value=\"other_issue\"' + (data === 'other_issue' ? ' selected' : '') + '>Other Issue</option>';
+          select += '</select>';
+          return select;
+        }
+        return data;
+      }
+    ", jsonlite::toJSON(get_flag_options(), auto_unbox = TRUE)))
+        ),
+        # Curator notes column
+        list(
+          targets = which(names(data) == "curator_notes") - 1,
+          width = "100px",
+          className = 'dt-center fixed-col editable',
+          orderable = FALSE,
+          searchable = FALSE
+        ),
+        # All other columns
+        list(
+          targets = "_all",
+          className = "dt-body-left",
+          width = "100px",
+          maxWidth = "100px",
+          render = JS("
+          function(data, type, row) {
+            if (type === 'display') {
+              var style = $(this).attr('style') || '';
+              return '<div class=\"cell-content\" title=\"' +
+                     (data || '').toString().replace(/\\\"/g, '&quot;') + '\" style=\"' +
+                     style + '\">' + (data || '') + '</div>';
+            }
+            return data;
+          }
+        ")
+        )
       )
-    )
+    }
   )
 
-  # Add callback if namespace provided
-  if (!is.null(ns)) {
+  # Add callback if namespace provided (skip for read-only — no interactive handlers needed)
+  if (!is.null(ns) && !read_only) {
     dt_options$callback <- get_table_callback(ns, get_flag_options())
   }
 
   # Create base DT object
   tryCatch({
-    dt <- DT::datatable(
-      data,
+    dt_args <- list(
+      data = data,
       options = dt_options,
-      selection = 'none', # changed from selection to 'none'
+      selection = 'none',
       rownames = FALSE,
       escape = FALSE,
-      editable = list(
+      extensions = c('Buttons', 'FixedColumns')
+    )
+
+    # Only enable cell editing in interactive mode
+    if (!read_only) {
+      dt_args$editable <- list(
         target = 'cell',
         disable = list(columns = setdiff(seq_len(ncol(data))-1,
                                          which(names(data) %in% c("curator_notes"))-1))
-      ),
-      extensions = c('Buttons', 'FixedColumns') # Removed Select
-    )
+      )
+    }
+
+    dt <- do.call(DT::datatable, dt_args)
 
     # Add metric column formatting
     if ("quality_score" %in% names(data)) {
@@ -902,6 +979,53 @@ create_species_colors <- function(species) {
   }
 
   setNames(colors[1:length(unique_species)], unique_species)
+}
+
+#' Merge curator annotations into specimen data for export
+#'
+#' Produces clean text columns for selected, flag, curator_notes, and
+#' audit-trail fields (flag_user, flag_timestamp). Used by all export
+#' paths (ExportManager, download handlers) to ensure consistent
+#' annotation inclusion.
+#'
+#' @param data Data frame of specimen data (must contain processid column)
+#' @param selections Named list of selections keyed by processid
+#' @param flags Named list of flags keyed by processid (each entry has $flag, $user, $timestamp)
+#' @param notes Named list of curator notes keyed by processid (each entry has $text, $user, $timestamp)
+#' @return Data frame with clean text annotation columns appended
+#' @export
+merge_annotations_for_export <- function(data, selections = NULL, flags = NULL, notes = NULL) {
+  if (is.null(data) || nrow(data) == 0) return(data)
+
+  data$selected <- data$processid %in% names(selections)
+
+  data$flag <- sapply(data$processid, function(pid) {
+    if (!is.null(flags[[pid]])) {
+      f <- flags[[pid]]
+      if (is.list(f)) as.character(f$flag %||% "") else as.character(f)
+    } else ""
+  }, USE.NAMES = FALSE)
+
+  data$curator_notes <- sapply(data$processid, function(pid) {
+    if (!is.null(notes[[pid]])) {
+      n <- notes[[pid]]
+      if (is.list(n)) as.character(n$text %||% n$note %||% "") else as.character(n)
+    } else ""
+  }, USE.NAMES = FALSE)
+
+  data$flag_user <- sapply(data$processid, function(pid) {
+    if (!is.null(flags[[pid]]) && is.list(flags[[pid]])) {
+      as.character(flags[[pid]]$user %||% "")
+    } else ""
+  }, USE.NAMES = FALSE)
+
+  data$flag_timestamp <- sapply(data$processid, function(pid) {
+    if (!is.null(flags[[pid]]) && is.list(flags[[pid]])) {
+      as.character(flags[[pid]]$timestamp %||% "")
+    } else ""
+  }, USE.NAMES = FALSE)
+
+  data
 }
 
 #' Create table container with title and controls

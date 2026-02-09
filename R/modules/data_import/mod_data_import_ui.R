@@ -22,6 +22,28 @@ mod_data_import_ui <- function(id) {
       )
     ),
 
+    # Resume Session Section
+    fluidRow(
+      box(
+        title = "Resume Previous Session",
+        status = "warning",
+        width = 12,
+        solidHeader = TRUE,
+        collapsible = TRUE,
+        collapsed = TRUE,
+
+        uiOutput(ns("saved_sessions_ui")),
+
+        div(
+          style = "margin-top: 10px;",
+          tags$small(
+            class = "text-muted",
+            "Sessions are saved automatically when you close the browser. Select a session to restore your previous work."
+          )
+        )
+      )
+    ),
+
     # Main Input Box
     fluidRow(
       column(12,

@@ -1,43 +1,5 @@
 # R/modules/bags_grading/mod_bags_grading_utils.R
 
-#' Filter specimens by grade and criteria
-#' @param specimens Data frame of specimens
-#' @param grades Data frame of BAGS grades
-#' @param target_grade Target BAGS grade
-#' @param rank_filter Rank filter value
-#' @param quality_filter Quality score filter
-#' @param criteria_filter Vector of required criteria
-#' @return Filtered specimen data frame
-#' @keywords internal
-filter_grade_specimens <- function(specimens, grades, target_grade,
-                                   rank_filter, quality_filter, criteria_filter) {
-  # Get species for target grade
-  grade_species <- grades$species[grades$bags_grade == target_grade]
-  filtered <- specimens[specimens$species %in% grade_species, ]
-
-  # Apply rank filter
-  if (!is.null(rank_filter) && rank_filter != "All") {
-    filtered <- filtered[filtered$rank == as.numeric(rank_filter), ]
-  }
-
-  # Apply quality filter - Fix the logical comparison
-  quality_score <- as.numeric(quality_filter)
-  if (!is.null(quality_filter) && !is.na(quality_score) && quality_score > 0) {
-    filtered <- filtered[filtered$quality_score >= quality_score, ]
-  }
-
-  # Apply criteria filter
-  if (!is.null(criteria_filter) && length(criteria_filter) > 0) {
-    filtered <- filtered[sapply(filtered$criteria_met, function(x) {
-      if (is.na(x) || x == "") return(FALSE)
-      criteria_list <- strsplit(x, "; ")[[1]]
-      all(criteria_filter %in% criteria_list)
-    }), ]
-  }
-
-  filtered
-}
-
 #' Calculate grade metrics
 #' @param data Data frame of grade specimens
 #' @return List of metrics
@@ -220,14 +182,19 @@ create_grade_tables <- function(organized, grade, ns, current_sel, current_flags
 format_grade_table <- function(data, ns = NULL, grade) {
   if (is.null(data) || nrow(data) == 0) return(NULL)
 
+  # Dynamic page length: show all rows up to 25, paginate beyond that
+  n_rows <- nrow(data)
+  dynamic_page_length <- min(n_rows, 25)
+
   # Data arrives already prepared with annotations from create_grade_tables.
   # Go straight to formatting.
   dt <- format_specimen_table(
     data = data,
     ns = ns,
     buttons = c('copy', 'csv', 'excel'),
-    page_length = 50,
-    selection = 'none'
+    page_length = dynamic_page_length,
+    selection = 'none',
+    dom = if (n_rows > 25) "Btip" else "Bt"
   )
 
   if(grade == "E" && !is.null(dt)) {

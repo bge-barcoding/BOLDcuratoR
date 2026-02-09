@@ -96,33 +96,16 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
 
           logger$info(sprintf("Filtered to %d specimens for grade %s", nrow(specimens), grade))
 
-          # Apply filters
-          filtered <- filter_grade_specimens(
-            specimens = specimens,
-            grades = store$bags_grades,
-            target_grade = grade,
-            rank_filter = input$rank_filter,
-            quality_filter = input$min_quality_score,
-            criteria_filter = input$criteria_filter
-          )
-
-          logger$info(sprintf("Applied filters for grade %s", grade), list(
-            rank_filter = as.character(input$rank_filter),  # Convert to character explicitly
-            quality_filter = input$min_quality_score,
-            criteria_count = length(input$criteria_filter),
-            filtered_count = nrow(filtered)
-          ))
-
           # Update reactive values
           isolate({
-            rv$filtered_data <- filtered
-            rv$metrics <- calculate_grade_metrics(filtered)
+            rv$filtered_data <- specimens
+            rv$metrics <- calculate_grade_metrics(specimens)
             rv$processing_status$message <- "Data processed successfully"
           })
 
           logger$info(sprintf("Grade %s data processing complete", grade), list(
-            filtered_count = nrow(filtered),
-            species_count = length(unique(filtered$species))
+            specimen_count = nrow(specimens),
+            species_count = length(unique(specimens$species))
           ))
 
         }, error = function(e) {
@@ -253,14 +236,6 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
       )
     })
 
-    # Handle filter reset with logging
-    observeEvent(input$reset_filters, {
-      logger$info(sprintf("Resetting filters for grade %s", grade))
-      updateSelectInput(session, "rank_filter", selected = "All")
-      updateNumericInput(session, "min_quality_score", value = 0)
-      updateCheckboxGroupInput(session, "criteria_filter", selected = character(0))
-    })
-
     # Watch for flag changes
     observeEvent(input$specimen_flag, {
       req(input$specimen_flag)
@@ -307,6 +282,28 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
         state$update_state("specimen_curator_notes", current_notes)
       }
     })
+
+    # Download handler for BAGS grade data
+    output$download_data <- downloadHandler(
+      filename = function() {
+        paste0("bags_grade_", grade, "_", format(Sys.time(), "%Y%m%d_%H%M"), ".tsv")
+      },
+      content = function(file) {
+        data <- rv$filtered_data
+        if (is.null(data) || nrow(data) == 0) return(NULL)
+
+        store <- state$get_store()
+        data <- merge_annotations_for_export(
+          data,
+          selections = rv$selected_specimens,
+          flags = rv$flagged_specimens,
+          notes = rv$curator_notes
+        )
+
+        write.table(data, file, sep = "\t", row.names = FALSE, quote = FALSE)
+        logger$info(sprintf("Downloaded grade %s data", grade), list(count = nrow(data)))
+      }
+    )
 
     # Safe session cleanup with logging
     session$onSessionEnded(function() {

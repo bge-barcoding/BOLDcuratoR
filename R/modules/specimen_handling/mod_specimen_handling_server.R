@@ -153,61 +153,33 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
 
     # Render the specimen table (view-only).
     # Annotations (flags, notes, selections) are managed in the BAGS grade
-    # tables. This table shows specimen data with filtering only.
+    # tables. This table displays them in read-only mode.
     output$specimen_table <- renderDT({
       req(rv$filtered_data)
       data <- rv$filtered_data
 
       logger$info("Rendering specimen table", list(rows = nrow(data)))
 
-      tryCatch({
-        # Prepare data for display (no interactive annotation columns)
-        data <- as.data.frame(data, stringsAsFactors = FALSE)
-        rownames(data) <- NULL
-        data <- order_columns(data)
+      store <- state$get_store()
 
-        DT::datatable(
-          data,
-          options = list(
-            scrollX = TRUE,
-            scrollY = "500px",
-            pageLength = 50,
-            autoWidth = FALSE,
-            dom = 'Bfrtip',
-            buttons = list('copy', 'csv', 'excel'),
-            processing = FALSE,
-            serverSide = FALSE,
-            search = list(regex = FALSE, caseInsensitive = TRUE),
-            columnDefs = list(
-              list(
-                targets = "_all",
-                className = "dt-body-left",
-                width = "100px",
-                render = JS("
-                  function(data, type, row) {
-                    if (type === 'display') {
-                      return '<div class=\"cell-content\" title=\"' +
-                             (data || '').toString().replace(/\\\"/g, '&quot;') +
-                             '\">' + (data || '') + '</div>';
-                    }
-                    return data;
-                  }
-                ")
-              )
-            )
-          ),
-          selection = 'none',
-          rownames = FALSE,
-          escape = FALSE,
-          extensions = c('Buttons')
-        )
-      }, error = function(e) {
-        logger$error("Error rendering specimen table", list(
-          error = e$message,
-          stack = e$call
-        ))
-        NULL
-      })
+      # Prepare data with annotation columns merged as clean text
+      prepared <- prepare_module_data(
+        data = data,
+        current_selections = store$selected_specimens,
+        current_flags = store$specimen_flags,
+        current_notes = store$specimen_curator_notes,
+        logger = logger
+      )
+
+      format_specimen_table(
+        data = prepared,
+        ns = NULL,
+        buttons = c('copy', 'csv', 'excel'),
+        page_length = 50,
+        selection = 'none',
+        logger = logger,
+        read_only = TRUE
+      )
     })
 
     # Value box outputs
@@ -266,14 +238,81 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
         paste0("filtered_specimens_", format(Sys.time(), "%Y%m%d_%H%M"), ".tsv")
       },
       content = function(file) {
-        # Change from filtered_data() to rv$filtered_data
         data <- rv$filtered_data
         if (is.null(data) || nrow(data) == 0) {
           return(NULL)
         }
 
+        store <- state$get_store()
+        data <- merge_annotations_for_export(
+          data,
+          selections = store$selected_specimens,
+          flags = store$specimen_flags,
+          notes = store$specimen_curator_notes
+        )
+
         write.table(data, file, sep = "\t", row.names = FALSE, quote = FALSE)
         logger$info("Downloaded filtered specimens", list(count = nrow(data)))
+      }
+    )
+
+    # Download selected specimens with clean annotations
+    output$download_selected <- downloadHandler(
+      filename = function() {
+        paste0("selected_specimens_", format(Sys.time(), "%Y%m%d_%H%M"), ".tsv")
+      },
+      content = function(file) {
+        data <- rv$filtered_data
+        if (is.null(data) || nrow(data) == 0) return(NULL)
+
+        store <- state$get_store()
+        selected_ids <- names(store$selected_specimens)
+        if (length(selected_ids) == 0) return(NULL)
+
+        selected_data <- data[data$processid %in% selected_ids, ]
+        if (nrow(selected_data) == 0) return(NULL)
+
+        selected_data <- merge_annotations_for_export(
+          selected_data,
+          selections = store$selected_specimens,
+          flags = store$specimen_flags,
+          notes = store$specimen_curator_notes
+        )
+
+        write.table(selected_data, file, sep = "\t", row.names = FALSE, quote = FALSE)
+        logger$info("Downloaded selected specimens", list(count = nrow(selected_data)))
+      }
+    )
+
+    # Download annotated (flagged or noted) specimens
+    output$download_annotated <- downloadHandler(
+      filename = function() {
+        paste0("annotated_specimens_", format(Sys.time(), "%Y%m%d_%H%M"), ".tsv")
+      },
+      content = function(file) {
+        data <- rv$filtered_data
+        if (is.null(data) || nrow(data) == 0) return(NULL)
+
+        store <- state$get_store()
+        flags <- store$specimen_flags
+        notes <- store$specimen_curator_notes
+
+        # Get processids with any annotation (flag or note)
+        annotated_ids <- unique(c(names(flags), names(notes)))
+        if (length(annotated_ids) == 0) return(NULL)
+
+        annotated_data <- data[data$processid %in% annotated_ids, ]
+        if (nrow(annotated_data) == 0) return(NULL)
+
+        annotated_data <- merge_annotations_for_export(
+          annotated_data,
+          selections = store$selected_specimens,
+          flags = flags,
+          notes = notes
+        )
+
+        write.table(annotated_data, file, sep = "\t", row.names = FALSE, quote = FALSE)
+        logger$info("Downloaded annotated specimens", list(count = nrow(annotated_data)))
       }
     )
 

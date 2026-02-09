@@ -14,6 +14,7 @@ source("R/config/column_definitions.R")
 source("R/utils/ErrorBoundary.R")
 source("R/utils/bags_grading.R")
 source("R/utils/table_utils.R")
+source("R/utils/session_persistence.R")
 
 # Source core modules
 source("R/modules/state/state_manager.R")
@@ -38,6 +39,10 @@ source("R/modules/bin_analysis/mod_bin_analysis_utils.R")
 source("R/modules/bags_grading/mod_bags_grading_ui.R")
 source("R/modules/bags_grading/mod_bags_grading_server.R")
 source("R/modules/bags_grading/mod_bags_grading_utils.R")
+
+source("R/modules/species_analysis/mod_species_analysis_ui.R")
+source("R/modules/species_analysis/mod_species_analysis_server.R")
+source("R/modules/species_analysis/mod_species_analysis_utils.R")
 
 source("R/modules/haplotype_analysis/haplotype_manager.R")
 source("R/modules/haplotype_analysis/sequence_aligner.R")
@@ -71,6 +76,7 @@ ui <- dashboardPage(
       menuItem("BAGS Grade C", tabName = "bags_c", icon = icon("exclamation-circle")),
       menuItem("BAGS Grade D", tabName = "bags_d", icon = icon("exclamation-triangle")),
       menuItem("BAGS Grade E", tabName = "bags_e", icon = icon("times-circle")),
+      menuItem("Species Analysis", tabName = "species_analysis", icon = icon("list-check")),
       menuItem("Haplotype Analysis", tabName = "haplotypes", icon = icon("dna")),
       menuItem("Export History", tabName = "export_history", icon = icon("history")),
       menuItem("About", tabName = "about", icon = icon("info-circle"))
@@ -175,6 +181,9 @@ ui <- dashboardPage(
       tabItem(tabName = "bags_e",
               mod_bags_grading_ui("bags_e", grade = "E")),
 
+      tabItem(tabName = "species_analysis",
+              mod_species_analysis_ui("species_analysis")),
+
       tabItem(tabName = "haplotypes",
               mod_haplotype_analysis_ui("haplotype")),
 
@@ -270,6 +279,12 @@ server <- function(input, output, session) {
     "bin_analysis",
     state = state,
     processor = function(specimens) bin_processor$analyze_bins(specimens),  # Pass as function
+    logger = logging_manager
+  )
+
+  species_analysis <- mod_species_analysis_server(
+    "species_analysis",
+    state = state,
     logger = logging_manager
   )
 
@@ -430,14 +445,71 @@ server <- function(input, output, session) {
     }
   })
 
-  # Session cleanup
+  # Save session state on exit
   session$onSessionEnded(function() {
+    tryCatch({
+      store <- isolate(state$get_store())
+      if (!is.null(store$specimen_data)) {
+        save_session_state(session$token, store)
+        logging_manager$log_action(
+          session_id = session$token,
+          action_type = "session_saved",
+          process_ids = character(0)
+        )
+      }
+    }, error = function(e) {
+      logging_manager$log_action(
+        session_id = session$token,
+        action_type = "session_save_error",
+        process_ids = character(0),
+        metadata = list(error = e$message)
+      )
+    })
+
     state$reset_state()
     logging_manager$log_action(
       session_id = session$token,
       action_type = "session_ended",
       process_ids = character(0)
     )
+  })
+
+  # Handle session resume
+  observeEvent(input$`data_import-resume_session`, {
+    session_id <- input$`data_import-resume_session`
+    req(session_id)
+
+    tryCatch({
+      saved <- load_session_state(session_id)
+      if (!is.null(saved)) {
+        for (key in names(saved)) {
+          if (key != "metadata" && !is.null(saved[[key]])) {
+            state$update_state(key, saved[[key]])
+          }
+        }
+
+        logging_manager$log_action(
+          session_id = session$token,
+          action_type = "session_resumed",
+          process_ids = character(0),
+          metadata = list(
+            restored_session = session_id,
+            specimen_count = if (!is.null(saved$specimen_data)) nrow(saved$specimen_data) else 0
+          )
+        )
+
+        showNotification(
+          sprintf("Session restored: %d specimens loaded",
+                  if (!is.null(saved$specimen_data)) nrow(saved$specimen_data) else 0),
+          type = "message"
+        )
+      }
+    }, error = function(e) {
+      showNotification(
+        sprintf("Failed to restore session: %s", e$message),
+        type = "error"
+      )
+    })
   })
 }
 
