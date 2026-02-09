@@ -531,14 +531,13 @@ All original issues #1-#8 have been implemented.
 | #7 Read-only annotations | `b56689b` | `read_only` mode in `format_specimen_table()` |
 | #8 Session persistence | `e0c86e4` | RDS-based save/load, auto-save, resume UI |
 
-### Remaining
+### Phase 5 - Search & Data Quality (completed)
 
-```
-Phase 5 - Search & Data Quality
-  ├── #9  BIN expansion in search procedure (high priority)
-  ├── #10 Species-level only matching in gap analysis
-  └── #11 Fix BAGS tab download buttons (missing downloadHandler)
-```
+| Issue | Commit | Summary |
+|-------|--------|---------|
+| #9 BIN expansion in search | `add2473` | Fetch all records in discovered BINs after initial search |
+| #10 Species-level gap analysis | `2ccfa53` | Removed genus/higher-taxonomy partial matching |
+| #11 BAGS download buttons | `d4e4f9b` | Added missing downloadHandler to BAGS grade server |
 
 ---
 
@@ -854,11 +853,11 @@ This alone solves the "lost annotations" problem during internet drops.
 
 ---
 
-## Issue #9: Add BIN-expansion step to search procedure
+## Issue #9: Add BIN-expansion step to search procedure ✅ DONE
 
 **Priority:** High
 **Labels:** `feature`, `data-import`, `search`
-**Status:** Planned
+**Status:** Implemented in commit `add2473` — BIN expansion after initial search, batched fetches of 50 BINs
 
 ### Description
 
@@ -939,11 +938,11 @@ if (!is.null(combined_specimens) && nrow(combined_specimens) > 0) {
 
 ---
 
-## Issue #10: Species analysis should only match at species level
+## Issue #10: Species analysis should only match at species level ✅ DONE
 
 **Priority:** Medium
 **Labels:** `bug`, `species-analysis`
-**Status:** Planned
+**Status:** Implemented in commit `2ccfa53` — removed genus and higher-taxonomy matching
 
 ### Description
 
@@ -968,11 +967,11 @@ Remove the genus and higher taxonomy matching blocks. Only exact species matches
 
 ---
 
-## Issue #11: BAGS tab download buttons not working
+## Issue #11: BAGS tab download buttons not working ✅ DONE
 
 **Priority:** High
 **Labels:** `bug`, `bags-grading`, `export`
-**Status:** Planned
+**Status:** Implemented in commit `d4e4f9b` — added downloadHandler with merge_annotations_for_export()
 
 ### Description
 
