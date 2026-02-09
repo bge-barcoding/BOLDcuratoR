@@ -62,7 +62,8 @@ format_specimen_table <- function(data, ns = NULL,
                                   current_notes = NULL,
                                   logger = NULL,
                                   dom = 'Bfrtip',
-                                  read_only = FALSE) {
+                                  read_only = FALSE,
+                                  scroll_y = "500px") {
 
   if (is.null(data) || nrow(data) == 0) {
     if (!is.null(logger)) logger$warn("Empty input data")
@@ -103,7 +104,8 @@ format_specimen_table <- function(data, ns = NULL,
   # Updated DT options
   dt_options <- list(
     scrollX = TRUE,
-    scrollY = "500px",
+    scrollY = scroll_y,
+    scrollCollapse = TRUE,
     pageLength = page_length,
     autoWidth = FALSE,
     dom = dom,
@@ -745,9 +747,8 @@ get_table_css <- function() {
 
   .dataTables_scrollBody {
     overflow-x: scroll !important;
-    overflow-y: scroll !important;
+    overflow-y: auto !important;
     white-space: nowrap !important;
-    min-height: 120px !important;
     max-height: 70vh !important;
   }
 

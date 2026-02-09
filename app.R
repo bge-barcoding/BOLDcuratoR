@@ -110,7 +110,6 @@ ui <- dashboardPage(
           margin: 0 !important;
         }
         .dataTables_scrollBody {
-          min-height: 120px !important;
           max-height: 70vh !important;
         }
         .dataTables_wrapper .row {
@@ -445,14 +444,35 @@ server <- function(input, output, session) {
     }
   })
 
-  # Save session state on exit
+  # Save session state on exit, using a user-meaningful identifier so
+
+  # sessions can be found by email/ORCID/name across browser sessions.
   session$onSessionEnded(function() {
     tryCatch({
       store <- isolate(state$get_store())
       if (!is.null(store$specimen_data)) {
-        save_session_state(session$token, store)
+        # Build a deterministic session ID from the best available user identifier
+        user_info <- store$user_info
+        user_id <- NULL
+        if (!is.null(user_info$email) && nchar(trimws(user_info$email)) > 0) {
+          user_id <- tolower(trimws(user_info$email))
+        } else if (!is.null(user_info$orcid) && nchar(trimws(user_info$orcid)) > 0) {
+          user_id <- trimws(user_info$orcid)
+        } else if (!is.null(user_info$name) && nchar(trimws(user_info$name)) > 0) {
+          user_id <- make.names(trimws(user_info$name))
+        }
+
+        # Sanitize for use as directory name and append timestamp
+        if (!is.null(user_id)) {
+          safe_id <- gsub("[^A-Za-z0-9._@-]", "_", user_id)
+          sid <- sprintf("%s_%s", safe_id, format(Sys.time(), "%Y%m%d_%H%M%S"))
+        } else {
+          sid <- session$token
+        }
+
+        save_session_state(sid, store)
         logging_manager$log_action(
-          session_id = session$token,
+          session_id = sid,
           action_type = "session_saved",
           process_ids = character(0)
         )

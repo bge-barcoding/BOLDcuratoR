@@ -38,23 +38,41 @@ mod_haplotype_analysis_ui <- function(id) {
                width = NULL,
                solidHeader = TRUE,
 
+               # Grouping level toggle
+               fluidRow(
+                 column(4,
+                        radioButtons(ns("group_by"),
+                                     "Group analysis by:",
+                                     choices = c("Species" = "species",
+                                                 "BIN" = "bin"),
+                                     selected = "species",
+                                     inline = TRUE)
+                 ),
+                 column(8,
+                        tags$small(class = "text-muted",
+                                   style = "line-height: 34px; display: inline-block;",
+                                   "Species: haplotypes within each species. BIN: haplotypes within each Barcode Index Number.")
+                 )
+               ),
+               hr(),
+
                tabBox(
                  id = ns("analysis_tabs"),
                  width = NULL,
 
-                 # Species Selection & Details Tab
+                 # Group Selection & Details Tab
                  tabPanel(
                    "Species Analysis",
                    fluidRow(
                      column(4,
                             selectInput(ns("selected_species"),
-                                        "Select Species:",
+                                        "Select Group:",
                                         choices = NULL
                             )
                      ),
                      column(8,
                             actionButton(ns("analyze_species"),
-                                         "Analyze Species",
+                                         "Analyze",
                                          class = "btn-primary",
                                          icon = icon("dna")
                             ),

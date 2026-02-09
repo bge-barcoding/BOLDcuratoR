@@ -9,11 +9,24 @@ mod_data_import_server <- function(id, state, logger = NULL) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
 
+    # Helper to get sessions filtered by the current user's identifiers.
+    # Returns the user's own sessions if any identifier matches, otherwise
+    # falls back to showing all sessions for backward compatibility.
+    get_user_sessions <- reactive({
+      user_info <- state$get_store()$user_info
+      user_sessions <- filter_sessions_by_user(
+        user_email = user_info$email,
+        user_orcid = user_info$orcid,
+        user_name  = user_info$name
+      )
+      user_sessions
+    })
+
     # Render saved sessions list
     output$saved_sessions_ui <- renderUI({
-      sessions <- list_saved_sessions()
+      sessions <- get_user_sessions()
       if (nrow(sessions) == 0) {
-        div(class = "text-muted", "No saved sessions found.")
+        div(class = "text-muted", "No saved sessions found for your account. Enter your details in the User Info panel to find previous sessions.")
       } else {
         tagList(
           DTOutput(ns("saved_sessions_table")),
@@ -29,10 +42,18 @@ mod_data_import_server <- function(id, state, logger = NULL) {
     })
 
     output$saved_sessions_table <- renderDT({
-      sessions <- list_saved_sessions()
+      sessions <- get_user_sessions()
       if (nrow(sessions) == 0) return(NULL)
+
+      # Show user-friendly columns; hide internal session_id
+      display <- sessions[, c("created_at", "updated_at", "user_email",
+                               "user_name", "specimen_count", "species_count"),
+                           drop = FALSE]
+      names(display) <- c("Created", "Updated", "Email", "Name",
+                           "Specimens", "Species")
+
       DT::datatable(
-        sessions,
+        display,
         options = list(pageLength = 5, dom = 'tip'),
         selection = 'single',
         rownames = FALSE
@@ -40,7 +61,7 @@ mod_data_import_server <- function(id, state, logger = NULL) {
     })
 
     observeEvent(input$resume_session, {
-      sessions <- list_saved_sessions()
+      sessions <- get_user_sessions()
       selected_row <- input$saved_sessions_table_rows_selected
       req(selected_row)
       session_id <- sessions$session_id[selected_row]

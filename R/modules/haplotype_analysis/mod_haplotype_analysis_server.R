@@ -21,7 +21,10 @@ mod_haplotype_analysis_server <- function(id, state, logger) {
       error = NULL
     ))
 
-    # Process new specimen data
+    # Track the current grouping mode
+    current_group_by <- reactiveVal("species")
+
+    # Re-run analysis when specimen data changes or grouping mode is toggled
     observe({
       # Validate state and required data
       validation <- state$validate_state(c("specimen_data"))
@@ -33,11 +36,22 @@ mod_haplotype_analysis_server <- function(id, state, logger) {
       specimens <- state$get_store()$specimen_data
       if (is.null(specimens)) return(NULL)
 
-      # Process specimens
-      results <- manager$analyze_specimens(specimens)
+      group_by <- input$group_by %||% "species"
+      current_group_by(group_by)
+
+      # Choose analysis method based on grouping
+      if (group_by == "bin") {
+        results <- manager$analyze_by_bin(specimens)
+        label <- "Select BIN:"
+      } else {
+        results <- manager$analyze_specimens(specimens)
+        label <- "Select Species:"
+      }
+
       if (!is.null(results)) {
         analysis_results(results)
         updateSelectInput(session, "selected_species",
+                          label = label,
                           choices = sort(names(results)))
       }
     })
@@ -69,9 +83,10 @@ mod_haplotype_analysis_server <- function(id, state, logger) {
     # Summary box outputs
     output$total_species_box <- renderValueBox({
       req(analysis_results())
+      group_label <- if (current_group_by() == "bin") "Total BINs" else "Total Species"
       valueBox(
         length(analysis_results()),
-        "Total Species",
+        group_label,
         icon = icon("dna"),
         color = "blue"
       )

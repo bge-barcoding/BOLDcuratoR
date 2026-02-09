@@ -39,7 +39,8 @@ save_session_state <- function(session_id, store, session_dir = "data/sessions")
       specimen_count = if (!is.null(store$specimen_data)) nrow(store$specimen_data) else 0,
       species_count = if (!is.null(store$specimen_data)) length(unique(store$specimen_data$species)) else 0,
       user_email = if (!is.null(store$user_info)) store$user_info$email else NULL,
-      user_name = if (!is.null(store$user_info)) store$user_info$name else NULL
+      user_name = if (!is.null(store$user_info)) store$user_info$name else NULL,
+      user_orcid = if (!is.null(store$user_info)) store$user_info$orcid else NULL
     )
 
     # Write created_at only on first save
@@ -109,30 +110,22 @@ load_session_state <- function(session_id, session_dir = "data/sessions") {
 #' @return Data frame of saved sessions with metadata, or empty data frame
 #' @export
 list_saved_sessions <- function(session_dir = "data/sessions") {
-  if (!dir.exists(session_dir)) {
-    return(data.frame(
-      session_id = character(0),
-      created_at = character(0),
-      updated_at = character(0),
-      user_email = character(0),
-      specimen_count = integer(0),
-      species_count = integer(0),
-      stringsAsFactors = FALSE
-    ))
-  }
+  empty_df <- data.frame(
+    session_id = character(0),
+    created_at = character(0),
+    updated_at = character(0),
+    user_email = character(0),
+    user_name = character(0),
+    user_orcid = character(0),
+    specimen_count = integer(0),
+    species_count = integer(0),
+    stringsAsFactors = FALSE
+  )
+
+  if (!dir.exists(session_dir)) return(empty_df)
 
   session_dirs <- list.dirs(session_dir, recursive = FALSE, full.names = FALSE)
-  if (length(session_dirs) == 0) {
-    return(data.frame(
-      session_id = character(0),
-      created_at = character(0),
-      updated_at = character(0),
-      user_email = character(0),
-      specimen_count = integer(0),
-      species_count = integer(0),
-      stringsAsFactors = FALSE
-    ))
-  }
+  if (length(session_dirs) == 0) return(empty_df)
 
   sessions <- lapply(session_dirs, function(sid) {
     meta_file <- file.path(session_dir, sid, "session_meta.json")
@@ -145,6 +138,8 @@ list_saved_sessions <- function(session_dir = "data/sessions") {
         created_at = meta$created_at %||% "",
         updated_at = meta$updated_at %||% "",
         user_email = meta$user_email %||% "",
+        user_name = meta$user_name %||% "",
+        user_orcid = meta$user_orcid %||% "",
         specimen_count = meta$specimen_count %||% 0L,
         species_count = meta$species_count %||% 0L,
         stringsAsFactors = FALSE
@@ -153,20 +148,50 @@ list_saved_sessions <- function(session_dir = "data/sessions") {
   })
 
   sessions <- sessions[!sapply(sessions, is.null)]
-  if (length(sessions) == 0) {
-    return(data.frame(
-      session_id = character(0),
-      created_at = character(0),
-      updated_at = character(0),
-      user_email = character(0),
-      specimen_count = integer(0),
-      species_count = integer(0),
-      stringsAsFactors = FALSE
-    ))
-  }
+  if (length(sessions) == 0) return(empty_df)
 
   result <- do.call(rbind, sessions)
   result[order(result$updated_at, decreasing = TRUE), ]
+}
+
+#' Filter saved sessions by user identifiers
+#'
+#' Matches sessions where ANY of the provided identifiers (email, ORCID, name)
+#' match the session metadata. This allows users to find their previous sessions
+#' regardless of which identifier they used when creating them.
+#'
+#' @param user_email Optional email to match
+#' @param user_orcid Optional ORCID to match
+#' @param user_name Optional name to match
+#' @param session_dir Base directory for sessions
+#' @return Data frame of matching sessions, or all sessions if no identifiers provided
+#' @export
+filter_sessions_by_user <- function(user_email = NULL, user_orcid = NULL,
+                                     user_name = NULL, session_dir = "data/sessions") {
+  all_sessions <- list_saved_sessions(session_dir)
+  if (nrow(all_sessions) == 0) return(all_sessions)
+
+  # If no identifiers provided, return all sessions
+  has_email <- !is.null(user_email) && nchar(trimws(user_email)) > 0
+  has_orcid <- !is.null(user_orcid) && nchar(trimws(user_orcid)) > 0
+  has_name  <- !is.null(user_name) && nchar(trimws(user_name)) > 0
+
+  if (!has_email && !has_orcid && !has_name) return(all_sessions)
+
+  # Match on any identifier (OR logic)
+  matches <- rep(FALSE, nrow(all_sessions))
+
+  if (has_email) {
+    matches <- matches | (tolower(trimws(all_sessions$user_email)) == tolower(trimws(user_email)))
+  }
+  if (has_orcid) {
+    matches <- matches | (trimws(all_sessions$user_orcid) == trimws(user_orcid))
+  }
+  if (has_name) {
+    matches <- matches | (tolower(trimws(all_sessions$user_name)) == tolower(trimws(user_name)))
+  }
+
+  all_sessions[matches, , drop = FALSE]
 }
 
 #' Clean up old sessions beyond a maximum age
