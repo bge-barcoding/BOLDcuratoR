@@ -239,8 +239,8 @@ mod_data_import_server <- function(id, state, logger = NULL) {
 
                 bin_specimens <- tryCatch({
                   BOLDconnectR::bold.fetch(
-                    get_by = "bin_uri",
-                    identifiers = batch
+                    get_by = "bin_uris",
+                    identifiers = paste(batch, collapse = ",")
                   )
                 }, error = function(e) {
                   logger$warn("BIN batch fetch failed", list(
