@@ -153,61 +153,33 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
 
     # Render the specimen table (view-only).
     # Annotations (flags, notes, selections) are managed in the BAGS grade
-    # tables. This table shows specimen data with filtering only.
+    # tables. This table displays them in read-only mode.
     output$specimen_table <- renderDT({
       req(rv$filtered_data)
       data <- rv$filtered_data
 
       logger$info("Rendering specimen table", list(rows = nrow(data)))
 
-      tryCatch({
-        # Prepare data for display (no interactive annotation columns)
-        data <- as.data.frame(data, stringsAsFactors = FALSE)
-        rownames(data) <- NULL
-        data <- order_columns(data)
+      store <- state$get_store()
 
-        DT::datatable(
-          data,
-          options = list(
-            scrollX = TRUE,
-            scrollY = "500px",
-            pageLength = 50,
-            autoWidth = FALSE,
-            dom = 'Bfrtip',
-            buttons = list('copy', 'csv', 'excel'),
-            processing = FALSE,
-            serverSide = FALSE,
-            search = list(regex = FALSE, caseInsensitive = TRUE),
-            columnDefs = list(
-              list(
-                targets = "_all",
-                className = "dt-body-left",
-                width = "100px",
-                render = JS("
-                  function(data, type, row) {
-                    if (type === 'display') {
-                      return '<div class=\"cell-content\" title=\"' +
-                             (data || '').toString().replace(/\\\"/g, '&quot;') +
-                             '\">' + (data || '') + '</div>';
-                    }
-                    return data;
-                  }
-                ")
-              )
-            )
-          ),
-          selection = 'none',
-          rownames = FALSE,
-          escape = FALSE,
-          extensions = c('Buttons')
-        )
-      }, error = function(e) {
-        logger$error("Error rendering specimen table", list(
-          error = e$message,
-          stack = e$call
-        ))
-        NULL
-      })
+      # Prepare data with annotation columns merged as clean text
+      prepared <- prepare_module_data(
+        data = data,
+        current_selections = store$selected_specimens,
+        current_flags = store$specimen_flags,
+        current_notes = store$specimen_curator_notes,
+        logger = logger
+      )
+
+      format_specimen_table(
+        data = prepared,
+        ns = NULL,
+        buttons = c('copy', 'csv', 'excel'),
+        page_length = 50,
+        selection = 'none',
+        logger = logger,
+        read_only = TRUE
+      )
     })
 
     # Value box outputs
