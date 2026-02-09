@@ -199,6 +199,69 @@ mod_data_import_server <- function(id, state, logger = NULL) {
             }
           }
 
+          # BIN expansion — fetch ALL records in BINs found so far
+          if (!is.null(combined_specimens) && nrow(combined_specimens) > 0) {
+            bin_uris <- unique(combined_specimens$bin_uri[
+              !is.na(combined_specimens$bin_uri) & combined_specimens$bin_uri != ""
+            ])
+
+            if (length(bin_uris) > 0) {
+              logger$info("Starting BIN expansion", list(
+                initial_specimens = nrow(combined_specimens),
+                bins_to_expand = length(bin_uris)
+              ))
+
+              state$update_state("processing", list(
+                active = TRUE,
+                progress = 70,
+                message = sprintf("Expanding BIN coverage (%d BINs)...", length(bin_uris))
+              ))
+
+              # Ensure API key is set
+              user_info <- state$get_store()$user_info
+              if (!is.null(user_info) && !is.null(user_info$bold_api_key)) {
+                BOLDconnectR::bold.apikey(user_info$bold_api_key)
+              }
+
+              # Fetch in batches to avoid API limits
+              batch_size <- 50
+              bin_batches <- split(bin_uris, ceiling(seq_along(bin_uris) / batch_size))
+
+              for (batch_idx in seq_along(bin_batches)) {
+                batch <- bin_batches[[batch_idx]]
+
+                state$update_state("processing", list(
+                  active = TRUE,
+                  progress = 70 + (batch_idx / length(bin_batches)) * 15,
+                  message = sprintf("Expanding BINs (batch %d/%d)...",
+                                    batch_idx, length(bin_batches))
+                ))
+
+                bin_specimens <- tryCatch({
+                  BOLDconnectR::bold.fetch(
+                    get_by = "bin_uri",
+                    identifiers = batch
+                  )
+                }, error = function(e) {
+                  logger$warn("BIN batch fetch failed", list(
+                    batch = batch_idx,
+                    error = e$message
+                  ))
+                  NULL
+                })
+
+                if (!is.null(bin_specimens) && nrow(bin_specimens) > 0) {
+                  combined_specimens <- merge_specimens(combined_specimens, bin_specimens)
+                }
+              }
+
+              logger$info("BIN expansion complete", list(
+                bins_queried = length(bin_uris),
+                total_specimens = nrow(combined_specimens)
+              ))
+            }
+          }
+
           # Process final results
           if (!is.null(combined_specimens) && nrow(combined_specimens) > 0) {
             state$update_state("processing", list(
