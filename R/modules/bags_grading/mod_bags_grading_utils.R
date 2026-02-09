@@ -182,14 +182,19 @@ create_grade_tables <- function(organized, grade, ns, current_sel, current_flags
 format_grade_table <- function(data, ns = NULL, grade) {
   if (is.null(data) || nrow(data) == 0) return(NULL)
 
+  # Dynamic page length: show all rows up to 25, paginate beyond that
+  n_rows <- nrow(data)
+  dynamic_page_length <- min(n_rows, 25)
+
   # Data arrives already prepared with annotations from create_grade_tables.
   # Go straight to formatting.
   dt <- format_specimen_table(
     data = data,
     ns = ns,
     buttons = c('copy', 'csv', 'excel'),
-    page_length = 50,
-    selection = 'none'
+    page_length = dynamic_page_length,
+    selection = 'none',
+    dom = if (n_rows > 25) "Btip" else "Bt"
   )
 
   if(grade == "E" && !is.null(dt)) {

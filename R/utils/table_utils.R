@@ -48,6 +48,7 @@ get_flag_options <- function() {
 #' @param current_flags Current flags list
 #' @param current_notes Current curator notes list
 #' @param logger Optional logger instance
+#' @param dom DT dom option string controlling which elements are displayed
 #' @return DT datatable object or NULL if processing fails
 #' @export
 format_specimen_table <- function(data, ns = NULL,
@@ -58,7 +59,8 @@ format_specimen_table <- function(data, ns = NULL,
                                   current_selections = NULL,
                                   current_flags = NULL,
                                   current_notes = NULL,
-                                  logger = NULL) {
+                                  logger = NULL,
+                                  dom = 'Bfrtip') {
 
   if (is.null(data) || nrow(data) == 0) {
     if (!is.null(logger)) logger$warn("Empty input data")
@@ -102,7 +104,7 @@ format_specimen_table <- function(data, ns = NULL,
     scrollY = "500px",
     pageLength = page_length,
     autoWidth = FALSE,
-    dom = 'Bfrtip',
+    dom = dom,
     buttons = list(
       list(
         extend = 'csv',
