@@ -115,6 +115,10 @@ mod_specimen_handling_ui <- function(id) {
                    downloadButton(ns("download_selected"),
                                   "Download Selected",
                                   class = "btn-info"
+                   ),
+                   downloadButton(ns("download_annotated"),
+                                  "Download Annotated Records",
+                                  class = "btn-warning"
                    )
                  )
           )

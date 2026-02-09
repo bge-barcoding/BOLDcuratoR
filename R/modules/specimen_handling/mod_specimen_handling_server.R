@@ -284,6 +284,66 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
       }
     )
 
+    # Download selected specimens with clean annotations
+    output$download_selected <- downloadHandler(
+      filename = function() {
+        paste0("selected_specimens_", format(Sys.time(), "%Y%m%d_%H%M"), ".tsv")
+      },
+      content = function(file) {
+        data <- rv$filtered_data
+        if (is.null(data) || nrow(data) == 0) return(NULL)
+
+        store <- state$get_store()
+        selected_ids <- names(store$selected_specimens)
+        if (length(selected_ids) == 0) return(NULL)
+
+        selected_data <- data[data$processid %in% selected_ids, ]
+        if (nrow(selected_data) == 0) return(NULL)
+
+        selected_data <- merge_annotations_for_export(
+          selected_data,
+          selections = store$selected_specimens,
+          flags = store$specimen_flags,
+          notes = store$specimen_curator_notes
+        )
+
+        write.table(selected_data, file, sep = "\t", row.names = FALSE, quote = FALSE)
+        logger$info("Downloaded selected specimens", list(count = nrow(selected_data)))
+      }
+    )
+
+    # Download annotated (flagged or noted) specimens
+    output$download_annotated <- downloadHandler(
+      filename = function() {
+        paste0("annotated_specimens_", format(Sys.time(), "%Y%m%d_%H%M"), ".tsv")
+      },
+      content = function(file) {
+        data <- rv$filtered_data
+        if (is.null(data) || nrow(data) == 0) return(NULL)
+
+        store <- state$get_store()
+        flags <- store$specimen_flags
+        notes <- store$specimen_curator_notes
+
+        # Get processids with any annotation (flag or note)
+        annotated_ids <- unique(c(names(flags), names(notes)))
+        if (length(annotated_ids) == 0) return(NULL)
+
+        annotated_data <- data[data$processid %in% annotated_ids, ]
+        if (nrow(annotated_data) == 0) return(NULL)
+
+        annotated_data <- merge_annotations_for_export(
+          annotated_data,
+          selections = store$selected_specimens,
+          flags = flags,
+          notes = notes
+        )
+
+        write.table(annotated_data, file, sep = "\t", row.names = FALSE, quote = FALSE)
+        logger$info("Downloaded annotated specimens", list(count = nrow(annotated_data)))
+      }
+    )
+
     # Calculate metrics helper
     calculate_metrics <- function(data) {
       list(
