@@ -9,6 +9,45 @@ mod_data_import_server <- function(id, state, logger = NULL) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
 
+    # Render saved sessions list
+    output$saved_sessions_ui <- renderUI({
+      sessions <- list_saved_sessions()
+      if (nrow(sessions) == 0) {
+        div(class = "text-muted", "No saved sessions found.")
+      } else {
+        tagList(
+          DTOutput(ns("saved_sessions_table")),
+          div(
+            style = "margin-top: 10px;",
+            actionButton(ns("resume_session"),
+                         "Resume Selected Session",
+                         class = "btn-primary",
+                         icon = icon("redo"))
+          )
+        )
+      }
+    })
+
+    output$saved_sessions_table <- renderDT({
+      sessions <- list_saved_sessions()
+      if (nrow(sessions) == 0) return(NULL)
+      DT::datatable(
+        sessions,
+        options = list(pageLength = 5, dom = 'tip'),
+        selection = 'single',
+        rownames = FALSE
+      )
+    })
+
+    observeEvent(input$resume_session, {
+      sessions <- list_saved_sessions()
+      selected_row <- input$saved_sessions_table_rows_selected
+      req(selected_row)
+      session_id <- sessions$session_id[selected_row]
+      # Bubble up to app-level handler via module input
+      session$sendInputMessage("resume_session", list(value = session_id))
+    })
+
     # Reactive Values
     search_params <- reactiveVal(NULL)
     validation_status <- reactiveVal(list(valid = TRUE, messages = character()))

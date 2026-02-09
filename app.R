@@ -14,6 +14,7 @@ source("R/config/column_definitions.R")
 source("R/utils/ErrorBoundary.R")
 source("R/utils/bags_grading.R")
 source("R/utils/table_utils.R")
+source("R/utils/session_persistence.R")
 
 # Source core modules
 source("R/modules/state/state_manager.R")
@@ -444,14 +445,71 @@ server <- function(input, output, session) {
     }
   })
 
-  # Session cleanup
+  # Save session state on exit
   session$onSessionEnded(function() {
+    tryCatch({
+      store <- isolate(state$get_store())
+      if (!is.null(store$specimen_data)) {
+        save_session_state(session$token, store)
+        logging_manager$log_action(
+          session_id = session$token,
+          action_type = "session_saved",
+          process_ids = character(0)
+        )
+      }
+    }, error = function(e) {
+      logging_manager$log_action(
+        session_id = session$token,
+        action_type = "session_save_error",
+        process_ids = character(0),
+        metadata = list(error = e$message)
+      )
+    })
+
     state$reset_state()
     logging_manager$log_action(
       session_id = session$token,
       action_type = "session_ended",
       process_ids = character(0)
     )
+  })
+
+  # Handle session resume
+  observeEvent(input$`data_import-resume_session`, {
+    session_id <- input$`data_import-resume_session`
+    req(session_id)
+
+    tryCatch({
+      saved <- load_session_state(session_id)
+      if (!is.null(saved)) {
+        for (key in names(saved)) {
+          if (key != "metadata" && !is.null(saved[[key]])) {
+            state$update_state(key, saved[[key]])
+          }
+        }
+
+        logging_manager$log_action(
+          session_id = session$token,
+          action_type = "session_resumed",
+          process_ids = character(0),
+          metadata = list(
+            restored_session = session_id,
+            specimen_count = if (!is.null(saved$specimen_data)) nrow(saved$specimen_data) else 0
+          )
+        )
+
+        showNotification(
+          sprintf("Session restored: %d specimens loaded",
+                  if (!is.null(saved$specimen_data)) nrow(saved$specimen_data) else 0),
+          type = "message"
+        )
+      }
+    }, error = function(e) {
+      showNotification(
+        sprintf("Failed to restore session: %s", e$message),
+        type = "error"
+      )
+    })
   })
 }
 
