@@ -39,6 +39,10 @@ source("R/modules/bags_grading/mod_bags_grading_ui.R")
 source("R/modules/bags_grading/mod_bags_grading_server.R")
 source("R/modules/bags_grading/mod_bags_grading_utils.R")
 
+source("R/modules/species_analysis/mod_species_analysis_ui.R")
+source("R/modules/species_analysis/mod_species_analysis_server.R")
+source("R/modules/species_analysis/mod_species_analysis_utils.R")
+
 source("R/modules/haplotype_analysis/haplotype_manager.R")
 source("R/modules/haplotype_analysis/sequence_aligner.R")
 source("R/modules/haplotype_analysis/mod_haplotype_analysis_ui.R")
@@ -71,6 +75,7 @@ ui <- dashboardPage(
       menuItem("BAGS Grade C", tabName = "bags_c", icon = icon("exclamation-circle")),
       menuItem("BAGS Grade D", tabName = "bags_d", icon = icon("exclamation-triangle")),
       menuItem("BAGS Grade E", tabName = "bags_e", icon = icon("times-circle")),
+      menuItem("Species Analysis", tabName = "species_analysis", icon = icon("list-check")),
       menuItem("Haplotype Analysis", tabName = "haplotypes", icon = icon("dna")),
       menuItem("Export History", tabName = "export_history", icon = icon("history")),
       menuItem("About", tabName = "about", icon = icon("info-circle"))
@@ -175,6 +180,9 @@ ui <- dashboardPage(
       tabItem(tabName = "bags_e",
               mod_bags_grading_ui("bags_e", grade = "E")),
 
+      tabItem(tabName = "species_analysis",
+              mod_species_analysis_ui("species_analysis")),
+
       tabItem(tabName = "haplotypes",
               mod_haplotype_analysis_ui("haplotype")),
 
@@ -270,6 +278,12 @@ server <- function(input, output, session) {
     "bin_analysis",
     state = state,
     processor = function(specimens) bin_processor$analyze_bins(specimens),  # Pass as function
+    logger = logging_manager
+  )
+
+  species_analysis <- mod_species_analysis_server(
+    "species_analysis",
+    state = state,
     logger = logging_manager
   )
 

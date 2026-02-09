@@ -163,6 +163,7 @@ StateManager <- R6::R6Class(
         specimen_data = NULL,
         bin_analysis = NULL,
         bags_grades = NULL,
+        search_taxa = NULL,
         selected_specimens = list(),
         specimen_flags = list(),
         specimen_curator_notes = list(),

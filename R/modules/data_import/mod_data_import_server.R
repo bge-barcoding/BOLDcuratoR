@@ -180,6 +180,9 @@ mod_data_import_server <- function(id, state, logger = NULL) {
             processed_data <- process_specimen_data(combined_specimens)
             state$update_state("specimen_data", processed_data, validate_specimen_data)
 
+            # Persist the original taxa input list for gap analysis
+            state$update_state("search_taxa", params$taxonomy)
+
             # Clear previous analyses
             state$update_state("bin_analysis", NULL)
             state$update_state("bags_grades", NULL)
