@@ -421,8 +421,11 @@ mod_data_import_server <- function(id, state, logger = NULL) {
         # Set API key for request
         BOLDconnectR::bold.apikey(user_info$bold_api_key)
 
-        # Search for specimens
-        search_results <- BOLDconnectR::bold.public.search(taxonomy = taxonomy, geography = geography)
+        # Search for specimens — bold.public.search requires list arguments
+        search_results <- BOLDconnectR::bold.public.search(
+          taxonomy = as.list(taxonomy),
+          geography = if (!is.null(geography)) as.list(geography) else NULL
+        )
         if (!is.null(search_results) && nrow(search_results) > 0) {
           specimens <- BOLDconnectR::bold.fetch(
             get_by = "processid",
