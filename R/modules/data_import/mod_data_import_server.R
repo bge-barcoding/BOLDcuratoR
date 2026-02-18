@@ -409,7 +409,11 @@ mod_data_import_server <- function(id, state, logger = NULL) {
       })
     }
 
-    # Helper function to process taxonomy search
+    # Helper function to process taxonomy search.
+    # Each taxon is searched individually so that one invalid name
+    # (e.g. a typo or a name absent from BOLD) does not cause the
+    # entire batch to fail.  Genus names are title-cased because the
+    # BOLD preprocessor does an exact-match comparison.
     process_taxonomy_search <- function(taxonomy, geography) {
       tryCatch({
         # Get API key from state
@@ -421,12 +425,39 @@ mod_data_import_server <- function(id, state, logger = NULL) {
         # Set API key for request
         BOLDconnectR::bold.apikey(user_info$bold_api_key)
 
-        # Search for specimens — bold.public.search requires list arguments
-        search_results <- BOLDconnectR::bold.public.search(
-          taxonomy = as.list(taxonomy),
-          geography = if (!is.null(geography)) as.list(geography) else NULL
-        )
-        if (!is.null(search_results) && nrow(search_results) > 0) {
+        geo_arg <- if (!is.null(geography)) as.list(geography) else NULL
+
+        # Search each taxon independently, collecting process IDs
+        all_search_results <- lapply(taxonomy, function(taxon) {
+          # Title-case the genus (first word) to satisfy BOLD's exact-match check
+          taxon <- sub("^(\\w)", "\\U\\1", trimws(taxon), perl = TRUE)
+
+          tryCatch({
+            res <- BOLDconnectR::bold.public.search(
+              taxonomy = list(taxon),
+              geography = geo_arg
+            )
+            if (!is.null(res) && nrow(res) > 0) {
+              logger$info(sprintf("Found %d records for '%s'", nrow(res), taxon))
+              res
+            } else {
+              logger$warn(sprintf("No records for taxon: %s", taxon))
+              NULL
+            }
+          }, error = function(e) {
+            logger$warn(sprintf("Taxon search failed for '%s': %s", taxon, e$message))
+            NULL
+          })
+        })
+
+        # Combine results, dropping NULLs
+        valid <- Filter(Negate(is.null), all_search_results)
+        if (length(valid) == 0) return(NULL)
+
+        search_results <- do.call(rbind, valid)
+        search_results <- search_results[!duplicated(search_results$processid), ]
+
+        if (nrow(search_results) > 0) {
           specimens <- BOLDconnectR::bold.fetch(
             get_by = "processid",
             identifiers = search_results$processid
