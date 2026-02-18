@@ -156,7 +156,7 @@ create_grade_tables <- function(organized, grade, ns, current_sel, current_flags
 
       if (!is.null(dt)) {
         div(
-          class = "specimen-table-container mb-4",
+          class = "specimen-table-container mb-2",
           h4(class = "table-title", generate_table_caption(grade, group_info)),
           dt
         )
@@ -186,6 +186,13 @@ format_grade_table <- function(data, ns = NULL, grade) {
   n_rows <- nrow(data)
   dynamic_page_length <- min(n_rows, 25)
 
+  # Calculate dynamic scroll height based on actual row count.
+  # Each row is 24px, header is 28px, plus some padding.
+  # Cap at 500px for large tables; let scrollCollapse shrink small ones.
+  rows_to_show <- min(n_rows, dynamic_page_length)
+  content_height <- (rows_to_show * 24) + 28 + 10
+  dynamic_scroll_y <- paste0(min(content_height, 500), "px")
+
   # Data arrives already prepared with annotations from create_grade_tables.
   # Go straight to formatting.
   dt <- format_specimen_table(
@@ -194,7 +201,8 @@ format_grade_table <- function(data, ns = NULL, grade) {
     buttons = c('copy', 'csv', 'excel'),
     page_length = dynamic_page_length,
     selection = 'none',
-    dom = if (n_rows > 25) "Btip" else "Bt"
+    dom = if (n_rows > 25) "Btip" else "Bt",
+    scroll_y = dynamic_scroll_y
   )
 
   if(grade == "E" && !is.null(dt)) {

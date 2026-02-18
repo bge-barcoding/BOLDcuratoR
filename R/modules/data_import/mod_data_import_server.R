@@ -9,11 +9,24 @@ mod_data_import_server <- function(id, state, logger = NULL) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
 
+    # Helper to get sessions filtered by the current user's identifiers.
+    # Returns the user's own sessions if any identifier matches, otherwise
+    # falls back to showing all sessions for backward compatibility.
+    get_user_sessions <- reactive({
+      user_info <- state$get_store()$user_info
+      user_sessions <- filter_sessions_by_user(
+        user_email = user_info$email,
+        user_orcid = user_info$orcid,
+        user_name  = user_info$name
+      )
+      user_sessions
+    })
+
     # Render saved sessions list
     output$saved_sessions_ui <- renderUI({
-      sessions <- list_saved_sessions()
+      sessions <- get_user_sessions()
       if (nrow(sessions) == 0) {
-        div(class = "text-muted", "No saved sessions found.")
+        div(class = "text-muted", "No saved sessions found for your account. Enter your details in the User Info panel to find previous sessions.")
       } else {
         tagList(
           DTOutput(ns("saved_sessions_table")),
@@ -29,10 +42,18 @@ mod_data_import_server <- function(id, state, logger = NULL) {
     })
 
     output$saved_sessions_table <- renderDT({
-      sessions <- list_saved_sessions()
+      sessions <- get_user_sessions()
       if (nrow(sessions) == 0) return(NULL)
+
+      # Show user-friendly columns; hide internal session_id
+      display <- sessions[, c("created_at", "updated_at", "user_email",
+                               "user_name", "specimen_count", "species_count"),
+                           drop = FALSE]
+      names(display) <- c("Created", "Updated", "Email", "Name",
+                           "Specimens", "Species")
+
       DT::datatable(
-        sessions,
+        display,
         options = list(pageLength = 5, dom = 'tip'),
         selection = 'single',
         rownames = FALSE
@@ -40,7 +61,7 @@ mod_data_import_server <- function(id, state, logger = NULL) {
     })
 
     observeEvent(input$resume_session, {
-      sessions <- list_saved_sessions()
+      sessions <- get_user_sessions()
       selected_row <- input$saved_sessions_table_rows_selected
       req(selected_row)
       session_id <- sessions$session_id[selected_row]
@@ -388,7 +409,11 @@ mod_data_import_server <- function(id, state, logger = NULL) {
       })
     }
 
-    # Helper function to process taxonomy search
+    # Helper function to process taxonomy search.
+    # Each taxon is searched individually so that one invalid name
+    # (e.g. a typo or a name absent from BOLD) does not cause the
+    # entire batch to fail.  Genus names are title-cased because the
+    # BOLD preprocessor does an exact-match comparison.
     process_taxonomy_search <- function(taxonomy, geography) {
       tryCatch({
         # Get API key from state
@@ -400,9 +425,39 @@ mod_data_import_server <- function(id, state, logger = NULL) {
         # Set API key for request
         BOLDconnectR::bold.apikey(user_info$bold_api_key)
 
-        # Search for specimens
-        search_results <- BOLDconnectR::bold.public.search(taxonomy = taxonomy, geography = geography)
-        if (!is.null(search_results) && nrow(search_results) > 0) {
+        geo_arg <- if (!is.null(geography)) as.list(geography) else NULL
+
+        # Search each taxon independently, collecting process IDs
+        all_search_results <- lapply(taxonomy, function(taxon) {
+          # Title-case the genus (first word) to satisfy BOLD's exact-match check
+          taxon <- sub("^(\\w)", "\\U\\1", trimws(taxon), perl = TRUE)
+
+          tryCatch({
+            res <- BOLDconnectR::bold.public.search(
+              taxonomy = list(taxon),
+              geography = geo_arg
+            )
+            if (!is.null(res) && nrow(res) > 0) {
+              logger$info(sprintf("Found %d records for '%s'", nrow(res), taxon))
+              res
+            } else {
+              logger$warn(sprintf("No records for taxon: %s", taxon))
+              NULL
+            }
+          }, error = function(e) {
+            logger$warn(sprintf("Taxon search failed for '%s': %s", taxon, e$message))
+            NULL
+          })
+        })
+
+        # Combine results, dropping NULLs
+        valid <- Filter(Negate(is.null), all_search_results)
+        if (length(valid) == 0) return(NULL)
+
+        search_results <- do.call(rbind, valid)
+        search_results <- search_results[!duplicated(search_results$processid), ]
+
+        if (nrow(search_results) > 0) {
           specimens <- BOLDconnectR::bold.fetch(
             get_by = "processid",
             identifiers = search_results$processid

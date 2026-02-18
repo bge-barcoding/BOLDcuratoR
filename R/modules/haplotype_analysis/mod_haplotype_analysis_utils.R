@@ -16,6 +16,14 @@ format_species_details <- function(data) {
     stringsAsFactors = FALSE
   )
 
+  # Include species count when showing BIN-level results
+  if (!is.null(data$n_species)) {
+    details_df$species_in_group <- data$n_species
+    if (!is.null(data$species_list)) {
+      details_df$species <- paste(sort(data$species_list), collapse = "; ")
+    }
+  }
+
   datatable(
     details_df,
     options = list(
@@ -110,16 +118,21 @@ format_geographic_table <- function(data) {
 format_diversity_stats <- function(results) {
   if (is.null(results)) return(NULL)
 
-  stats_df <- do.call(rbind, lapply(names(results), function(species) {
-    result <- results[[species]]
-    data.frame(
-      species = species,
+  stats_df <- do.call(rbind, lapply(names(results), function(group_name) {
+    result <- results[[group_name]]
+    row <- data.frame(
+      group = group_name,
       specimens = result$total_specimens,
       haplotypes = result$n_haplotypes,
       diversity = result$diversity,
       countries = result$n_countries,
       stringsAsFactors = FALSE
     )
+    # Add species count for BIN-level results
+    if (!is.null(result$n_species)) {
+      row$species_in_bin <- result$n_species
+    }
+    row
   }))
 
   datatable(
@@ -146,13 +159,14 @@ format_diversity_stats <- function(results) {
 format_sequence_stats <- function(results) {
   if (is.null(results)) return(NULL)
 
-  stats_df <- do.call(rbind, lapply(names(results), function(species) {
-    result <- results[[species]]
+  stats_df <- do.call(rbind, lapply(names(results), function(group_name) {
+    result <- results[[group_name]]
+    upper <- result$distance_matrix[upper.tri(result$distance_matrix)]
     data.frame(
-      species = species,
+      group = group_name,
       coverage = result$alignment_coverage * 100,
-      avg_distance = mean(result$distance_matrix[upper.tri(result$distance_matrix)]),
-      max_distance = max(result$distance_matrix[upper.tri(result$distance_matrix)]),
+      avg_distance = if (length(upper) > 0) mean(upper) else 0,
+      max_distance = if (length(upper) > 0) max(upper) else 0,
       stringsAsFactors = FALSE
     )
   }))

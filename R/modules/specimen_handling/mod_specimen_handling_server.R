@@ -22,6 +22,38 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
       )
     )
 
+    # Proxy for updating specimen table in-place when annotations change
+    specimen_proxy <- DT::dataTableProxy("specimen_table")
+
+    # Watch for annotation changes in state and refresh the specimen table.
+    # The BAGS grade tables write flags/notes/selections to the StateManager;
+    # this observer picks up those reactive changes and pushes updated data
+    # into the already-rendered table via replaceData() so the user sees
+    # annotations instantly without a full table re-render.
+    observe({
+      store <- state$get_store()
+
+      # Create reactive dependencies on annotation keys
+      current_selections <- store$selected_specimens
+      current_flags      <- store$specimen_flags
+      current_notes      <- store$specimen_curator_notes
+
+      # Only proceed when we have data to display
+      data <- isolate(rv$filtered_data)
+      if (is.null(data) || nrow(data) == 0) return()
+
+      prepared <- prepare_module_data(
+        data = data,
+        current_selections = current_selections,
+        current_flags = current_flags,
+        current_notes = current_notes,
+        logger = logger
+      )
+
+      DT::replaceData(specimen_proxy, prepared, resetPaging = FALSE, rownames = FALSE)
+      logger$info("Specimen table refreshed with updated annotations")
+    })
+
     # Update specimen processing observer to use rv instead of processing_status function
     observe({
       store <- state$get_store()

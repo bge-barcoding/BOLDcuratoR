@@ -82,6 +82,72 @@ HaplotypeManager <- R6::R6Class(
       })
     },
 
+    #' @description Analyze specimens grouped by BIN for within-BIN haplotype patterns
+    #' @param specimens Data frame of specimen data (must include bin_uri and nuc columns)
+    #' @return Named list of analysis results keyed by BIN URI
+    analyze_by_bin = function(specimens) {
+      private$error_boundary$catch({
+        # Validate input
+        validation <- private$validate_specimens(specimens)
+        if (!validation$valid) {
+          private$logger$error("Invalid specimen data", validation$messages)
+          return(NULL)
+        }
+
+        if (!"bin_uri" %in% names(specimens)) {
+          private$logger$error("Missing bin_uri column for BIN-level analysis")
+          return(NULL)
+        }
+
+        # Filter to specimens with valid BIN assignments
+        valid <- specimens[!is.na(specimens$bin_uri) & specimens$bin_uri != "", ]
+        if (nrow(valid) == 0) {
+          private$logger$warn("No specimens with valid BIN assignments")
+          return(NULL)
+        }
+
+        private$state$update_state("processing", list(
+          active = TRUE,
+          progress = 0,
+          message = "Starting BIN-level haplotype analysis..."
+        ))
+
+        bin_groups <- split(valid, valid$bin_uri)
+        total_bins <- length(bin_groups)
+
+        results <- lapply(seq_along(bin_groups), function(i) {
+          bin_uri <- names(bin_groups)[i]
+          group <- bin_groups[[i]]
+
+          private$state$update_state("processing", list(
+            active = TRUE,
+            progress = (i / total_bins) * 100,
+            message = sprintf("Processing BIN %s (%d/%d)...", bin_uri, i, total_bins)
+          ))
+
+          private$analyze_bin_group(group, bin_uri)
+        })
+
+        names(results) <- names(bin_groups)
+        valid_results <- results[!sapply(results, is.null)]
+
+        if (length(valid_results) == 0) {
+          private$logger$warn("No valid BIN-level results produced")
+          return(NULL)
+        }
+
+        private$state$update_state("haplotype_analysis", valid_results)
+        private$state$update_state("processing", list(
+          active = FALSE,
+          progress = 100,
+          message = "BIN-level haplotype analysis complete"
+        ))
+
+        private$logger$info(sprintf("Analyzed %d BINs for haplotypes", length(valid_results)))
+        valid_results
+      })
+    },
+
     #' @description Get summary statistics
     #' @param analysis_results Results from analyze_specimens()
     #' @return Data frame of summary statistics
@@ -238,6 +304,59 @@ HaplotypeManager <- R6::R6Class(
       }, error = function(e) {
         private$logger$error(sprintf("Error analyzing species %s: %s",
                                      species, e$message))
+        NULL
+      })
+    },
+
+    analyze_bin_group = function(specimens, bin_uri) {
+      tryCatch({
+        sequences <- specimens$nuc[!is.na(specimens$nuc) & specimens$nuc != ""]
+        if (length(sequences) < 2) {
+          private$logger$info(sprintf("Skipping BIN %s: fewer than 2 sequences", bin_uri))
+          return(NULL)
+        }
+
+        private$logger$info(sprintf("Analyzing %d sequences in BIN %s",
+                                    length(sequences), bin_uri))
+
+        aligned <- private$sequence_aligner$align_sequences(sequences)
+        if (is.null(aligned)) {
+          private$logger$warn(sprintf("Alignment failed for BIN: %s", bin_uri))
+          return(NULL)
+        }
+
+        diffs <- private$sequence_aligner$compare_sequences(aligned)
+        if (is.null(diffs)) {
+          private$logger$warn(sprintf("Sequence comparison failed for BIN: %s", bin_uri))
+          return(NULL)
+        }
+
+        haplotypes <- private$cluster_haplotypes(diffs)
+        if (length(haplotypes) == 0) {
+          private$logger$warn(sprintf("No haplotypes found for BIN: %s", bin_uri))
+          return(NULL)
+        }
+
+        n_haplotypes <- length(unique(haplotypes))
+        species_in_bin <- unique(specimens$species)
+
+        private$logger$info(sprintf("BIN %s: %d haplotypes, %d species",
+                                    bin_uri, n_haplotypes, length(species_in_bin)))
+
+        list(
+          total_specimens = nrow(specimens),
+          n_haplotypes = n_haplotypes,
+          n_countries = length(unique(specimens$country.ocean)),
+          n_species = length(species_in_bin),
+          species_list = species_in_bin,
+          diversity = n_haplotypes / length(sequences),
+          haplotype_assignments = haplotypes,
+          alignment_coverage = aligned$coverage,
+          distance_matrix = diffs,
+          timestamp = Sys.time()
+        )
+      }, error = function(e) {
+        private$logger$error(sprintf("Error analyzing BIN %s: %s", bin_uri, e$message))
         NULL
       })
     },
