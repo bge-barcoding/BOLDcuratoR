@@ -198,10 +198,10 @@ format_grade_table <- function(data, ns = NULL, grade) {
   dt <- format_specimen_table(
     data = data,
     ns = ns,
-    buttons = c('copy', 'csv', 'excel'),
+    buttons = list(),
     page_length = dynamic_page_length,
     selection = 'none',
-    dom = if (n_rows > 25) "Btip" else "Bt",
+    dom = if (n_rows > 25) "frtip" else "t",
     scroll_y = dynamic_scroll_y
   )
 
