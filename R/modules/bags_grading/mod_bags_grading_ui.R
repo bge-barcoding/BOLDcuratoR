@@ -20,7 +20,7 @@ mod_bags_grading_ui <- function(id, grade) {
                                "A" = "success",
                                "B" = "info",
                                "C" = "warning",
-                               "D" = "danger",
+                               "D" = NULL,
                                "E" = "danger"
                ),
                width = NULL,

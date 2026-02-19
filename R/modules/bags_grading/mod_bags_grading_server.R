@@ -196,7 +196,7 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
           "A" = "green",
           "B" = "blue",
           "C" = "yellow",
-          "D" = "red",
+          "D" = "black",
           "E" = "red"
         )
       )

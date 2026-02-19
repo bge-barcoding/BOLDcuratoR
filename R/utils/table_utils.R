@@ -972,7 +972,7 @@ format_bags_grade_table <- function(grade_data) {
       'bags_grade',
       backgroundColor = styleEqual(
         c("A", "B", "C", "D", "E"),
-        c('#28a745', '#17a2b8', '#ffc107', '#dc3545', '#6c757d')
+        c('#28a745', '#17a2b8', '#ffc107', '#6c757d', '#dc3545')
       ),
       color = 'white',
       fontWeight = 'bold'

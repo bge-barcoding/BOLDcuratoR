@@ -94,6 +94,27 @@ mod_species_analysis_server <- function(id, state, logger) {
     # Species checklist table
     output$species_checklist_table <- renderDT({
       req(rv$checklist)
+
+      # Build columnDefs for truncation of bin_uris and countries
+      checklist_cols <- names(rv$checklist)
+      truncate_targets <- which(checklist_cols %in% c("bin_uris", "countries")) - 1
+      col_defs <- if (length(truncate_targets) > 0) {
+        list(list(
+          targets = truncate_targets,
+          render = JS("
+            function(data, type, row) {
+              if (type === 'display' && data && data.length > 50) {
+                return '<span title=\"' + data.replace(/\"/g, '&quot;') + '\">' +
+                       data.substr(0, 50) + '...</span>';
+              }
+              return data;
+            }
+          ")
+        ))
+      } else {
+        list()
+      }
+
       DT::datatable(
         rv$checklist,
         options = list(
@@ -101,16 +122,18 @@ mod_species_analysis_server <- function(id, state, logger) {
           scrollX = TRUE,
           dom = 'Bfrtip',
           buttons = c('copy', 'csv', 'excel'),
-          order = list(list(1, 'desc'))
+          order = list(list(1, 'desc')),
+          columnDefs = col_defs
         ),
         rownames = FALSE,
+        escape = FALSE,
         extensions = c('Buttons')
       ) %>%
         formatStyle(
           'bags_grade',
           backgroundColor = styleEqual(
             c("A", "B", "C", "D", "E"),
-            c('#28a745', '#17a2b8', '#ffc107', '#dc3545', '#6c757d')
+            c('#28a745', '#17a2b8', '#ffc107', '#6c757d', '#dc3545')
           ),
           color = styleEqual(
             c("A", "B", "C", "D", "E"),
