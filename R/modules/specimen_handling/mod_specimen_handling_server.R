@@ -187,8 +187,10 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
     })
 
     # Render the specimen table (view-only).
-    # Annotations are read with isolate() so flag/note changes don't
-    # trigger a full re-render (the replaceData observer handles that).
+    # Annotations are read reactively so the table re-renders when
+    # flags/notes change in BAGS tabs.  Shiny's suspendWhenHidden
+    # (default TRUE) defers the re-render until the Specimens tab is
+    # active, so hidden tabs don't incur unnecessary work.
     output$specimen_table <- renderDT({
       req(rv$filtered_data)
       data <- rv$filtered_data
@@ -197,13 +199,13 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
 
       store <- state$get_store()
 
-      # isolate() prevents reactive dependency on annotation keys —
-      # the replaceData observer handles annotation-driven updates.
+      # Read annotations reactively so the table re-renders when they
+      # change (e.g. after editing in BAGS grade tabs).
       prepared <- prepare_module_data(
         data = data,
-        current_selections = isolate(store$selected_specimens),
-        current_flags = isolate(store$specimen_flags),
-        current_notes = isolate(store$specimen_curator_notes),
+        current_selections = store$selected_specimens,
+        current_flags = store$specimen_flags,
+        current_notes = store$specimen_curator_notes,
         logger = logger
       )
 
