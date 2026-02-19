@@ -13,6 +13,7 @@ source("R/config/column_definitions.R")
 # Source utility functions
 source("R/utils/ErrorBoundary.R")
 source("R/utils/bags_grading.R")
+source("R/utils/annotation_utils.R")
 source("R/utils/table_utils.R")
 source("R/utils/session_persistence.R")
 
@@ -325,73 +326,92 @@ server <- function(input, output, session) {
     )
   })
 
-  # Handle specimen selection across modules
+  # Handle specimen selection across modules.
+  # Register one observeEvent per grade (stable IDs) instead of nesting
+  # observeEvent inside observe() loops, which would create duplicate
+  # handlers every time the outer observer invalidates.
+  selection_observers_registered <- FALSE
+
+  observe({
+    store <- state$get_store()
+    req(store$specimen_data, store$bags_grades)
+
+    # Only register observers once
+    if (selection_observers_registered) return()
+    selection_observers_registered <<- TRUE
+
+    grades <- c("a", "b", "c", "d", "e")
+
+    for (grade in grades) {
+      local({
+        grade_local <- grade
+
+        # Watch the BAGS module's selected_specimens reactive for this grade
+        bags_module <- bags_grading[[grade_local]]
+        if (is.null(bags_module)) return()
+
+        observeEvent(bags_module$selected_specimens(), {
+          # Handled via direct state updates in bags module
+        }, ignoreInit = TRUE)
+      })
+    }
+  })
+
+  # Single observer for all specimen selections via a shared Shiny input.
+  # BAGS grade tables use radio-button inputs whose IDs start with "select_".
+  # Listen for any such input change.
   observe({
     store <- state$get_store()
     req(store$specimen_data, store$bags_grades)
 
     grades <- c("a", "b", "c", "d", "e")
+    grade_species_map <- list()
 
-    for(grade in grades) {
+    for (grade in grades) {
       grade_species <- store$bags_grades$species[store$bags_grades$bags_grade == toupper(grade)]
-
-      for(species in grade_species) {
-        local({
-          species_local <- species
-          grade_local <- grade
-
-          input_id <- paste0("select_", grade_local, "_", make.names(species_local))
-
-          observeEvent(input[[input_id]], {
-            selected_processid <- input[[input_id]]
-
-            # Update selected specimens - keyed by processid for consistency
-            current_selections <- isolate(state$get_store()$selected_specimens)
-            if (is.null(current_selections)) current_selections <- list()
-
-            # Remove previous representative for this species (radio = one per species)
-            for (pid in names(current_selections)) {
-              entry <- current_selections[[pid]]
-              if (is.list(entry) && identical(entry$species, species_local)) {
-                current_selections[[pid]] <- NULL
-              }
-            }
-
-            # Get specimen metadata
-            specimen_row <- store$specimen_data[store$specimen_data$processid == selected_processid, ]
-
-            # Add new selection keyed by processid
-            current_selections[[selected_processid]] <- list(
-              timestamp = Sys.time(),
-              species = species_local,
-              quality_score = if (nrow(specimen_row) > 0) specimen_row$quality_score[1] else NA,
-              user = store$user_info$email,
-              selected = TRUE
-            )
-
-            state$update_state(
-              "selected_specimens",
-              current_selections
-            )
-
-            # Log selection
-            user_info <- store$user_info
-            logging_manager$log_action(
-              user_email = user_info$email,
-              user_name = user_info$name,
-              session_id = session$token,
-              action_type = "specimen_selected",
-              process_ids = selected_processid,
-              metadata = list(
-                species = species_local,
-                grade = grade_local,
-                quality_score = if (nrow(specimen_row) > 0) specimen_row$quality_score[1] else NA,
-                rank = if (nrow(specimen_row) > 0) specimen_row$rank[1] else NA
-              )
-            )
-          })
-        })
+      for (species in grade_species) {
+        input_id <- paste0("select_", grade, "_", make.names(species))
+        # Check if this input exists and has a value
+        val <- input[[input_id]]
+        if (!is.null(val) && nchar(val) > 0) {
+          grade_species_map[[input_id]] <- list(
+            processid = val,
+            species = species,
+            grade = grade
+          )
+        }
       }
+    }
+
+    # Process all current selections
+    if (length(grade_species_map) > 0) {
+      isolate({
+        current_selections <- state$get_store()$selected_specimens
+        if (is.null(current_selections)) current_selections <- list()
+
+        for (info in grade_species_map) {
+          # Remove previous representative for this species
+          for (pid in names(current_selections)) {
+            entry <- current_selections[[pid]]
+            if (is.list(entry) && identical(entry$species, info$species)) {
+              current_selections[[pid]] <- NULL
+            }
+          }
+
+          # Get specimen metadata
+          specimen_row <- store$specimen_data[store$specimen_data$processid == info$processid, ]
+
+          current_selections[[info$processid]] <- list(
+            timestamp = Sys.time(),
+            species = info$species,
+            quality_score = if (nrow(specimen_row) > 0) specimen_row$quality_score[1] else NA,
+            user = store$user_info$email,
+            selected = TRUE
+          )
+        }
+
+        state$update_state("selected_specimens", current_selections)
+      })
     }
   })
 
@@ -444,32 +464,65 @@ server <- function(input, output, session) {
     }
   })
 
-  # Save session state on exit, using a user-meaningful identifier so
+  # Build a session ID from user info for persistence.
+  # Deterministic so sessions can be found by email/ORCID/name later.
+  get_session_id <- function(store) {
+    user_info <- store$user_info
+    user_id <- NULL
+    if (!is.null(user_info$email) && nchar(trimws(user_info$email)) > 0) {
+      user_id <- tolower(trimws(user_info$email))
+    } else if (!is.null(user_info$orcid) && nchar(trimws(user_info$orcid)) > 0) {
+      user_id <- trimws(user_info$orcid)
+    } else if (!is.null(user_info$name) && nchar(trimws(user_info$name)) > 0) {
+      user_id <- make.names(trimws(user_info$name))
+    }
+    if (!is.null(user_id)) {
+      safe_id <- gsub("[^A-Za-z0-9._@-]", "_", user_id)
+      sprintf("%s_%s", safe_id, format(Sys.time(), "%Y%m%d_%H%M%S"))
+    } else {
+      session$token
+    }
+  }
 
-  # sessions can be found by email/ORCID/name across browser sessions.
+  # Periodic auto-save every 60 seconds so curator work isn't lost if
+  # the browser crashes or the network drops (onSessionEnded is unreliable
+  # in those cases).
+  auto_save_timer <- reactiveTimer(60000)
+  observe({
+    auto_save_timer()
+    store <- isolate(state$get_store())
+    if (is.null(store$specimen_data)) return()
+
+    # Only save if there are annotations worth saving
+    has_annotations <- length(store$selected_specimens) > 0 ||
+      length(store$specimen_flags) > 0 ||
+      length(store$specimen_curator_notes) > 0
+    if (!has_annotations) return()
+
+    tryCatch({
+      sid <- get_session_id(store)
+      save_session_state(sid, store)
+      logging_manager$log_action(
+        session_id = sid,
+        action_type = "auto_save",
+        process_ids = character(0)
+      )
+    }, error = function(e) {
+      logging_manager$log_action(
+        session_id = session$token,
+        action_type = "auto_save_error",
+        process_ids = character(0),
+        metadata = list(error = e$message)
+      )
+    })
+  })
+
+  # Save session state on exit.
   session$onSessionEnded(function() {
     tryCatch({
       store <- isolate(state$get_store())
       if (!is.null(store$specimen_data)) {
-        # Build a deterministic session ID from the best available user identifier
-        user_info <- store$user_info
-        user_id <- NULL
-        if (!is.null(user_info$email) && nchar(trimws(user_info$email)) > 0) {
-          user_id <- tolower(trimws(user_info$email))
-        } else if (!is.null(user_info$orcid) && nchar(trimws(user_info$orcid)) > 0) {
-          user_id <- trimws(user_info$orcid)
-        } else if (!is.null(user_info$name) && nchar(trimws(user_info$name)) > 0) {
-          user_id <- make.names(trimws(user_info$name))
-        }
-
-        # Sanitize for use as directory name and append timestamp
-        if (!is.null(user_id)) {
-          safe_id <- gsub("[^A-Za-z0-9._@-]", "_", user_id)
-          sid <- sprintf("%s_%s", safe_id, format(Sys.time(), "%Y%m%d_%H%M%S"))
-        } else {
-          sid <- session$token
-        }
-
+        sid <- get_session_id(store)
         save_session_state(sid, store)
         logging_manager$log_action(
           session_id = sid,

@@ -240,10 +240,11 @@ StateManager <- R6::R6Class(
         return(list(valid = FALSE, messages = "Flags must be a list"))
       }
 
-      valid_flags <- c("misidentification", "ID uncertain", "issue")
+      valid_flags <- c("misidentification", "id_uncertain", "data_issue", "other_issue")
 
       invalid_flags <- Filter(function(flag) {
-        !is.null(flag$flag) && !(flag$flag %in% valid_flags)
+        flag_val <- if (is.list(flag)) flag$flag else flag
+        !is.null(flag_val) && nchar(flag_val) > 0 && !(flag_val %in% valid_flags)
       }, flags)
 
       if (length(invalid_flags) > 0) {

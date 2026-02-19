@@ -1,0 +1,38 @@
+Type: Shiny
+Package: BOLDcuratoR
+Title: BOLD Specimen Curation Tool
+Version: 0.1.0
+Description: Shiny application for curating BOLD specimen records using
+    BAGS grading, quality scoring, and annotation workflows.
+License: MIT
+Depends:
+    R (>= 4.1.0)
+Imports:
+    shiny,
+    shinydashboard,
+    shinyjs,
+    shinycssloaders,
+    DT,
+    htmlwidgets,
+    dplyr,
+    tidyr,
+    purrr,
+    R6,
+    logger,
+    markdown,
+    jsonlite,
+    writexl,
+    DBI,
+    RSQLite,
+    ape,
+    igraph,
+    remotes,
+    devtools
+Suggests:
+    testthat (>= 3.0.0),
+    BiocManager,
+    Biostrings,
+    msa,
+    DECIPHER
+Config/testthat/edition: 3
+Encoding: UTF-8
