@@ -1,5 +1,10 @@
 # R/utils/session_persistence.R
 
+# Null-coalescing helper (base R %||% requires R >= 4.4.0)
+.null_default <- function(x, default) {
+  if (is.null(x)) default else x
+}
+
 #' Save session state to disk
 #'
 #' Persists specimen data, BAGS grades, BIN analysis, annotations, and
@@ -135,13 +140,13 @@ list_saved_sessions <- function(session_dir = "data/sessions") {
       meta <- jsonlite::fromJSON(meta_file)
       data.frame(
         session_id = sid,
-        created_at = meta$created_at %||% "",
-        updated_at = meta$updated_at %||% "",
-        user_email = meta$user_email %||% "",
-        user_name = meta$user_name %||% "",
-        user_orcid = meta$user_orcid %||% "",
-        specimen_count = meta$specimen_count %||% 0L,
-        species_count = meta$species_count %||% 0L,
+        created_at = .null_default(meta$created_at, ""),
+        updated_at = .null_default(meta$updated_at, ""),
+        user_email = .null_default(meta$user_email, ""),
+        user_name = .null_default(meta$user_name, ""),
+        user_orcid = .null_default(meta$user_orcid, ""),
+        specimen_count = .null_default(meta$specimen_count, 0L),
+        species_count = .null_default(meta$species_count, 0L),
         stringsAsFactors = FALSE
       )
     }, error = function(e) NULL)
