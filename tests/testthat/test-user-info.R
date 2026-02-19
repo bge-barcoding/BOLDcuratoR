@@ -15,5 +15,5 @@ test_that("user info UI module generates correctly", {
   html <- as.character(ui)
   expect_true(grepl('id="test-email"', html))
   expect_true(grepl('id="test-name"', html))
-  expect_true(grepl('id="test-orcid"', html))
+  expect_true(grepl('id="test-bold_api_key"', html))
 })

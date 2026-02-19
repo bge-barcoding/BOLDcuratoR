@@ -297,7 +297,7 @@ describe("filter_sessions_by_user", {
     expect_equal(nrow(result), 1)
   })
 
-  it("returns all sessions when no identifiers provided", {
+  it("returns empty when no identifiers provided", {
     dir <- setup_test_dir()
     on.exit(unlink(dir, recursive = TRUE))
 
@@ -306,7 +306,7 @@ describe("filter_sessions_by_user", {
     save_session_state("s2", store, session_dir = dir)
 
     result <- filter_sessions_by_user(session_dir = dir)
-    expect_equal(nrow(result), 2)
+    expect_equal(nrow(result), 0)
   })
 
   it("uses OR logic across identifiers", {
