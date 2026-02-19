@@ -25,21 +25,20 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
     # Proxy for updating specimen table in-place when annotations change
     specimen_proxy <- DT::dataTableProxy("specimen_table")
 
-    # Watch for annotation changes in state and refresh the specimen table.
-    # The BAGS grade tables write flags/notes/selections to the StateManager;
-    # this observer picks up those reactive changes and pushes updated data
-    # into the already-rendered table via replaceData() so the user sees
-    # annotations instantly without a full table re-render.
+    # Watch for annotation changes AND data changes, then refresh the
+    # specimen table via replaceData().  rv$filtered_data is reactive
+    # (not isolated) so this fires on both annotation edits AND
+    # filter/tab-switch changes — fixing the stale-data-on-tab-switch bug.
     observe({
       store <- state$get_store()
 
-      # Create reactive dependencies on annotation keys
+      # Reactive dependencies: annotation keys
       current_selections <- store$selected_specimens
       current_flags      <- store$specimen_flags
       current_notes      <- store$specimen_curator_notes
 
-      # Only proceed when we have data to display
-      data <- isolate(rv$filtered_data)
+      # Reactive dependency: filtered data (NOT isolated)
+      data <- rv$filtered_data
       if (is.null(data) || nrow(data) == 0) return()
 
       prepared <- prepare_module_data(
@@ -49,6 +48,10 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
         current_notes = current_notes,
         logger = logger
       )
+
+      # order_columns() must match the column order used by the initial
+      # renderDT (which calls format_specimen_table → order_columns).
+      prepared <- order_columns(prepared)
 
       DT::replaceData(specimen_proxy, prepared, resetPaging = FALSE, rownames = FALSE)
       logger$info("Specimen table refreshed with updated annotations")
@@ -184,8 +187,8 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
     })
 
     # Render the specimen table (view-only).
-    # Annotations (flags, notes, selections) are managed in the BAGS grade
-    # tables. This table displays them in read-only mode.
+    # Annotations are read with isolate() so flag/note changes don't
+    # trigger a full re-render (the replaceData observer handles that).
     output$specimen_table <- renderDT({
       req(rv$filtered_data)
       data <- rv$filtered_data
@@ -194,12 +197,13 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
 
       store <- state$get_store()
 
-      # Prepare data with annotation columns merged as clean text
+      # isolate() prevents reactive dependency on annotation keys —
+      # the replaceData observer handles annotation-driven updates.
       prepared <- prepare_module_data(
         data = data,
-        current_selections = store$selected_specimens,
-        current_flags = store$specimen_flags,
-        current_notes = store$specimen_curator_notes,
+        current_selections = isolate(store$selected_specimens),
+        current_flags = isolate(store$specimen_flags),
+        current_notes = isolate(store$specimen_curator_notes),
         logger = logger
       )
 

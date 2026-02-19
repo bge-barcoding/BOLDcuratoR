@@ -1,113 +1,106 @@
+# Tests for LoggingManager R6 class
 # tests/testthat/test-logging.R
+#
+# The LoggingManager stores log entries in memory (no database).
 
 library(testthat)
-library(DBI)
-library(RSQLite)
+library(R6)
+
+source("../../R/modules/logging/mod_logging.R")
 
 test_that("LoggingManager initializes correctly", {
-  # Use temporary database for testing
-  tmp_db <- tempfile()
-  logger <- LoggingManager$new(tmp_db)
+  logger <- LoggingManager$new()
 
-  expect_true(file.exists(tmp_db))
-  unlink(tmp_db)
+  logs <- logger$get_logs()
+  expect_true(is.list(logs))
+  expect_equal(length(logs), 0)
 })
 
-test_that("log_action records user actions correctly", {
-  tmp_db <- tempfile()
-  logger <- LoggingManager$new(tmp_db)
+test_that("info/warn/error methods store log entries", {
+  logger <- LoggingManager$new()
 
-  # Test basic logging
+  logger$info("Info message")
+  logger$warn("Warning message")
+  logger$error("Error message")
+
+  logs <- logger$get_logs()
+  expect_equal(length(logs), 3)
+  expect_equal(logs[[1]]$level, "INFO")
+  expect_equal(logs[[2]]$level, "WARNING")
+  expect_equal(logs[[3]]$level, "ERROR")
+})
+
+test_that("get_logs filters by level", {
+  logger <- LoggingManager$new()
+
+  logger$info("I1")
+  logger$warn("W1")
+  logger$info("I2")
+  logger$error("E1")
+
+  info_logs <- logger$get_logs("INFO")
+  expect_equal(length(info_logs), 2)
+
+  error_logs <- logger$get_logs("ERROR")
+  expect_equal(length(error_logs), 1)
+})
+
+test_that("clear_logs removes all entries", {
+  logger <- LoggingManager$new()
+
+  logger$info("Some message")
+  expect_equal(length(logger$get_logs()), 1)
+
+  logger$clear_logs()
+  expect_equal(length(logger$get_logs()), 0)
+})
+
+test_that("log_action records action entries", {
+  logger <- LoggingManager$new()
+
   result <- logger$log_action(
-    user_email = "test@example.com",
     session_id = "test_session",
     action_type = "select",
     process_ids = c("BOLD:123", "BOLD:456")
   )
 
   expect_true(result)
-
-  # Verify action was logged
-  actions <- logger$get_user_actions("test@example.com")
-  expect_equal(nrow(actions), 1)
-  expect_equal(actions$action_type, "select")
-  expect_equal(length(actions$process_ids[[1]]), 2)
-
-  unlink(tmp_db)
+  action_logs <- logger$get_logs("ACTION")
+  expect_equal(length(action_logs), 1)
+  expect_equal(action_logs[[1]]$details$action_type, "select")
 })
 
-test_that("get_specimen_history returns correct history", {
-  tmp_db <- tempfile()
-  logger <- LoggingManager$new(tmp_db)
+test_that("log_specimen_selection records selections", {
+  logger <- LoggingManager$new()
 
-  # Log multiple actions for same specimen
-  logger$log_action(
-    user_email = "user1@example.com",
-    session_id = "session1",
-    action_type = "select",
-    process_ids = "BOLD:123"
+  result <- logger$log_specimen_selection(
+    user_email = "test@example.com",
+    session_id = "sess1",
+    processid = "BOLD:123",
+    selected = TRUE
   )
 
-  logger$log_action(
-    user_email = "user2@example.com",
-    session_id = "session2",
-    action_type = "flag",
-    process_ids = "BOLD:123"
-  )
-
-  history <- logger$get_specimen_history("BOLD:123")
-  expect_equal(nrow(history), 1)
-  expect_equal(length(history$action_history[[1]]), 2)
-
-  unlink(tmp_db)
+  expect_true(result)
+  sel_logs <- logger$get_logs("SELECTION")
+  expect_equal(length(sel_logs), 1)
+  expect_true(grepl("selected", sel_logs[[1]]$message))
 })
 
-test_that("get_user_actions filters correctly", {
-  tmp_db <- tempfile()
-  logger <- LoggingManager$new(tmp_db)
+test_that("log_export records export entries", {
+  logger <- LoggingManager$new()
 
-  # Log actions with different dates
-  logger$log_action(
-    user_email = "test@example.com",
-    session_id = "session1",
-    action_type = "select",
-    process_ids = "BOLD:123"
+  result <- logger$log_export(
+    session_id = "sess1",
+    export_type = "tsv",
+    file_name = "test.tsv",
+    record_count = 100,
+    file_size = 1024,
+    format = "tsv",
+    success = TRUE
   )
 
-  Sys.sleep(1) # Ensure different timestamps
-
-  logger$log_action(
-    user_email = "test@example.com",
-    session_id = "session2",
-    action_type = "flag",
-    process_ids = "BOLD:456"
-  )
-
-  # Test date filtering
-  mid_date <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
-
-  Sys.sleep(1)
-
-  logger$log_action(
-    user_email = "test@example.com",
-    session_id = "session3",
-    action_type = "select",
-    process_ids = "BOLD:789"
-  )
-
-  # Get actions before mid_date
-  early_actions <- logger$get_user_actions(
-    user_identifier = "test@example.com",
-    to_date = mid_date
-  )
-  expect_equal(nrow(early_actions), 2)
-
-  # Get actions after mid_date
-  late_actions <- logger$get_user_actions(
-    user_identifier = "test@example.com",
-    from_date = mid_date
-  )
-  expect_equal(nrow(late_actions), 2) # Includes the mid_date action
-
-  unlink(tmp_db)
+  expect_true(result)
+  export_logs <- logger$get_logs("EXPORT")
+  expect_equal(length(export_logs), 1)
+  expect_true(export_logs[[1]]$details$success)
 })

@@ -70,8 +70,7 @@ format_specimen_table <- function(data, ns = NULL,
         exportOptions = list(
           columns = ':visible',
           rows = ':all',
-          # Ensure interactive columns are included
-          selector = 'td:not(.notexport)'
+          orthogonal = 'filter'
         )
       ),
       list(
@@ -79,7 +78,7 @@ format_specimen_table <- function(data, ns = NULL,
         exportOptions = list(
           columns = ':visible',
           rows = ':all',
-          selector = 'td:not(.notexport)'
+          orthogonal = 'filter'
         )
       ),
       'copy'
@@ -362,15 +361,51 @@ get_table_callback <- function(ns, flag_options = NULL) {
     function(table) {
       %s
 
-      // Lightweight helpers — NO localStorage, NO window.tableStates.
+      // Build column-name-to-index map.  DT with rownames=FALSE returns
+      // arrays from row.data(), not named objects.  Without this map,
+      // data.processid is always undefined and every handler exits early.
+      var _colMap = {};
+      table.columns().every(function(idx) {
+        var name = $(this.header()).text().trim();
+        _colMap[name] = idx;
+      });
+
+      // Convert an array row to a named object using _colMap
+      var rowObj = function(rowApi) {
+        var arr = rowApi.data();
+        if (!arr) return null;
+        if (!Array.isArray(arr)) return arr;
+        var obj = {};
+        for (var name in _colMap) {
+          obj[name] = arr[_colMap[name]];
+        }
+        return obj;
+      };
+
+      // Set a field value on an array row by column name
+      var setField = function(rowApi, field, value) {
+        var arr = rowApi.data();
+        if (!arr) return;
+        if (Array.isArray(arr)) {
+          var idx = _colMap[field];
+          if (idx !== undefined) {
+            arr[idx] = value;
+            rowApi.data(arr);
+          }
+        } else {
+          arr[field] = value;
+          rowApi.data(arr);
+        }
+      };
+
       // The R StateManager is the single source of truth for annotations.
       // This JS layer only handles:
       //   1. Sending user edits to Shiny (notifyShiny)
       //   2. Syncing UI across grade tables on the same page (broadcast)
 
-      const notifyShiny = function(processid, type, value, rowData) {
+      var notifyShiny = function(processid, type, value, rowData) {
         if (!rowData) return;
-        const payload = {
+        var payload = {
           processid: processid,
           species: rowData.species || '',
           bin_uri: rowData.bin_uri || '',
@@ -386,7 +421,7 @@ get_table_callback <- function(ns, flag_options = NULL) {
         }
       };
 
-      const updateDOM = function($row, changes) {
+      var updateDOM = function($row, changes) {
         if (!$row || !changes) return;
         if (changes.flag !== undefined) {
           $row.find('select.specimen-flag').val(changes.flag);
@@ -397,7 +432,7 @@ get_table_callback <- function(ns, flag_options = NULL) {
       };
 
       // Broadcast a change to other tables showing the same specimen
-      const broadcast = function(processid, type, value) {
+      var broadcast = function(processid, type, value) {
         document.dispatchEvent(new CustomEvent('annotationChange', {
           detail: {
             processid: processid,
@@ -412,36 +447,37 @@ get_table_callback <- function(ns, flag_options = NULL) {
 
       table.on('change', 'select.specimen-flag', function(e) {
         e.stopPropagation();
-        const row = table.row($(this).closest('tr'));
-        const rowData = row.data();
-        if (!rowData?.processid) return;
+        var row = table.row($(this).closest('tr'));
+        var data = rowObj(row);
+        if (!data || !data.processid) return;
 
-        const value = this.value;
-        notifyShiny(rowData.processid, 'flag', value, rowData);
-        broadcast(rowData.processid, 'flag', value);
+        var value = this.value;
+        setField(row, 'flag', value);
+        notifyShiny(data.processid, 'flag', value, data);
+        broadcast(data.processid, 'flag', value);
       });
 
       table.on('change', 'input.specimen-notes', function(e) {
         e.stopPropagation();
-        const row = table.row($(this).closest('tr'));
-        const rowData = row.data();
-        if (!rowData?.processid) return;
+        var row = table.row($(this).closest('tr'));
+        var data = rowObj(row);
+        if (!data || !data.processid) return;
 
-        const value = this.value.trim();
-        notifyShiny(rowData.processid, 'curator_notes', value, rowData);
-        broadcast(rowData.processid, 'curator_notes', value);
+        var value = this.value.trim();
+        setField(row, 'curator_notes', value);
+        notifyShiny(data.processid, 'curator_notes', value, data);
+        broadcast(data.processid, 'curator_notes', value);
       });
 
       // Listen for annotation changes broadcast from other tables
       document.addEventListener('annotationChange', function(e) {
-        const d = e.detail;
+        var d = e.detail;
         if (d.sourceTableId === (table.table().node().id || 'default')) return;
 
         table.rows().every(function() {
-          const data = this.data();
-          if (data?.processid === d.processid) {
-            data[d.type] = d.value;
-            this.data(data);
+          var data = rowObj(this);
+          if (data && data.processid === d.processid) {
+            setField(this, d.type, d.value);
             updateDOM($(this.node()), { [d.type]: d.value });
           }
         });

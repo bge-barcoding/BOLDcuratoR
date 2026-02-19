@@ -172,6 +172,15 @@ prepare_module_data <- function(data,
 merge_annotations_for_export <- function(data, selections = NULL, flags = NULL, notes = NULL) {
   if (is.null(data) || nrow(data) == 0) return(data)
 
+  # Strip any HTML tags from character columns (safety net for DT render
+  # functions that wrap values in <div class="cell-content">...</div>).
+  strip_html <- function(x) gsub("<[^>]+>", "", x)
+  for (col in names(data)) {
+    if (is.character(data[[col]])) {
+      data[[col]] <- strip_html(data[[col]])
+    }
+  }
+
   data$selected <- data$processid %in% names(selections)
 
   data$flag <- vapply(data$processid, function(pid) {

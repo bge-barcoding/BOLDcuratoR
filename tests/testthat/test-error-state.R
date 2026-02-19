@@ -1,57 +1,98 @@
+# Tests for error state management in StateManager
+# tests/testthat/test-error-state.R
+
 library(testthat)
 library(shiny)
+library(R6)
 
-test_that("error state initialization works", {
-  session <- create_mock_session()
-  state <- initialize_state(session)
+source("../../R/utils/ErrorBoundary.R")
+source("../../R/modules/state/state_manager.R")
 
-  error_state <- state$get_reactive_values()$error_state
-  expect_false(error_state$has_error)
-  expect_null(error_state$message)
-  expect_null(error_state$details)
-  expect_null(error_state$source_module)
-  expect_null(error_state$timestamp)
+make_session <- function() {
+  list(token = "test-token", ns = function(x) paste0("test-", x))
+}
+
+make_logger <- function() {
+  list(info = function(...) {}, warn = function(...) {}, error = function(...) {})
+}
+
+test_that("error state initializes correctly", {
+  shiny::reactiveConsole(TRUE)
+  on.exit(shiny::reactiveConsole(FALSE))
+
+  state <- StateManager$new(make_session(), make_logger())
+  store <- state$get_store()
+
+  expect_false(store$error$has_error)
+  expect_null(store$error$message)
+  expect_null(store$error$details)
+  expect_null(store$error$source)
+  expect_null(store$error$timestamp)
 })
 
-test_that("error state gets set correctly", {
-  session <- create_mock_session()
-  state <- initialize_state(session)
+test_that("error state can be set via update_state", {
+  shiny::reactiveConsole(TRUE)
+  on.exit(shiny::reactiveConsole(FALSE))
 
-  state$set_error(
-    message = "Test error",
-    details = list(code = 500),
-    source = "test_module"
-  )
+  state <- StateManager$new(make_session(), make_logger())
+  store <- state$get_store()
 
-  error_state <- state$get_reactive_values()$error_state
-  expect_true(error_state$has_error)
-  expect_equal(error_state$message, "Test error")
-  expect_equal(error_state$details$code, 500)
-  expect_equal(error_state$source_module, "test_module")
-  expect_false(is.null(error_state$timestamp))
+  state$update_state("error", list(
+    has_error = TRUE,
+    message   = "Test error",
+    details   = list(code = 500),
+    source    = "test_module",
+    timestamp = Sys.time()
+  ))
+
+  expect_true(store$error$has_error)
+  expect_equal(store$error$message, "Test error")
+  expect_equal(store$error$details$code, 500)
+  expect_equal(store$error$source, "test_module")
 })
 
-test_that("error state can be cleared", {
-  session <- create_mock_session()
-  state <- initialize_state(session)
+test_that("error state can be cleared via update_state", {
+  shiny::reactiveConsole(TRUE)
+  on.exit(shiny::reactiveConsole(FALSE))
 
-  state$set_error("Test error")
-  state$clear_error()
+  state <- StateManager$new(make_session(), make_logger())
+  store <- state$get_store()
 
-  error_state <- state$get_reactive_values()$error_state
-  expect_false(error_state$has_error)
-  expect_null(error_state$message)
+  state$update_state("error", list(
+    has_error = TRUE,
+    message   = "Test error",
+    details   = NULL,
+    source    = NULL,
+    timestamp = NULL
+  ))
+
+  state$update_state("error", list(
+    has_error = FALSE,
+    message   = NULL,
+    details   = NULL,
+    source    = NULL,
+    timestamp = NULL
+  ))
+
+  expect_false(store$error$has_error)
+  expect_null(store$error$message)
 })
 
-test_that("error state tracks history", {
-  session <- create_mock_session()
-  state <- initialize_state(session)
+test_that("error state changes are tracked in history", {
+  shiny::reactiveConsole(TRUE)
+  on.exit(shiny::reactiveConsole(FALSE))
 
-  state$set_error("Error 1", source = "module_1")
-  state$set_error("Error 2", source = "module_2")
+  state <- StateManager$new(make_session(), make_logger())
 
-  error_history <- state$get_error_history()
-  expect_equal(length(error_history), 2)
-  expect_equal(error_history[[1]]$message, "Error 1")
-  expect_equal(error_history[[2]]$message, "Error 2")
+  state$update_state("error", list(
+    has_error = TRUE, message = "Error 1",
+    details = NULL, source = "module_1", timestamp = NULL
+  ))
+  state$update_state("error", list(
+    has_error = TRUE, message = "Error 2",
+    details = NULL, source = "module_2", timestamp = NULL
+  ))
+
+  history <- state$get_history("error")
+  expect_true(length(history) >= 2)
 })
