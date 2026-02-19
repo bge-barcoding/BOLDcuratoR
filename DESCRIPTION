@@ -24,15 +24,9 @@ Imports:
     writexl,
     DBI,
     RSQLite,
-    ape,
-    igraph,
     remotes,
     devtools
 Suggests:
-    testthat (>= 3.0.0),
-    BiocManager,
-    Biostrings,
-    msa,
-    DECIPHER
+    testthat (>= 3.0.0)
 Config/testthat/edition: 3
 Encoding: UTF-8
