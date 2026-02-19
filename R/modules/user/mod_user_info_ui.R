@@ -6,41 +6,41 @@
 mod_user_info_ui <- function(id) {
   ns <- NS(id)
 
-  # More aggressive CSS targeting specific Shiny classes
+  # Compact CSS for user info panel
   tags$head(
     tags$style(HTML("
-      /* Target all form groups in user info */
       #user_info .form-group {
-        margin-bottom: 0px !important;
-        margin-top: 0px !important;
+        margin-bottom: 2px !important;
+        margin-top: 2px !important;
       }
 
-      /* Target Shiny's input container */
       #user_info .shiny-input-container {
-        margin-bottom: 0px !important;
-        margin-top: 0px !important;
+        margin-bottom: 2px !important;
+        margin-top: 2px !important;
         padding-bottom: 0px !important;
         padding-top: 0px !important;
       }
 
-      /* Target the actual input elements */
       #user_info .form-control {
         margin-bottom: 0px !important;
         margin-top: 0px !important;
-        padding-top: 1px !important;
-        padding-bottom: 1px !important;
-        height: 5px !important;
+        padding-top: 2px !important;
+        padding-bottom: 2px !important;
+        height: 28px !important;
+        font-size: 12px !important;
       }
 
-      /* Target the box content */
       #user_info .box-body {
-        padding-top: 1px !important;
-        padding-bottom: 1px !important;
+        padding: 5px !important;
       }
 
-      /* Reduce space between box title and content */
       #user_info .box-header {
-        padding-bottom: 1px !important;
+        padding-bottom: 2px !important;
+      }
+
+      #user_info .control-label {
+        margin-bottom: 0px !important;
+        font-size: 11px !important;
       }
     "))
   )
@@ -65,17 +65,6 @@ mod_user_info_ui <- function(id) {
                     "NAME",
                     placeholder = "Enter name as First Last"),
 
-          textInput(ns("orcid"),
-                    label = tagList(
-                      tags$a(
-                        href = "https://orcid.org/",
-                        target = "_blank",
-                        style = "color: black; text-decoration: none;",
-                        "ORCID"
-                      )
-                    ),
-                    placeholder = "0000-0000-0000-0000"),
-
           # Updated API key input with tooltip
           div(
             title = "Your api key can be found in your BOLD user profile",
@@ -94,7 +83,8 @@ mod_user_info_ui <- function(id) {
                          "Use shared key",
                          class = "btn-default btn-sm",
                          icon = icon("key"),
-                         title = "Use a pre-configured shared API key for testing")
+                         title = "Use a pre-configured shared API key for testing",
+                         style = "display: none;")
           ),
 
           uiOutput(ns("validation_message")),
