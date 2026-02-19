@@ -627,15 +627,13 @@ get_table_css <- function() {
     font-size: 11px !important;
     line-height: 1.2 !important;
     padding: 1px 4px !important;
-    transition: all 0.2s ease-in-out !important;
   }
 
   .specimen-notes:focus {
-    height: 60px !important;
-    position: absolute !important;
-    z-index: 1000 !important;
     background: white !important;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2) !important;
+    border-color: #80bdff !important;
+    outline: 0 !important;
+    box-shadow: 0 0 0 0.2rem rgba(0,123,255,.25) !important;
   }
 
   /* Scrolling */
