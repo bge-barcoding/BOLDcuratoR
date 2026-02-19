@@ -60,13 +60,17 @@ mod_data_import_server <- function(id, state, logger = NULL) {
       )
     })
 
+    # ReactiveVal to communicate the selected session ID to app.R.
+    # sendInputMessage doesn't work for module→parent communication because
+    # it triggers a click count, not the session ID string.
+    selected_session_id <- reactiveVal(NULL)
+
     observeEvent(input$resume_session, {
       sessions <- get_user_sessions()
       selected_row <- input$saved_sessions_table_rows_selected
       req(selected_row)
       session_id <- sessions$session_id[selected_row]
-      # Bubble up to app-level handler via module input
-      session$sendInputMessage("resume_session", list(value = session_id))
+      selected_session_id(session_id)
     })
 
     # Reactive Values
@@ -579,6 +583,11 @@ mod_data_import_server <- function(id, state, logger = NULL) {
         logger$info("Downloading search results", list(format = "csv"))
         write.csv(state$get_store()$specimen_data, file, row.names = FALSE)
       }
+    )
+
+    # Return reactive endpoints for parent module communication
+    list(
+      selected_session_id = selected_session_id
     )
   })
 }

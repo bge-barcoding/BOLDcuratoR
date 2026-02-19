@@ -484,6 +484,30 @@ server <- function(input, output, session) {
     }
   }
 
+  # Plain (non-reactive) snapshot of state for use in onSessionEnded.
+  # onSessionEnded fires AFTER the Shiny session is destroyed, so
+  # isolate(state$get_store()) throws "Can't access reactive value
+  # outside of reactive consumer".  This observer continuously
+  # snapshots the state into a plain list.
+  session_snapshot <- new.env(parent = emptyenv())
+  session_snapshot$store <- NULL
+
+  observe({
+    store <- state$get_store()
+    # Touch all keys we need so this observer re-runs on any change
+    snapshot <- list(
+      specimen_data = store$specimen_data,
+      bags_grades = store$bags_grades,
+      bin_analysis = store$bin_analysis,
+      selected_specimens = store$selected_specimens,
+      specimen_flags = store$specimen_flags,
+      specimen_curator_notes = store$specimen_curator_notes,
+      search_taxa = store$search_taxa,
+      user_info = store$user_info
+    )
+    session_snapshot$store <- snapshot
+  })
+
   # Periodic auto-save every 60 seconds so curator work isn't lost if
   # the browser crashes or the network drops (onSessionEnded is unreliable
   # in those cases).
@@ -517,11 +541,12 @@ server <- function(input, output, session) {
     })
   })
 
-  # Save session state on exit.
+  # Save session state on exit using the plain snapshot (not reactive).
+  # Do NOT call state$reset_state() — the session is already gone.
   session$onSessionEnded(function() {
     tryCatch({
-      store <- isolate(state$get_store())
-      if (!is.null(store$specimen_data)) {
+      store <- session_snapshot$store
+      if (!is.null(store) && !is.null(store$specimen_data)) {
         sid <- get_session_id(store)
         save_session_state(sid, store)
         logging_manager$log_action(
@@ -539,7 +564,6 @@ server <- function(input, output, session) {
       )
     })
 
-    state$reset_state()
     logging_manager$log_action(
       session_id = session$token,
       action_type = "session_ended",
@@ -547,9 +571,9 @@ server <- function(input, output, session) {
     )
   })
 
-  # Handle session resume
-  observeEvent(input$`data_import-resume_session`, {
-    session_id <- input$`data_import-resume_session`
+  # Handle session resume via the module's returned reactiveVal
+  observeEvent(data_import$selected_session_id(), {
+    session_id <- data_import$selected_session_id()
     req(session_id)
 
     tryCatch({

@@ -78,11 +78,11 @@ perform_gap_analysis <- function(input_taxa, specimen_data) {
     taxon <- trimws(input_taxa[i])
     if (nchar(taxon) == 0) next
 
-    # Exact species match only
-    exact <- specimen_data[specimen_data$species == taxon & !is.na(specimen_data$species), ]
+    # Case-insensitive species match
+    exact <- specimen_data[tolower(specimen_data$species) == tolower(taxon) & !is.na(specimen_data$species), ]
     if (nrow(exact) > 0) {
       results$status[i] <- "Found"
-      results$matched_species[i] <- taxon
+      results$matched_species[i] <- exact$species[1]
       results$specimen_count[i] <- nrow(exact)
     }
   }
