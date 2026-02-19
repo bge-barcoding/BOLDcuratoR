@@ -64,12 +64,12 @@ ui <- dashboardPage(
       menuItem("Data Input", tabName = "input", icon = icon("table")),
       menuItem("Species Analysis", tabName = "species_analysis", icon = icon("list-check")),
       menuItem("BIN Analysis", tabName = "bins", icon = icon("dna")),
-      menuItem("Specimens", tabName = "specimens", icon = icon("microscope")),
       menuItem("BAGS Grade A", tabName = "bags_a", icon = icon("star")),
       menuItem("BAGS Grade B", tabName = "bags_b", icon = icon("star-half-alt")),
       menuItem("BAGS Grade C", tabName = "bags_c", icon = icon("exclamation-circle")),
       menuItem("BAGS Grade D", tabName = "bags_d", icon = icon("exclamation-triangle")),
       menuItem("BAGS Grade E", tabName = "bags_e", icon = icon("times-circle")),
+      menuItem("Specimens", tabName = "specimens", icon = icon("microscope")),
       menuItem("About", tabName = "about", icon = icon("info-circle"))
     )
   ),
@@ -161,9 +161,6 @@ ui <- dashboardPage(
       tabItem(tabName = "bins",
               mod_bin_analysis_ui("bin_analysis")),
 
-      tabItem(tabName = "specimens",
-              mod_specimen_handling_ui("specimen_handling")),
-
       tabItem(tabName = "bags_a",
               mod_bags_grading_ui("bags_a", grade = "A")),
 
@@ -178,6 +175,9 @@ ui <- dashboardPage(
 
       tabItem(tabName = "bags_e",
               mod_bags_grading_ui("bags_e", grade = "E")),
+
+      tabItem(tabName = "specimens",
+              mod_specimen_handling_ui("specimen_handling")),
 
       tabItem(tabName = "about",
               box(title = "BOLDcuratoR",
