@@ -28,7 +28,7 @@ validate_data_import_input <- function(taxa_input, dataset_codes, project_codes,
     taxa_input <- trimws(taxa_input[nchar(taxa_input) > 0])
     if (length(taxa_input) > 0) {
       # Check for invalid characters
-      invalid_chars <- grepl("[^A-Za-z0-9\\s\\-_\\., ]", taxa_input)
+      invalid_chars <- grepl("[^A-Za-z0-9[:space:]\\-_\\., ]", taxa_input)
       if (any(invalid_chars)) {
         results$valid <- FALSE
         results$messages <- c(results$messages,
@@ -133,19 +133,23 @@ process_specimen_data <- function(specimens) {
     return(data.frame())
   }
 
-  logging_manager$info("Columns before processing", list(
-    num_columns = length(names(specimens)),
-    column_names = names(specimens)
-  ))
+  if (exists("logging_manager") && !is.null(logging_manager)) {
+    logging_manager$info("Columns before processing", list(
+      num_columns = length(names(specimens)),
+      column_names = names(specimens)
+    ))
+  }
 
   # Make a copy of the data
   processed <- as.data.frame(specimens, stringsAsFactors = FALSE)
 
-  logging_manager$info("Columns after data.frame conversion", list(
-    num_columns = length(names(processed)),
-    column_names = names(processed),
-    missing_columns = setdiff(names(specimens), names(processed))
-  ))
+  if (exists("logging_manager") && !is.null(logging_manager)) {
+    logging_manager$info("Columns after data.frame conversion", list(
+      num_columns = length(names(processed)),
+      column_names = names(processed),
+      missing_columns = setdiff(names(specimens), names(processed))
+    ))
+  }
 
   # Clean species names
   if ("species" %in% names(processed)) {
@@ -176,11 +180,13 @@ process_specimen_data <- function(specimens) {
   # Sort by processid
   processed <- processed[order(processed$processid), ]
 
-  logging_manager$info("Columns after final processing", list(
-    num_columns = length(names(processed)),
-    column_names = names(processed),
-    missing_columns = setdiff(names(specimens), names(processed))
-  ))
+  if (exists("logging_manager") && !is.null(logging_manager)) {
+    logging_manager$info("Columns after final processing", list(
+      num_columns = length(names(processed)),
+      column_names = names(processed),
+      missing_columns = setdiff(names(specimens), names(processed))
+    ))
+  }
 
   processed
 }
