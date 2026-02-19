@@ -149,8 +149,10 @@ describe("save_session_state", {
   })
 
   it("returns FALSE on write failure", {
-    # Point to a path that cannot be created
-    result <- save_session_state("fail", list(), session_dir = "/dev/null/impossible")
+    # Point to a path that cannot be created; suppress the expected warning
+    result <- suppressWarnings(
+      save_session_state("fail", list(), session_dir = "/dev/null/impossible")
+    )
     expect_false(result)
   })
 })

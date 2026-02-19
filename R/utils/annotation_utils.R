@@ -191,12 +191,16 @@ merge_annotations_for_export <- function(data, selections = NULL, flags = NULL, 
     extract_annotation(notes[[pid]], c("text", "note", "value"))
   }, character(1), USE.NAMES = FALSE)
 
+  # Metadata fields (user, timestamp) only exist in list-format entries.
+  # Bare-string flags have no metadata, so return default "".
   data$flag_user <- vapply(data$processid, function(pid) {
-    extract_annotation(flags[[pid]], "user")
+    entry <- flags[[pid]]
+    if (is.list(entry)) extract_annotation(entry, "user") else ""
   }, character(1), USE.NAMES = FALSE)
 
   data$flag_timestamp <- vapply(data$processid, function(pid) {
-    extract_annotation(flags[[pid]], "timestamp")
+    entry <- flags[[pid]]
+    if (is.list(entry)) extract_annotation(entry, "timestamp") else ""
   }, character(1), USE.NAMES = FALSE)
 
   data
