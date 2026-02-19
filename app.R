@@ -45,10 +45,8 @@ source("R/modules/species_analysis/mod_species_analysis_ui.R")
 source("R/modules/species_analysis/mod_species_analysis_server.R")
 source("R/modules/species_analysis/mod_species_analysis_utils.R")
 
-# Source export and history modules
+# Source export module
 source("R/modules/export/mod_export.R")
-source("R/modules/export_history/mod_export_history_ui.R")
-source("R/modules/export_history/mod_export_history_server.R")
 
 # Source user modules
 source("R/modules/user/mod_user_info_ui.R")
@@ -72,7 +70,6 @@ ui <- dashboardPage(
       menuItem("BAGS Grade D", tabName = "bags_d", icon = icon("exclamation-triangle")),
       menuItem("BAGS Grade E", tabName = "bags_e", icon = icon("times-circle")),
       menuItem("Species Analysis", tabName = "species_analysis", icon = icon("list-check")),
-      menuItem("Export History", tabName = "export_history", icon = icon("history")),
       menuItem("About", tabName = "about", icon = icon("info-circle"))
     )
   ),
@@ -176,9 +173,6 @@ ui <- dashboardPage(
 
       tabItem(tabName = "species_analysis",
               mod_species_analysis_ui("species_analysis")),
-
-      tabItem(tabName = "export_history",
-              mod_export_history_ui("export_history")),
 
       tabItem(tabName = "about",
               box(title = "BOLDcuratoR",
