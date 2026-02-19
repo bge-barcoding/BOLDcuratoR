@@ -10,12 +10,11 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
 
-    # Initialize reactive values with advanced state management
+    # Local reactive values for data that is truly local to this module.
+    # Annotations (flags, notes, selections) live ONLY in the StateManager
+    # — no local mirrors, no sync observers.
     rv <- reactiveValues(
       filtered_data = NULL,
-      selected_specimens = list(),
-      flagged_specimens = list(),
-      curator_notes = list(),
       metrics = NULL,
       processing_status = list(
         is_processing = FALSE,
@@ -23,29 +22,6 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
         error = NULL
       )
     )
-
-    # Sync annotations from StateManager into local rv.
-    # This fires whenever StateManager flags/notes/selections change
-    # (e.g. when specimen handling module writes to state), keeping rv in sync.
-    observe({
-      store <- state$get_store()
-
-      state_selections <- store$selected_specimens
-      state_flags      <- store$specimen_flags
-      state_notes      <- store$specimen_curator_notes
-
-      isolate({
-        if (!is.null(state_selections) && !identical(rv$selected_specimens, state_selections)) {
-          rv$selected_specimens <- state_selections
-        }
-        if (!is.null(state_flags) && !identical(rv$flagged_specimens, state_flags)) {
-          rv$flagged_specimens <- state_flags
-        }
-        if (!is.null(state_notes) && !identical(rv$curator_notes, state_notes)) {
-          rv$curator_notes <- state_notes
-        }
-      })
-    })
 
     # Main data observer with detailed logging
     observe({
@@ -120,9 +96,8 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
 
     # Specimen tables output.
     # Reactive only to rv$filtered_data (filter/data changes).
-    # Annotations read via isolate() so flag/note changes don't cause
-    # a full re-render (which would destroy DT search state).
-    # Annotations are current because the sync observer keeps rv in sync.
+    # Annotations are read from StateManager via isolate() so flag/note
+    # changes don't cause a full re-render (which would destroy DT state).
     output$specimen_tables <- renderUI({
       logger$info(sprintf("Rendering specimen tables for grade %s", grade))
 
@@ -133,9 +108,11 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
 
       req(rv$filtered_data)
 
-      current_sel   <- isolate(rv$selected_specimens)
-      current_flags <- isolate(rv$flagged_specimens)
-      current_notes <- isolate(rv$curator_notes)
+      # Read annotations from the single source of truth (StateManager)
+      store <- isolate(state$get_store())
+      current_sel   <- store$selected_specimens
+      current_flags <- store$specimen_flags
+      current_notes <- store$specimen_curator_notes
 
       withProgress(message = 'Creating specimen tables', value = 0, {
         tryCatch({
@@ -225,37 +202,40 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
       )
     })
 
-    # Watch for flag changes
+    # Watch for flag changes — write directly to StateManager
     observeEvent(input$specimen_flag, {
       req(input$specimen_flag)
       flag <- input$specimen_flag
 
       if (!is.null(flag$processid)) {
-        current_flags <- isolate(rv$flagged_specimens)
+        store <- state$get_store()
+        current_flags <- isolate(store$specimen_flags)
+        if (is.null(current_flags)) current_flags <- list()
 
         if (!is.null(flag$flag) && nchar(flag$flag) > 0) {
           current_flags[[flag$processid]] <- list(
             flag = flag$flag,
             timestamp = Sys.time(),
             species = flag$species,
-            user = state$get_store()$user_info$email
+            user = store$user_info$email
           )
         } else {
           current_flags[[flag$processid]] <- NULL
         }
 
-        rv$flagged_specimens <- current_flags
         state$update_state("specimen_flags", current_flags)
       }
     })
 
-    # Watch for note changes
+    # Watch for note changes — write directly to StateManager
     observeEvent(input$specimen_notes, {
       req(input$specimen_notes)
       note <- input$specimen_notes
 
       if (!is.null(note$processid)) {
-        current_notes <- isolate(rv$curator_notes)
+        store <- state$get_store()
+        current_notes <- isolate(store$specimen_curator_notes)
+        if (is.null(current_notes)) current_notes <- list()
 
         # JS payload sends the value under "curator_notes" key
         note_text <- note$curator_notes %||% note$notes %||% ""
@@ -263,13 +243,12 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
           current_notes[[note$processid]] <- list(
             text = note_text,
             timestamp = Sys.time(),
-            user = state$get_store()$user_info$email
+            user = store$user_info$email
           )
         } else {
           current_notes[[note$processid]] <- NULL
         }
 
-        rv$curator_notes <- current_notes
         state$update_state("specimen_curator_notes", current_notes)
       }
     })
@@ -286,9 +265,9 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
         store <- state$get_store()
         data <- merge_annotations_for_export(
           data,
-          selections = rv$selected_specimens,
-          flags = rv$flagged_specimens,
-          notes = rv$curator_notes
+          selections = store$selected_specimens,
+          flags = store$specimen_flags,
+          notes = store$specimen_curator_notes
         )
 
         write.table(data, file, sep = "\t", row.names = FALSE, quote = FALSE)
@@ -301,23 +280,24 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
       logger$info(sprintf("Grade %s session ending", grade))
 
       # Log final state
+      store <- isolate(state$get_store())
       final_metrics <- isolate({
         list(
           filtered_specimens = if (!is.null(rv$filtered_data)) nrow(rv$filtered_data) else 0,
-          selected_count = length(rv$selected_specimens),
-          flagged_count = length(rv$flagged_specimens)
+          selected_count = length(store$selected_specimens),
+          flagged_count = length(store$specimen_flags)
         )
       })
 
       logger$info("Final state logged", final_metrics)
     })
 
-    # Return reactive endpoints
+    # Return reactive endpoints — annotations come from StateManager
     list(
       filtered_data = reactive({ rv$filtered_data }),
-      selected_specimens = reactive({ rv$selected_specimens }),
-      flagged_specimens = reactive({ rv$flagged_specimens }),
-      curator_notes = reactive({ rv$curator_notes }),
+      selected_specimens = reactive({ state$get_store()$selected_specimens }),
+      flagged_specimens = reactive({ state$get_store()$specimen_flags }),
+      curator_notes = reactive({ state$get_store()$specimen_curator_notes }),
       metrics = reactive({ rv$metrics }),
       processing_status = reactive({ rv$processing_status })
     )

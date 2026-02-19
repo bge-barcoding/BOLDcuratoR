@@ -1,62 +1,13 @@
 # R/utils/table_utils.R
+#
+# DT table formatting and display. Annotation logic (extract_annotation,
+# prepare_module_data, merge_annotations_for_export, etc.) lives in
+# annotation_utils.R for clarity and testability.
 
-# Source the constants file for PREFERRED_COLUMNS
-if (!exists("PREFERRED_COLUMNS")) {
-  source("R/config/constants.R")
-}
-
-#' Extract a scalar value from an annotation entry
-#'
-#' Annotations may be stored as bare strings or as lists with named fields
-#' (e.g. \code{list(flag = "misidentification", user = "...", timestamp = "...")}).
-#' This helper normalises both formats to a single character value.
-#'
-#' @param entry The annotation entry (list or character scalar)
-#' @param fields Character vector of field names to try, in priority order
-#' @param default Value to return when entry is NULL or extraction fails
-#' @return Character scalar
-#' @keywords internal
-extract_annotation <- function(entry, fields, default = "") {
-  if (is.null(entry)) return(default)
-  if (is.list(entry)) {
-    for (f in fields) {
-      val <- entry[[f]]
-      if (!is.null(val)) return(as.character(val))
-    }
-    return(default)
-  }
-  as.character(entry)
-}
-
-#' Order columns according to preferred configuration
-#' @param data Data frame to reorder
-#' @return Data frame with reordered columns
-#' @keywords internal
-order_columns <- function(data) {
-  if (is.null(data) || nrow(data) == 0) return(data)
-
-  # Get preferred column order using the PREFERRED_COLUMNS function
-  ordered_cols <- PREFERRED_COLUMNS(data)
-  # Get actual columns that exist in the data
-  valid_cols <- intersect(ordered_cols, names(data))
-  # Get any remaining columns not in the preferred list
-  other_cols <- setdiff(names(data), ordered_cols)
-
-  # Combine the columns in the desired order
-  data[, c(valid_cols, other_cols)]
-}
-
-#' Get available flag options
-#' @return Named list of flag options
-#' @export
-get_flag_options <- function() {
-  c(
-    "None" = "",
-    "Misidentification" = "misidentification",
-    "ID Uncertain" = "id_uncertain",
-    "Data Issue" = "data_issue",
-    "Other Issue" = "other_issue"
-  )
+# Source annotation utilities (defines extract_annotation, get_flag_options,
+# order_columns, prepare_module_data, merge_annotations_for_export)
+if (!exists("extract_annotation")) {
+  source("R/utils/annotation_utils.R")
 }
 
 #' Format specimen table with standardized styling and interactive elements
@@ -391,122 +342,9 @@ add_color_coding <- function(dt, data, color_by) {
   )
 }
 
-#' Sync table states between specimens and bags tables
-#' @param data Data frame to update
-#' @param current_state Current state list containing selections, flags, and notes
-#' @return Updated data frame with synced states
-#' @keywords internal
-sync_table_states <- function(data, current_state) {
-  if (is.null(data) || nrow(data) == 0) return(data)
-
-  # Create efficient lookup for row indices
-  row_map <- setNames(seq_len(nrow(data)), data$processid)
-
-  # Ensure annotation columns exist with proper defaults
-  if (is.null(data$flag)) data$flag <- ""
-  data$flag <- as.character(data$flag)
-  if (is.null(data$curator_notes)) data$curator_notes <- ""
-  data$curator_notes <- as.character(data$curator_notes)
-
-  # Update flags
-  if (!is.null(current_state$flags)) {
-    for (pid in names(current_state$flags)) {
-      row_idx <- row_map[pid]
-      if (!is.null(row_idx) && !is.na(row_idx)) {
-        data$flag[row_idx] <- extract_annotation(current_state$flags[[pid]], c("flag", "value"))
-      }
-    }
-  }
-
-  # Update curator notes
-  if (!is.null(current_state$notes)) {
-    for (pid in names(current_state$notes)) {
-      row_idx <- row_map[pid]
-      if (!is.null(row_idx) && !is.na(row_idx)) {
-        data$curator_notes[row_idx] <- extract_annotation(current_state$notes[[pid]], c("text", "note", "value"))
-      }
-    }
-  }
-
-  return(data)
-}
-
-# Handles data preparation consistently
-prepare_module_data <- function(data,
-                                current_selections = NULL,
-                                current_flags = NULL,
-                                current_notes = NULL,
-                                logger = NULL) {
-
-  if (is.null(data) || nrow(data) == 0) {
-    if (!is.null(logger)) logger$warn("Empty input data to prepare_module_data")
-    return(data.frame())
-  }
-
-  # Log initial state
-  if (!is.null(logger)) {
-    logger$info("Pre-format specimen table data", details = list(
-      rows = nrow(data),
-      columns = names(data),
-      sample_processids = head(data$processid)
-    ))
-  }
-
-  # Convert problematic column types
-  for (col in names(data)) {
-    if (is.list(data[[col]]) || is.factor(data[[col]])) {
-      data[[col]] <- as.character(data[[col]])
-    }
-  }
-
-  # Add missing standard columns if needed
-  missing_cols <- setdiff(PREFERRED_COLUMNS(data), names(data))
-  for (col in missing_cols) {
-    data[[col]] <- NA_character_
-  }
-
-  # Merge annotation columns from state into the data frame.
-  # extract_annotation() handles both list and bare-string formats.
-  data$selected <- vapply(data$processid, function(pid) {
-    !is.null(current_selections[[pid]])
-  }, logical(1), USE.NAMES = FALSE)
-
-  data$flag <- vapply(data$processid, function(pid) {
-    extract_annotation(current_flags[[pid]], c("flag", "value"))
-  }, character(1), USE.NAMES = FALSE)
-
-  data$curator_notes <- vapply(data$processid, function(pid) {
-    extract_annotation(current_notes[[pid]], c("text", "note", "value"))
-  }, character(1), USE.NAMES = FALSE)
-
-  # Final cleanup - ensure no NULL values
-  for (col in names(data)) {
-    if (any(sapply(data[[col]], is.null))) {
-      data[[col]][sapply(data[[col]], is.null)] <- NA
-    }
-  }
-
-  # Log final state
-  if (!is.null(logger)) {
-    logger$info("Post-format specimen table", details = list(
-      table_class = class(data),
-      table_columns = if(is.data.frame(data)) names(data) else "Not a data frame"
-    ))
-  }
-
-  # Ensure proper types before returning
-  data$selected <- as.logical(data$selected)
-  data$flag <- as.character(data$flag)
-  data$curator_notes <- as.character(data$curator_notes)
-  if ("quality_score" %in% names(data)) {
-    data$quality_score <- as.numeric(data$quality_score)
-  }
-  if ("rank" %in% names(data)) {
-    data$rank <- as.numeric(data$rank)
-  }
-  return(data)
-
-}
+# NOTE: prepare_module_data, merge_annotations_for_export,
+# extract_annotation, get_flag_options, and order_columns are defined in
+# R/utils/annotation_utils.R (sourced above).
 
 #' Get table callback JavaScript
 #' @param ns Namespace function for Shiny
@@ -524,86 +362,54 @@ get_table_callback <- function(ns, flag_options = NULL) {
     function(table) {
       %s
 
-      // Global state store with enhanced persistence
-      window.tableStates = window.tableStates || {};
+      // Lightweight helpers — NO localStorage, NO window.tableStates.
+      // The R StateManager is the single source of truth for annotations.
+      // This JS layer only handles:
+      //   1. Sending user edits to Shiny (notifyShiny)
+      //   2. Syncing UI across grade tables on the same page (broadcast)
 
-      const stateManager = {
-        getKey: (processid) => {
-          return `specimen_${processid}`;
-        },
+      const notifyShiny = function(processid, type, value, rowData) {
+        if (!rowData) return;
+        const payload = {
+          processid: processid,
+          species: rowData.species || '',
+          bin_uri: rowData.bin_uri || '',
+          timestamp: Date.now(),
+          table_id: table.table().node().id || 'default'
+        };
+        payload[type] = value;
 
-        save: function(processid, type, value) {
-          const key = this.getKey(processid);
-          window.tableStates[key] = window.tableStates[key] || {};
-          window.tableStates[key][type] = value;
-          window.tableStates[key].timestamp = Date.now();
-          try {
-            localStorage.setItem('tableStates', JSON.stringify(window.tableStates));
-          } catch(e) {
-            console.warn('Error saving state:', e);
-          }
-        },
-
-        load: function(processid) {
-          const key = this.getKey(processid);
-          return window.tableStates[key] || null;
-        },
-
-        notifyShiny: function(processid, type, value, rowData) {
-          if (!rowData) return;
-
-          const payload = {
-            processid: processid,
-            species: rowData.species || '',
-            bin_uri: rowData.bin_uri || '',
-            timestamp: Date.now(),
-            table_id: table.table().node().id || 'default'
-          };
-          payload[type] = value;
-
-          if (type === 'flag') {
-            Shiny.setInputValue('%s', payload, {priority: 'event'});
-          } else if (type === 'curator_notes') {
-            Shiny.setInputValue('%s', payload, {priority: 'event'});
-          }
-        },
-
-        broadcast: function(processid, type, value) {
-          // Immediate UI update
-          table.rows().every(function() {
-            const data = this.data();
-            if (data?.processid === processid) {
-              data[type] = value;
-              this.data(data);
-              stateManager.updateDOM($(this.node()), {
-                [type]: value
-              });
-            }
-          });
-
-          document.dispatchEvent(new CustomEvent('stateChange', {
-            detail: {
-              processid,
-              type,
-              value,
-              tableId: table.table().node().id || 'default',
-              timestamp: Date.now()
-            }
-          }));
-        },
-
-        updateDOM: function($row, state) {
-          if (!$row || !state) return;
-          if (state.flag !== undefined) {
-            $row.find('select.specimen-flag').val(state.flag);
-          }
-          if (state.curator_notes !== undefined) {
-            $row.find('input.specimen-notes').val(state.curator_notes);
-          }
+        if (type === 'flag') {
+          Shiny.setInputValue('%s', payload, {priority: 'event'});
+        } else if (type === 'curator_notes') {
+          Shiny.setInputValue('%s', payload, {priority: 'event'});
         }
       };
 
-      // Event handlers with bubbling prevention
+      const updateDOM = function($row, changes) {
+        if (!$row || !changes) return;
+        if (changes.flag !== undefined) {
+          $row.find('select.specimen-flag').val(changes.flag);
+        }
+        if (changes.curator_notes !== undefined) {
+          $row.find('input.specimen-notes').val(changes.curator_notes);
+        }
+      };
+
+      // Broadcast a change to other tables showing the same specimen
+      const broadcast = function(processid, type, value) {
+        document.dispatchEvent(new CustomEvent('annotationChange', {
+          detail: {
+            processid: processid,
+            type: type,
+            value: value,
+            sourceTableId: table.table().node().id || 'default'
+          }
+        }));
+      };
+
+      // --- Event handlers ---
+
       table.on('change', 'select.specimen-flag', function(e) {
         e.stopPropagation();
         const row = table.row($(this).closest('tr'));
@@ -611,12 +417,10 @@ get_table_callback <- function(ns, flag_options = NULL) {
         if (!rowData?.processid) return;
 
         const value = this.value;
-        stateManager.save(rowData.processid, 'flag', value);
-        stateManager.broadcast(rowData.processid, 'flag', value);
-        stateManager.notifyShiny(rowData.processid, 'flag', value, rowData);
+        notifyShiny(rowData.processid, 'flag', value, rowData);
+        broadcast(rowData.processid, 'flag', value);
       });
 
-      // Debounced handler for notes input (fires on change, i.e. blur)
       table.on('change', 'input.specimen-notes', function(e) {
         e.stopPropagation();
         const row = table.row($(this).closest('tr'));
@@ -624,70 +428,23 @@ get_table_callback <- function(ns, flag_options = NULL) {
         if (!rowData?.processid) return;
 
         const value = this.value.trim();
-        stateManager.save(rowData.processid, 'curator_notes', value);
-        stateManager.broadcast(rowData.processid, 'curator_notes', value);
-        stateManager.notifyShiny(rowData.processid, 'curator_notes', value, rowData);
+        notifyShiny(rowData.processid, 'curator_notes', value, rowData);
+        broadcast(rowData.processid, 'curator_notes', value);
       });
 
-      // Enhanced state restoration with consistent delay
-      const restoreStates = () => {
-        const delay = 50;
-        setTimeout(() => {
-          table.rows({page: 'current'}).every(function() {
-            const data = this.data();
-            if (!data?.processid) return;
+      // Listen for annotation changes broadcast from other tables
+      document.addEventListener('annotationChange', function(e) {
+        const d = e.detail;
+        if (d.sourceTableId === (table.table().node().id || 'default')) return;
 
-            const state = stateManager.load(data.processid);
-            if (state) {
-              Object.assign(data, state);
-              this.data(data);
-              const $row = $(this.node());
-              stateManager.updateDOM($row, state);
-            }
-          });
-        }, delay);
-      };
-
-      // State change listener with debouncing
-      let stateChangeTimeout;
-      document.addEventListener('stateChange', function(e) {
-        if (e.detail.tableId === (table.table().node().id || 'default')) return;
-
-        clearTimeout(stateChangeTimeout);
-        stateChangeTimeout = setTimeout(() => {
-          table.rows().every(function() {
-            const data = this.data();
-            if (data?.processid === e.detail.processid) {
-              data[e.detail.type] = e.detail.value;
-              this.data(data);
-              stateManager.updateDOM($(this.node()), {
-                [e.detail.type]: e.detail.value
-              });
-            }
-          });
-        }, 50);
-      });
-
-      // Try to restore states from localStorage
-      try {
-        const stored = localStorage.getItem('tableStates');
-        if (stored) {
-          const parsed = JSON.parse(stored);
-          // Merge with in-memory state (in-memory wins on conflict)
-          window.tableStates = Object.assign(parsed, window.tableStates);
-        }
-      } catch(e) {
-        console.warn('Error loading stored states:', e);
-      }
-
-      // Table event bindings
-      table.on('draw.dt', restoreStates);
-      table.on('page.dt', restoreStates);
-      table.on('search.dt', restoreStates);
-
-      // Initial state application
-      table.one('init', function() {
-        restoreStates();
+        table.rows().every(function() {
+          const data = this.data();
+          if (data?.processid === d.processid) {
+            data[d.type] = d.value;
+            this.data(data);
+            updateDOM($(this.node()), { [d.type]: d.value });
+          }
+        });
       });
     }
   ", flag_js, ns("specimen_flag"), ns("specimen_notes")))
@@ -941,43 +698,6 @@ create_species_colors <- function(species) {
   }
 
   setNames(colors[1:length(unique_species)], unique_species)
-}
-
-#' Merge curator annotations into specimen data for export
-#'
-#' Produces clean text columns for selected, flag, curator_notes, and
-#' audit-trail fields (flag_user, flag_timestamp). Used by all export
-#' paths (ExportManager, download handlers) to ensure consistent
-#' annotation inclusion.
-#'
-#' @param data Data frame of specimen data (must contain processid column)
-#' @param selections Named list of selections keyed by processid
-#' @param flags Named list of flags keyed by processid (each entry has $flag, $user, $timestamp)
-#' @param notes Named list of curator notes keyed by processid (each entry has $text, $user, $timestamp)
-#' @return Data frame with clean text annotation columns appended
-#' @export
-merge_annotations_for_export <- function(data, selections = NULL, flags = NULL, notes = NULL) {
-  if (is.null(data) || nrow(data) == 0) return(data)
-
-  data$selected <- data$processid %in% names(selections)
-
-  data$flag <- vapply(data$processid, function(pid) {
-    extract_annotation(flags[[pid]], c("flag", "value"))
-  }, character(1), USE.NAMES = FALSE)
-
-  data$curator_notes <- vapply(data$processid, function(pid) {
-    extract_annotation(notes[[pid]], c("text", "note", "value"))
-  }, character(1), USE.NAMES = FALSE)
-
-  data$flag_user <- vapply(data$processid, function(pid) {
-    extract_annotation(flags[[pid]], "user")
-  }, character(1), USE.NAMES = FALSE)
-
-  data$flag_timestamp <- vapply(data$processid, function(pid) {
-    extract_annotation(flags[[pid]], "timestamp")
-  }, character(1), USE.NAMES = FALSE)
-
-  data
 }
 
 #' Create table container with title and controls

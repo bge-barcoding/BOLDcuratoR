@@ -13,6 +13,7 @@ source("R/config/column_definitions.R")
 # Source utility functions
 source("R/utils/ErrorBoundary.R")
 source("R/utils/bags_grading.R")
+source("R/utils/annotation_utils.R")
 source("R/utils/table_utils.R")
 source("R/utils/session_persistence.R")
 
@@ -463,32 +464,65 @@ server <- function(input, output, session) {
     }
   })
 
-  # Save session state on exit, using a user-meaningful identifier so
+  # Build a session ID from user info for persistence.
+  # Deterministic so sessions can be found by email/ORCID/name later.
+  get_session_id <- function(store) {
+    user_info <- store$user_info
+    user_id <- NULL
+    if (!is.null(user_info$email) && nchar(trimws(user_info$email)) > 0) {
+      user_id <- tolower(trimws(user_info$email))
+    } else if (!is.null(user_info$orcid) && nchar(trimws(user_info$orcid)) > 0) {
+      user_id <- trimws(user_info$orcid)
+    } else if (!is.null(user_info$name) && nchar(trimws(user_info$name)) > 0) {
+      user_id <- make.names(trimws(user_info$name))
+    }
+    if (!is.null(user_id)) {
+      safe_id <- gsub("[^A-Za-z0-9._@-]", "_", user_id)
+      sprintf("%s_%s", safe_id, format(Sys.time(), "%Y%m%d_%H%M%S"))
+    } else {
+      session$token
+    }
+  }
 
-  # sessions can be found by email/ORCID/name across browser sessions.
+  # Periodic auto-save every 60 seconds so curator work isn't lost if
+  # the browser crashes or the network drops (onSessionEnded is unreliable
+  # in those cases).
+  auto_save_timer <- reactiveTimer(60000)
+  observe({
+    auto_save_timer()
+    store <- isolate(state$get_store())
+    if (is.null(store$specimen_data)) return()
+
+    # Only save if there are annotations worth saving
+    has_annotations <- length(store$selected_specimens) > 0 ||
+      length(store$specimen_flags) > 0 ||
+      length(store$specimen_curator_notes) > 0
+    if (!has_annotations) return()
+
+    tryCatch({
+      sid <- get_session_id(store)
+      save_session_state(sid, store)
+      logging_manager$log_action(
+        session_id = sid,
+        action_type = "auto_save",
+        process_ids = character(0)
+      )
+    }, error = function(e) {
+      logging_manager$log_action(
+        session_id = session$token,
+        action_type = "auto_save_error",
+        process_ids = character(0),
+        metadata = list(error = e$message)
+      )
+    })
+  })
+
+  # Save session state on exit.
   session$onSessionEnded(function() {
     tryCatch({
       store <- isolate(state$get_store())
       if (!is.null(store$specimen_data)) {
-        # Build a deterministic session ID from the best available user identifier
-        user_info <- store$user_info
-        user_id <- NULL
-        if (!is.null(user_info$email) && nchar(trimws(user_info$email)) > 0) {
-          user_id <- tolower(trimws(user_info$email))
-        } else if (!is.null(user_info$orcid) && nchar(trimws(user_info$orcid)) > 0) {
-          user_id <- trimws(user_info$orcid)
-        } else if (!is.null(user_info$name) && nchar(trimws(user_info$name)) > 0) {
-          user_id <- make.names(trimws(user_info$name))
-        }
-
-        # Sanitize for use as directory name and append timestamp
-        if (!is.null(user_id)) {
-          safe_id <- gsub("[^A-Za-z0-9._@-]", "_", user_id)
-          sid <- sprintf("%s_%s", safe_id, format(Sys.time(), "%Y%m%d_%H%M%S"))
-        } else {
-          sid <- session$token
-        }
-
+        sid <- get_session_id(store)
         save_session_state(sid, store)
         logging_manager$log_action(
           session_id = sid,
