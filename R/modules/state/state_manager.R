@@ -103,7 +103,11 @@ StateManager <- R6::R6Class(
     reset_state = function(keys = NULL) {
       private$error_boundary$catch({
         if (is.null(keys)) {
-          private$initialize_store()
+          # Reset all keys in the existing store rather than creating a new
+          # reactiveValues object, so that external references remain valid.
+          for (key in names(private$initial_state)) {
+            private$store[[key]] <- private$initial_state[[key]]
+          }
           private$log_info("Full state reset completed")
         } else {
           for (key in keys) {
