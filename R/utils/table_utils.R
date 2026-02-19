@@ -246,9 +246,14 @@ format_specimen_table <- function(data, ns = NULL,
     }
   )
 
-  # Add callback if namespace provided (skip for read-only — no interactive handlers needed)
-  if (!is.null(ns) && !read_only) {
-    dt_options$callback <- get_table_callback(ns, get_flag_options())
+  # Build the callback JS for interactive (non-read-only) tables.
+  # IMPORTANT: callback must be a top-level datatable() parameter, NOT
+
+  # inside the options list — DT ignores options$callback.
+  dt_callback <- if (!is.null(ns) && !read_only) {
+    get_table_callback(ns, get_flag_options())
+  } else {
+    JS("return table;")
   }
 
   # Create base DT object
@@ -256,6 +261,7 @@ format_specimen_table <- function(data, ns = NULL,
     dt_args <- list(
       data = data,
       options = dt_options,
+      callback = dt_callback,
       selection = 'none',
       rownames = FALSE,
       escape = FALSE,

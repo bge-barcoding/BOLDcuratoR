@@ -581,8 +581,24 @@ mod_data_import_server <- function(id, state, logger = NULL) {
       },
       content = function(file) {
         logger$info("Downloading search results", list(format = "csv"))
-        write.csv(state$get_store()$specimen_data, file, row.names = FALSE)
-      }
+        data <- state$get_store()$specimen_data
+        if (is.null(data) || nrow(data) == 0) return(NULL)
+
+        # Coerce list/factor columns to plain character for clean CSV
+        for (col in names(data)) {
+          if (is.list(data[[col]])) {
+            data[[col]] <- vapply(data[[col]], function(x) {
+              if (is.null(x) || length(x) == 0) return(NA_character_)
+              paste(x, collapse = "; ")
+            }, character(1))
+          } else if (is.factor(data[[col]])) {
+            data[[col]] <- as.character(data[[col]])
+          }
+        }
+
+        write.csv(data, file, row.names = FALSE)
+      },
+      contentType = "text/csv"
     )
 
     # Return reactive endpoints for parent module communication

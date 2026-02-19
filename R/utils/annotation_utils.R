@@ -172,6 +172,21 @@ prepare_module_data <- function(data,
 merge_annotations_for_export <- function(data, selections = NULL, flags = NULL, notes = NULL) {
   if (is.null(data) || nrow(data) == 0) return(data)
 
+  # Coerce list and factor columns to plain character first so that
+
+  # write.table() never encounters complex types and strip_html covers
+  # every column.
+  for (col in names(data)) {
+    if (is.list(data[[col]])) {
+      data[[col]] <- vapply(data[[col]], function(x) {
+        if (is.null(x) || length(x) == 0) return(NA_character_)
+        paste(x, collapse = "; ")
+      }, character(1))
+    } else if (is.factor(data[[col]])) {
+      data[[col]] <- as.character(data[[col]])
+    }
+  }
+
   # Strip any HTML tags from character columns (safety net for DT render
   # functions that wrap values in <div class="cell-content">...</div>).
   strip_html <- function(x) gsub("<[^>]+>", "", x)
