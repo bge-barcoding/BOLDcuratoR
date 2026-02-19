@@ -793,18 +793,40 @@ format_bin_content_table <- function(content_data) {
   required_cols <- c("bin_uri", "total_records", "unique_species",
                      "species_list", "countries", "concordance")
   display_cols <- intersect(required_cols, names(content_data))
+  display_data <- content_data[, display_cols, drop = FALSE]
+
+  # Build columnDefs for truncation of countries column
+  truncate_targets <- which(display_cols == "countries") - 1
+  col_defs <- if (length(truncate_targets) > 0) {
+    list(list(
+      targets = truncate_targets,
+      render = JS("
+        function(data, type, row) {
+          if (type === 'display' && data && data.length > 50) {
+            return '<span title=\"' + data.replace(/\"/g, '&quot;') + '\">' +
+                   data.substr(0, 50) + '...</span>';
+          }
+          return data;
+        }
+      ")
+    ))
+  } else {
+    list()
+  }
 
   datatable(
-    content_data[, display_cols, drop = FALSE],
+    display_data,
     options = list(
       pageLength = 50,
       scrollX = TRUE,
       scrollY = "500px",
       fixedHeader = TRUE,
       dom = 'Bfrtip',
-      buttons = c('copy', 'csv', 'excel')
+      buttons = c('copy', 'csv', 'excel'),
+      columnDefs = col_defs
     ),
-    rownames = FALSE
+    rownames = FALSE,
+    escape = FALSE
   ) %>%
     formatStyle(
       'concordance',

@@ -25,18 +25,10 @@ mod_bin_analysis_ui <- function(id) {
           valueBoxOutput(ns("discordant_bins_box"), width = 4),
         ),
 
-        # Main Content Tabs
-        tabBox(
-          id = ns("analysis_tabs"),
-          width = 12,
-
-          tabPanel(
-            "BIN Content Details",
-            div(
-              class = "table-responsive",
-              DTOutput(ns("bin_content_table"))
-            )
-          )
+        # BIN Content
+        div(
+          class = "table-responsive",
+          DTOutput(ns("bin_content_table"))
         )
       )
     ),
