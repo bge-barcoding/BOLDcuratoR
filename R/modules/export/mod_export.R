@@ -51,6 +51,10 @@ ExportManager <- R6::R6Class("ExportManager",
                                      record_count <- record_count + nrow(data$quality_summary)
                                    }
 
+                                   if (length(sheets) == 0) {
+                                     stop("No data to export")
+                                   }
+
                                    writexl::write_xlsx(sheets, filename)
 
                                    # Log successful export
