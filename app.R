@@ -91,6 +91,11 @@ ui <- dashboardPage(
           margin-bottom: 5px !important;
         }
 
+        /* Hide sidebar toggle button */
+        .sidebar-toggle {
+          display: none !important;
+        }
+
         /* DataTables Overrides */
         .dataTables_wrapper {
           padding: 0 !important;
