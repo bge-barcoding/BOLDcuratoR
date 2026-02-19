@@ -325,73 +325,92 @@ server <- function(input, output, session) {
     )
   })
 
-  # Handle specimen selection across modules
+  # Handle specimen selection across modules.
+  # Register one observeEvent per grade (stable IDs) instead of nesting
+  # observeEvent inside observe() loops, which would create duplicate
+  # handlers every time the outer observer invalidates.
+  selection_observers_registered <- FALSE
+
+  observe({
+    store <- state$get_store()
+    req(store$specimen_data, store$bags_grades)
+
+    # Only register observers once
+    if (selection_observers_registered) return()
+    selection_observers_registered <<- TRUE
+
+    grades <- c("a", "b", "c", "d", "e")
+
+    for (grade in grades) {
+      local({
+        grade_local <- grade
+
+        # Watch the BAGS module's selected_specimens reactive for this grade
+        bags_module <- bags_grading[[grade_local]]
+        if (is.null(bags_module)) return()
+
+        observeEvent(bags_module$selected_specimens(), {
+          # Handled via direct state updates in bags module
+        }, ignoreInit = TRUE)
+      })
+    }
+  })
+
+  # Single observer for all specimen selections via a shared Shiny input.
+  # BAGS grade tables use radio-button inputs whose IDs start with "select_".
+  # Listen for any such input change.
   observe({
     store <- state$get_store()
     req(store$specimen_data, store$bags_grades)
 
     grades <- c("a", "b", "c", "d", "e")
+    grade_species_map <- list()
 
-    for(grade in grades) {
+    for (grade in grades) {
       grade_species <- store$bags_grades$species[store$bags_grades$bags_grade == toupper(grade)]
-
-      for(species in grade_species) {
-        local({
-          species_local <- species
-          grade_local <- grade
-
-          input_id <- paste0("select_", grade_local, "_", make.names(species_local))
-
-          observeEvent(input[[input_id]], {
-            selected_processid <- input[[input_id]]
-
-            # Update selected specimens - keyed by processid for consistency
-            current_selections <- isolate(state$get_store()$selected_specimens)
-            if (is.null(current_selections)) current_selections <- list()
-
-            # Remove previous representative for this species (radio = one per species)
-            for (pid in names(current_selections)) {
-              entry <- current_selections[[pid]]
-              if (is.list(entry) && identical(entry$species, species_local)) {
-                current_selections[[pid]] <- NULL
-              }
-            }
-
-            # Get specimen metadata
-            specimen_row <- store$specimen_data[store$specimen_data$processid == selected_processid, ]
-
-            # Add new selection keyed by processid
-            current_selections[[selected_processid]] <- list(
-              timestamp = Sys.time(),
-              species = species_local,
-              quality_score = if (nrow(specimen_row) > 0) specimen_row$quality_score[1] else NA,
-              user = store$user_info$email,
-              selected = TRUE
-            )
-
-            state$update_state(
-              "selected_specimens",
-              current_selections
-            )
-
-            # Log selection
-            user_info <- store$user_info
-            logging_manager$log_action(
-              user_email = user_info$email,
-              user_name = user_info$name,
-              session_id = session$token,
-              action_type = "specimen_selected",
-              process_ids = selected_processid,
-              metadata = list(
-                species = species_local,
-                grade = grade_local,
-                quality_score = if (nrow(specimen_row) > 0) specimen_row$quality_score[1] else NA,
-                rank = if (nrow(specimen_row) > 0) specimen_row$rank[1] else NA
-              )
-            )
-          })
-        })
+      for (species in grade_species) {
+        input_id <- paste0("select_", grade, "_", make.names(species))
+        # Check if this input exists and has a value
+        val <- input[[input_id]]
+        if (!is.null(val) && nchar(val) > 0) {
+          grade_species_map[[input_id]] <- list(
+            processid = val,
+            species = species,
+            grade = grade
+          )
+        }
       }
+    }
+
+    # Process all current selections
+    if (length(grade_species_map) > 0) {
+      isolate({
+        current_selections <- state$get_store()$selected_specimens
+        if (is.null(current_selections)) current_selections <- list()
+
+        for (info in grade_species_map) {
+          # Remove previous representative for this species
+          for (pid in names(current_selections)) {
+            entry <- current_selections[[pid]]
+            if (is.list(entry) && identical(entry$species, info$species)) {
+              current_selections[[pid]] <- NULL
+            }
+          }
+
+          # Get specimen metadata
+          specimen_row <- store$specimen_data[store$specimen_data$processid == info$processid, ]
+
+          current_selections[[info$processid]] <- list(
+            timestamp = Sys.time(),
+            species = info$species,
+            quality_score = if (nrow(specimen_row) > 0) specimen_row$quality_score[1] else NA,
+            user = store$user_info$email,
+            selected = TRUE
+          )
+        }
+
+        state$update_state("selected_specimens", current_selections)
+      })
     }
   })
 

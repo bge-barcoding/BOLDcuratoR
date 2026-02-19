@@ -152,19 +152,8 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
           organized <- organize_grade_specimens(data, grade)
           logger$info(sprintf("Organized specimens into %d groups", length(organized)))
 
-          # First sync states
-          organized <- lapply(organized, function(group_data) {
-            sync_table_states(
-              data = group_data,
-              current_state = list(
-                selections = current_sel,
-                flags = current_flags,
-                notes = current_notes
-              )
-            )
-          })
-
-          # Then create tables with synced data
+          # Annotations are merged by prepare_module_data() inside
+          # create_grade_tables(), so no separate sync step is needed.
           tables <- create_grade_tables(
             organized = organized,
             grade = grade,
@@ -268,9 +257,11 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
       if (!is.null(note$processid)) {
         current_notes <- isolate(rv$curator_notes)
 
-        if (!is.null(note$notes) && nchar(note$notes) > 0) {
+        # JS payload sends the value under "curator_notes" key
+        note_text <- note$curator_notes %||% note$notes %||% ""
+        if (nchar(note_text) > 0) {
           current_notes[[note$processid]] <- list(
-            text = note$notes,
+            text = note_text,
             timestamp = Sys.time(),
             user = state$get_store()$user_info$email
           )
