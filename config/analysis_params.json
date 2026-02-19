@@ -1,10 +1,4 @@
 {
-  "haplotype": {
-    "min_overlap": [100],
-    "match_score": [1],
-    "mismatch_penalty": [-1],
-    "gap_penalty": [-2]
-  },
   "bin": {
     "min_specimens": [3],
     "min_coverage": [0.8],

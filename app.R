@@ -45,12 +45,6 @@ source("R/modules/species_analysis/mod_species_analysis_ui.R")
 source("R/modules/species_analysis/mod_species_analysis_server.R")
 source("R/modules/species_analysis/mod_species_analysis_utils.R")
 
-source("R/modules/haplotype_analysis/haplotype_manager.R")
-source("R/modules/haplotype_analysis/sequence_aligner.R")
-source("R/modules/haplotype_analysis/mod_haplotype_analysis_ui.R")
-source("R/modules/haplotype_analysis/mod_haplotype_analysis_server.R")
-source("R/modules/haplotype_analysis/mod_haplotype_analysis_utils.R")
-
 # Source export and history modules
 source("R/modules/export/mod_export.R")
 source("R/modules/export_history/mod_export_history_ui.R")
@@ -78,7 +72,6 @@ ui <- dashboardPage(
       menuItem("BAGS Grade D", tabName = "bags_d", icon = icon("exclamation-triangle")),
       menuItem("BAGS Grade E", tabName = "bags_e", icon = icon("times-circle")),
       menuItem("Species Analysis", tabName = "species_analysis", icon = icon("list-check")),
-      menuItem("Haplotype Analysis", tabName = "haplotypes", icon = icon("dna")),
       menuItem("Export History", tabName = "export_history", icon = icon("history")),
       menuItem("About", tabName = "about", icon = icon("info-circle"))
     )
@@ -183,9 +176,6 @@ ui <- dashboardPage(
 
       tabItem(tabName = "species_analysis",
               mod_species_analysis_ui("species_analysis")),
-
-      tabItem(tabName = "haplotypes",
-              mod_haplotype_analysis_ui("haplotype")),
 
       tabItem(tabName = "export_history",
               mod_export_history_ui("export_history")),

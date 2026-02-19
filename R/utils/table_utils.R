@@ -1021,44 +1021,6 @@ format_export_history_table <- function(history_data) {
     formatBytes('file_size')
 }
 
-#' Format haplotype summary table
-#' @param summary_data Data frame of haplotype summary data
-#' @export
-format_haplotype_summary_table <- function(summary_data) {
-  if (is.null(summary_data) || nrow(summary_data) == 0) {
-    return(NULL)
-  }
-
-  required_cols <- c("species", "unique_haplotypes", "haplotype_diversity",
-                     "coverage", "total_specimens")
-  display_cols <- intersect(required_cols, names(summary_data))
-
-  datatable(
-    summary_data[, display_cols, drop = FALSE],
-    options = list(
-      pageLength = 25,
-      scrollX = TRUE,
-      scrollY = "500px",
-      fixedHeader = TRUE,
-      dom = 'Bfrtip',
-      buttons = c('copy', 'csv', 'excel')
-    ),
-    rownames = FALSE
-  ) %>%
-    formatStyle(
-      'haplotype_diversity',
-      background = styleColorBar(c(0, 1), '#28a745')
-    ) %>%
-    formatRound('haplotype_diversity', digits = 3) %>%
-    formatStyle(
-      'unique_haplotypes',
-      background = styleColorBar(
-        c(0, max(summary_data$unique_haplotypes)),
-        '#17a2b8'
-      )
-    )
-}
-
 #' Generate table caption
 #' @param grade BAGS grade
 #' @param group_info Group information list

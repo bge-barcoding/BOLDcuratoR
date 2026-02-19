@@ -29,16 +29,7 @@ required_packages <- c(
 
   # Database packages
   "DBI",
-  "RSQLite",
-
-  # Analysis packages
-  "ape",
-  "igraph",
-
-  # Bioconductor packages
-  "Biostrings",
-  "msa",
-  "DECIPHER"
+  "RSQLite"
 )
 
 # Install missing packages function
@@ -49,31 +40,11 @@ required_packages <- c(
 
     if(length(missing_pkgs) > 0) {
       message("Installing missing packages: ", paste(missing_pkgs, collapse = ", "))
-
-      if(!require("BiocManager", quietly = TRUE)) {
-        install.packages("BiocManager")
-      }
-
-      bioc_packages <- c("Biostrings", "msa", "DECIPHER")
-      cran_packages <- setdiff(missing_pkgs, bioc_packages)
-
-      if(length(cran_packages) > 0) {
-        install.packages(cran_packages)
-      }
-
-      bioc_to_install <- intersect(missing_pkgs, bioc_packages)
-      if(length(bioc_to_install) > 0) {
-        BiocManager::install(bioc_to_install)
-      }
+      install.packages(missing_pkgs)
     }
     return(TRUE)
   }, error = function(e) {
     message("Error installing packages: ", e$message)
-    if(grepl("Bioconductor", e$message)) {
-      message("Please try installing Bioconductor packages manually:\n",
-              "if (!require('BiocManager')) install.packages('BiocManager')\n",
-              "BiocManager::install(c('Biostrings', 'msa', 'DECIPHER'))")
-    }
     return(FALSE)
   })
 }
@@ -120,12 +91,6 @@ required_packages <- c(
       params <- jsonlite::fromJSON(config_file)
     } else {
       params <- list(
-        haplotype = list(
-          min_overlap = 100,
-          match_score = 1,
-          mismatch_penalty = -1,
-          gap_penalty = -2
-        ),
         bin = list(
           min_specimens = 3,
           min_coverage = 0.8,

@@ -31,8 +31,6 @@ BOLDcuratoR is a **Shiny web application** (not an R package) that helps curate 
 | Processing | `R/modules/specimen_handling/specimen_processor.R` | `SpecimenProcessor` R6 pipeline |
 | Scoring | `R/modules/specimen_handling/specimen_scorer.R` | `SpecimenScorer` R6 - quality scoring |
 | Validation | `R/modules/specimen_handling/specimen_validator.R` | `SpecimenValidator` R6 - data validation flags |
-| Haplotypes | `R/modules/haplotype_analysis/haplotype_manager.R` | `HaplotypeManager` R6 - haplotype clustering |
-| Alignment | `R/modules/haplotype_analysis/sequence_aligner.R` | `SequenceAligner` R6 - MSA operations |
 
 ### Shiny Module Pattern
 
@@ -44,7 +42,6 @@ Each UI tab follows the standard `mod_*_ui()` / `mod_*_server()` pattern:
 | BIN Analysis | `mod_bin_analysis_ui.R` | `mod_bin_analysis_server.R` | `mod_bin_analysis_utils.R` |
 | Specimens | `mod_specimen_handling_ui.R` | `mod_specimen_handling_server.R` | _(inline)_ |
 | BAGS A-E | `mod_bags_grading_ui.R` | `mod_bags_grading_server.R` | `mod_bags_grading_utils.R` |
-| Haplotypes | `mod_haplotype_analysis_ui.R` | `mod_haplotype_analysis_server.R` | `mod_haplotype_analysis_utils.R` |
 | Export History | `mod_export_history_ui.R` | `mod_export_history_server.R` | _(none)_ |
 | User Info | `mod_user_info_ui.R` | `mod_user_info_server.R` | _(none)_ |
 
@@ -80,9 +77,6 @@ Data Import ──> StateManager.specimen_data
                   │         │       └──> format_grade_table()
                   │         │               └──> format_specimen_table()
                   │         └──> sync_table_states()
-                  │
-                  └──> Haplotype Analysis ──> HaplotypeManager
-                            └──> SequenceAligner
 
 Export ──> ExportManager ──> LoggingManager
 Export History ──> LoggingManager.get_export_history()
