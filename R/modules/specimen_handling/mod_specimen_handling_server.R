@@ -187,8 +187,10 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
     })
 
     # Render the specimen table (view-only).
-    # Annotations are read with isolate() so flag/note changes don't
-    # trigger a full re-render (the replaceData observer handles that).
+    # Annotations are read reactively so the table re-renders when
+    # flags/notes change in BAGS tabs.  Shiny's suspendWhenHidden
+    # (default TRUE) defers the re-render until the Specimens tab is
+    # active, so hidden tabs don't incur unnecessary work.
     output$specimen_table <- renderDT({
       req(rv$filtered_data)
       data <- rv$filtered_data
@@ -197,23 +199,24 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
 
       store <- state$get_store()
 
-      # isolate() prevents reactive dependency on annotation keys —
-      # the replaceData observer handles annotation-driven updates.
+      # Read annotations reactively so the table re-renders when they
+      # change (e.g. after editing in BAGS grade tabs).
       prepared <- prepare_module_data(
         data = data,
-        current_selections = isolate(store$selected_specimens),
-        current_flags = isolate(store$specimen_flags),
-        current_notes = isolate(store$specimen_curator_notes),
+        current_selections = store$selected_specimens,
+        current_flags = store$specimen_flags,
+        current_notes = store$specimen_curator_notes,
         logger = logger
       )
 
       format_specimen_table(
         data = prepared,
         ns = NULL,
-        buttons = c('copy', 'csv', 'excel'),
+        buttons = list(),
         page_length = 50,
         selection = 'none',
         logger = logger,
+        dom = "frtip",
         read_only = TRUE
       )
     })
@@ -289,7 +292,8 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
 
         write.table(data, file, sep = "\t", row.names = FALSE, quote = FALSE)
         logger$info("Downloaded filtered specimens", list(count = nrow(data)))
-      }
+      },
+      contentType = "text/tab-separated-values"
     )
 
     # Download selected specimens with clean annotations
@@ -317,7 +321,8 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
 
         write.table(selected_data, file, sep = "\t", row.names = FALSE, quote = FALSE)
         logger$info("Downloaded selected specimens", list(count = nrow(selected_data)))
-      }
+      },
+      contentType = "text/tab-separated-values"
     )
 
     # Download annotated (flagged or noted) specimens
@@ -349,7 +354,8 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
 
         write.table(annotated_data, file, sep = "\t", row.names = FALSE, quote = FALSE)
         logger$info("Downloaded annotated specimens", list(count = nrow(annotated_data)))
-      }
+      },
+      contentType = "text/tab-separated-values"
     )
 
     # Calculate metrics helper

@@ -181,7 +181,7 @@ filter_sessions_by_user <- function(user_email = NULL, user_orcid = NULL,
   has_orcid <- !is.null(user_orcid) && nchar(trimws(user_orcid)) > 0
   has_name  <- !is.null(user_name) && nchar(trimws(user_name)) > 0
 
-  if (!has_email && !has_orcid && !has_name) return(all_sessions)
+  if (!has_email && !has_orcid && !has_name) return(all_sessions[0, , drop = FALSE])
 
   # Match on any identifier (OR logic)
   matches <- rep(FALSE, nrow(all_sessions))

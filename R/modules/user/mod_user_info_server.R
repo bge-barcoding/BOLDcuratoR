@@ -9,11 +9,10 @@ mod_user_info_server <- function(id, state, logger) {
   moduleServer(id, function(input, output, session) {
     ns <- NS(id)
 
-    # Hide the shared key button if no fallback key is configured
+    # Show the shared key button only if a fallback key is configured.
+    # Button starts hidden via CSS (display: none) in the UI to avoid flash.
     observe({
-      if (is.null(get_fallback_api_key())) {
-        shinyjs::hide("use_shared_key")
-      } else {
+      if (!is.null(get_fallback_api_key())) {
         shinyjs::show("use_shared_key")
       }
     }) |> bindEvent(TRUE, once = TRUE)
@@ -41,13 +40,6 @@ mod_user_info_server <- function(id, state, logger) {
       if (!is.null(input$email) && nchar(input$email) > 0) {
         if (!grepl("^[^@]+@[^@]+\\.[^@]+$", input$email)) {
           messages <- c(messages, "Invalid email format")
-        }
-      }
-
-      # Validate ORCID if provided
-      if (!is.null(input$orcid) && nchar(input$orcid) > 0) {
-        if (!grepl("^\\d{4}-\\d{4}-\\d{4}-\\d{4}$|\\d{4}-\\d{4}-\\d{4}-\\d{3}X$", input$orcid)) {
-          messages <- c(messages, "Invalid ORCID format (should be 0000-0000-0000-0000 or 0000-0000-0000-000X)")
         }
       }
 
@@ -92,7 +84,6 @@ mod_user_info_server <- function(id, state, logger) {
         state$update_state("user_info", list(
           email = input$email,
           name = input$name,
-          orcid = input$orcid,
           bold_api_key = input$bold_api_key
         ), validate_user_info)
 
@@ -141,9 +132,6 @@ mod_user_info_server <- function(id, state, logger) {
         }
         if (!is.null(user_info$name)) {
           updateTextInput(session, "name", value = user_info$name)
-        }
-        if (!is.null(user_info$orcid)) {
-          updateTextInput(session, "orcid", value = user_info$orcid)
         }
         if (!is.null(user_info$bold_api_key)) {
           updateTextInput(session, "bold_api_key", value = user_info$bold_api_key)

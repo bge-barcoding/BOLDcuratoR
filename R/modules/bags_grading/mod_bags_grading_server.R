@@ -196,7 +196,7 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
           "A" = "green",
           "B" = "blue",
           "C" = "yellow",
-          "D" = "red",
+          "D" = "black",
           "E" = "red"
         )
       )
@@ -252,28 +252,6 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
         state$update_state("specimen_curator_notes", current_notes)
       }
     })
-
-    # Download handler for BAGS grade data
-    output$download_data <- downloadHandler(
-      filename = function() {
-        paste0("bags_grade_", grade, "_", format(Sys.time(), "%Y%m%d_%H%M"), ".tsv")
-      },
-      content = function(file) {
-        data <- rv$filtered_data
-        if (is.null(data) || nrow(data) == 0) return(NULL)
-
-        store <- state$get_store()
-        data <- merge_annotations_for_export(
-          data,
-          selections = store$selected_specimens,
-          flags = store$specimen_flags,
-          notes = store$specimen_curator_notes
-        )
-
-        write.table(data, file, sep = "\t", row.names = FALSE, quote = FALSE)
-        logger$info(sprintf("Downloaded grade %s data", grade), list(count = nrow(data)))
-      }
-    )
 
     # Safe session cleanup with logging
     session$onSessionEnded(function() {

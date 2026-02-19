@@ -20,7 +20,7 @@ mod_bags_grading_ui <- function(id, grade) {
                                "A" = "success",
                                "B" = "info",
                                "C" = "warning",
-                               "D" = "danger",
+                               "D" = NULL,
                                "E" = "danger"
                ),
                width = NULL,
@@ -53,10 +53,6 @@ mod_bags_grading_ui <- function(id, grade) {
         # Action buttons
         div(
           style = "margin-bottom: 10px;",
-          downloadButton(ns("download_data"),
-                         "Download Data",
-                         class = "btn-success"
-          ),
           actionButton(ns("show_help"),
                        "Help",
                        class = "btn-info",
