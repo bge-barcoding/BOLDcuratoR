@@ -210,10 +210,11 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
       format_specimen_table(
         data = prepared,
         ns = NULL,
-        buttons = c('copy', 'csv', 'excel'),
+        buttons = list(),
         page_length = 50,
         selection = 'none',
         logger = logger,
+        dom = "frtip",
         read_only = TRUE
       )
     })
