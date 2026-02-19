@@ -17,6 +17,8 @@ test_that("BAGS grading module UI generates correctly", {
   ui <- mod_bags_grading_ui("test", "A")
 
   html <- as.character(ui)
-  expect_true(grepl("test-grade_summary_box", html) ||
-                grepl("grade_content", html))
+  expect_true(grepl("test-status_container", html))
+  expect_true(grepl("test-specimen_tables", html))
+  expect_true(grepl("grade-description", html))
+  expect_true(grepl("BAGS Grade A Overview", html))
 })
