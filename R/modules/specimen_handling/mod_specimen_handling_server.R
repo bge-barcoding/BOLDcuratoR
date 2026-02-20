@@ -279,7 +279,8 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
       content = function(file) {
         data <- rv$filtered_data
         if (is.null(data) || nrow(data) == 0) {
-          return(NULL)
+          writeLines("No filtered specimens to download.", file)
+          return()
         }
 
         store <- state$get_store()
@@ -303,14 +304,21 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
       },
       content = function(file) {
         data <- rv$filtered_data
-        if (is.null(data) || nrow(data) == 0) return(NULL)
-
         store <- state$get_store()
         selected_ids <- names(store$selected_specimens)
-        if (length(selected_ids) == 0) return(NULL)
+
+        if (is.null(data) || nrow(data) == 0 ||
+            length(selected_ids) == 0) {
+          # Write an empty TSV so Shiny never serves an HTML error page
+          writeLines("No selected specimens to download.", file)
+          return()
+        }
 
         selected_data <- data[data$processid %in% selected_ids, ]
-        if (nrow(selected_data) == 0) return(NULL)
+        if (nrow(selected_data) == 0) {
+          writeLines("No selected specimens to download.", file)
+          return()
+        }
 
         selected_data <- merge_annotations_for_export(
           selected_data,
@@ -332,18 +340,24 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
       },
       content = function(file) {
         data <- rv$filtered_data
-        if (is.null(data) || nrow(data) == 0) return(NULL)
-
         store <- state$get_store()
         flags <- store$specimen_flags
         notes <- store$specimen_curator_notes
 
         # Get processids with any annotation (flag or note)
         annotated_ids <- unique(c(names(flags), names(notes)))
-        if (length(annotated_ids) == 0) return(NULL)
+
+        if (is.null(data) || nrow(data) == 0 ||
+            length(annotated_ids) == 0) {
+          writeLines("No annotated specimens to download.", file)
+          return()
+        }
 
         annotated_data <- data[data$processid %in% annotated_ids, ]
-        if (nrow(annotated_data) == 0) return(NULL)
+        if (nrow(annotated_data) == 0) {
+          writeLines("No annotated specimens to download.", file)
+          return()
+        }
 
         annotated_data <- merge_annotations_for_export(
           annotated_data,
