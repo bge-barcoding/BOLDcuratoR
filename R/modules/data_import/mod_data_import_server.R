@@ -526,20 +526,48 @@ mod_data_import_server <- function(id, state, logger = NULL) {
       showNotification("Input fields cleared", type = "message")
     })
 
-    # Clear results handler
+    # Clear results handler - show confirmation dialog first
     observeEvent(input$clear_results, {
-      logger$info("Clearing search results")
+      showModal(modalDialog(
+        title = "Clear All Results",
+        tags$p("This will clear all data and analyses including:"),
+        tags$ul(
+          tags$li("All specimen data"),
+          tags$li("BIN analysis results"),
+          tags$li("BAGS grades"),
+          tags$li("Species analysis and gap analysis"),
+          tags$li("All specimen selections, flags, and curator notes")
+        ),
+        tags$p(tags$strong("This action cannot be undone.")),
+        footer = tagList(
+          modalButton("Cancel"),
+          actionButton(ns("confirm_clear_results"), "Clear All Results",
+                       class = "btn-danger", icon = icon("trash"))
+        )
+      ))
+    })
+
+    # Confirmed clear results - clear ALL state
+    observeEvent(input$confirm_clear_results, {
+      removeModal()
+      logger$info("Clearing all results and analyses")
+
       state$update_state("specimen_data", NULL)
       state$update_state("bin_analysis", NULL)
       state$update_state("bags_grades", NULL)
+      state$update_state("search_taxa", NULL)
       state$update_state("selected_specimens", list())
+      state$update_state("specimen_flags", list())
+      state$update_state("specimen_curator_notes", list())
+      state$update_state("specimen_metrics", NULL)
+      state$update_state("specimen_history", list())
       state$update_state("processing", list(
         active = FALSE,
         progress = 0,
         message = NULL
       ))
 
-      showNotification("Results cleared", type = "message")
+      showNotification("All results and analyses cleared", type = "message")
     })
 
     # Value box outputs
