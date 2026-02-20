@@ -48,15 +48,27 @@ build_species_checklist <- function(specimen_data, bags_grades = NULL) {
 }
 
 #' Perform gap analysis comparing input taxa list against specimen data
-#' @param input_taxa Character vector of taxa from user input
+#' @param input_taxa Either a character vector (legacy flat list) or a list
+#'   of character vectors where each element is a group of synonyms:
+#'   c("valid name", "synonym1", "synonym2"). The first name in each group
+#'   is treated as the valid name.
 #' @param specimen_data Data frame of specimen data
 #' @return Data frame with gap analysis results
 #' @keywords internal
 perform_gap_analysis <- function(input_taxa, specimen_data) {
   if (is.null(input_taxa) || length(input_taxa) == 0) return(NULL)
+
+  # Normalise input: convert flat character vector to list-of-vectors
+  if (is.character(input_taxa)) {
+    input_taxa <- as.list(input_taxa)
+  }
+
+  # Build display label for each group (comma-separated)
+  group_labels <- vapply(input_taxa, function(g) paste(g, collapse = ", "), character(1))
+
   if (is.null(specimen_data) || nrow(specimen_data) == 0) {
     return(data.frame(
-      input_taxon = input_taxa,
+      input_taxon = group_labels,
       status = "Missing",
       matched_species = "",
       specimen_count = 0L,
@@ -66,7 +78,7 @@ perform_gap_analysis <- function(input_taxa, specimen_data) {
   }
 
   results <- data.frame(
-    input_taxon = input_taxa,
+    input_taxon = group_labels,
     status = "Missing",
     matched_species = "",
     specimen_count = 0L,
@@ -74,16 +86,27 @@ perform_gap_analysis <- function(input_taxa, specimen_data) {
     stringsAsFactors = FALSE
   )
 
-  for (i in seq_along(input_taxa)) {
-    taxon <- trimws(input_taxa[i])
-    if (nchar(taxon) == 0) next
+  species_lower <- tolower(specimen_data$species)
 
-    # Case-insensitive species match
-    exact <- specimen_data[tolower(specimen_data$species) == tolower(taxon) & !is.na(specimen_data$species), ]
-    if (nrow(exact) > 0) {
-      results$status[i] <- "Found"
-      results$matched_species[i] <- exact$species[1]
-      results$specimen_count[i] <- nrow(exact)
+  for (i in seq_along(input_taxa)) {
+    group <- input_taxa[[i]]
+    if (length(group) == 0) next
+
+    # Try each name in the group (valid name first, then synonyms)
+    for (name in group) {
+      name <- trimws(name)
+      if (nchar(name) == 0) next
+
+      match_idx <- which(!is.na(species_lower) & species_lower == tolower(name))
+      if (length(match_idx) > 0) {
+        results$status[i] <- "Found"
+        results$matched_species[i] <- specimen_data$species[match_idx[1]]
+        results$specimen_count[i] <- length(match_idx)
+        if (name != group[1]) {
+          results$notes[i] <- paste("Matched via synonym:", name)
+        }
+        break
+      }
     }
   }
 

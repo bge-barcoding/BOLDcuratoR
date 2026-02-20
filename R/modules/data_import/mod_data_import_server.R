@@ -307,8 +307,14 @@ mod_data_import_server <- function(id, state, logger = NULL) {
             processed_data <- process_specimen_data(combined_specimens)
             state$update_state("specimen_data", processed_data, validate_specimen_data)
 
-            # Persist the original taxa input list for gap analysis
-            state$update_state("search_taxa", params$taxonomy)
+            # Persist the original taxa input groups for gap analysis.
+            # Each group is a character vector: c("valid name", "synonym1", ...).
+            # Falls back to wrapping each name in a list if groups aren't available.
+            if (!is.null(params$taxonomy_groups)) {
+              state$update_state("search_taxa", params$taxonomy_groups)
+            } else {
+              state$update_state("search_taxa", as.list(params$taxonomy))
+            }
 
             # Clear previous analyses
             state$update_state("bin_analysis", NULL)
