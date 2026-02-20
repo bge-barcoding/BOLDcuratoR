@@ -175,6 +175,17 @@ ui <- dashboardPage(
         .content-wrapper .row {
           margin-bottom: 0px !important;
         }
+
+        /* Specimens tab: prevent page-level vertical scroll */
+        .tab-pane[data-value='specimens'] .specimen-table-container {
+          overflow-x: auto !important;
+          overflow-y: auto !important;
+          max-height: 60vh !important;
+        }
+        .tab-pane[data-value='specimens'] .selection-history {
+          max-height: 20vh !important;
+          overflow-y: auto !important;
+        }
         ",
         get_table_css()
       ))),

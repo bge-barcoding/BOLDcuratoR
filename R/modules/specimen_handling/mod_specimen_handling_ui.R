@@ -74,16 +74,11 @@ mod_specimen_handling_ui <- function(id) {
           )
         ),
 
-        # Filter Actions
+        # Filter Status
         fluidRow(
           column(12,
                  div(
-                   style = "margin-top: 15px;",
-                   actionButton(ns("clear_filters"),
-                                "Clear Filters",
-                                class = "btn-warning",
-                                icon = icon("eraser")
-                   ),
+                   style = "margin-top: 5px;",
                    tags$span(
                      class = "filter-status",
                      textOutput(ns("filter_status"), inline = TRUE)
