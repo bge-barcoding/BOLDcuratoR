@@ -146,6 +146,35 @@ ui <- dashboardPage(
         .content-wrapper .box-body {
           padding: 5px !important;
         }
+
+        /* Compact data input form */
+        .content-wrapper .form-group {
+          margin-bottom: 3px !important;
+        }
+        .content-wrapper .shiny-input-container label {
+          margin-bottom: 1px !important;
+        }
+
+        /* Compact value boxes */
+        .content-wrapper .small-box .inner {
+          padding: 5px 10px !important;
+        }
+        .content-wrapper .small-box .icon-large,
+        .content-wrapper .small-box .icon {
+          font-size: 50px !important;
+          top: 5px !important;
+        }
+        .content-wrapper .small-box h3 {
+          font-size: 28px !important;
+        }
+        .content-wrapper .small-box p {
+          font-size: 13px !important;
+        }
+
+        /* Reduce fluidRow margins */
+        .content-wrapper .row {
+          margin-bottom: 0px !important;
+        }
         ",
         get_table_css()
       ))),
