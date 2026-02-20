@@ -95,31 +95,32 @@ mod_species_analysis_server <- function(id, state, logger) {
     output$species_checklist_table <- renderDT({
       req(rv$checklist)
 
-      # Build columnDefs for truncation of bin_uris and countries
+      # Build columnDefs: truncate bin_uris & countries to keep table narrow
       checklist_cols <- names(rv$checklist)
       truncate_targets <- which(checklist_cols %in% c("bin_uris", "countries")) - 1
-      col_defs <- if (length(truncate_targets) > 0) {
-        list(list(
+      col_defs <- list()
+      if (length(truncate_targets) > 0) {
+        col_defs <- c(col_defs, list(list(
           targets = truncate_targets,
+          width = "120px",
           render = JS("
             function(data, type, row) {
-              if (type === 'display' && data && data.length > 50) {
+              if (type === 'display' && data && data.length > 30) {
                 return '<span title=\"' + data.replace(/\"/g, '&quot;') + '\">' +
-                       data.substr(0, 50) + '...</span>';
+                       data.substr(0, 30) + '...</span>';
               }
               return data;
             }
           ")
-        ))
-      } else {
-        list()
+        )))
       }
 
       DT::datatable(
         rv$checklist,
         options = list(
           pageLength = 25,
-          scrollX = TRUE,
+          scrollX = FALSE,
+          autoWidth = TRUE,
           dom = 'Bfrtip',
           buttons = c('copy', 'csv', 'excel'),
           order = list(list(1, 'desc')),

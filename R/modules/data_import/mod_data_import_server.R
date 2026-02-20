@@ -263,7 +263,7 @@ mod_data_import_server <- function(id, state, logger = NULL) {
                 ))
 
                 bin_specimens <- tryCatch({
-                  BOLDconnectR::bold.fetch(
+                  bold_fetch_with_retry(
                     get_by = "bin_uris",
                     identifiers = paste(batch, collapse = ",")
                   )
@@ -377,12 +377,12 @@ mod_data_import_server <- function(id, state, logger = NULL) {
 
         # Make request based on type
         if (type == "datasets") {
-          specimens <- BOLDconnectR::bold.fetch(
+          specimens <- bold_fetch_with_retry(
             get_by = "dataset_codes",
             identifiers = codes
           )
         } else {
-          specimens <- BOLDconnectR::bold.fetch(
+          specimens <- bold_fetch_with_retry(
             get_by = "project_codes",
             identifiers = codes
           )
@@ -462,7 +462,7 @@ mod_data_import_server <- function(id, state, logger = NULL) {
         search_results <- search_results[!duplicated(search_results$processid), ]
 
         if (nrow(search_results) > 0) {
-          specimens <- BOLDconnectR::bold.fetch(
+          specimens <- bold_fetch_with_retry(
             get_by = "processid",
             identifiers = search_results$processid
           )
@@ -473,6 +473,31 @@ mod_data_import_server <- function(id, state, logger = NULL) {
         logger$error("Taxonomy search failed", e$message)
         NULL
       })
+    }
+
+    # Helper: retry a BOLD API call with exponential backoff.
+    # Retries on transient errors (timeouts, 5xx) up to max_retries times.
+    bold_fetch_with_retry <- function(..., max_retries = 3, base_delay = 2) {
+      for (attempt in seq_len(max_retries + 1)) {
+        result <- tryCatch(
+          BOLDconnectR::bold.fetch(...),
+          error = function(e) e
+        )
+        if (!inherits(result, "error")) return(result)
+
+        is_transient <- grepl(
+          "timeout|timed out|Gateway|503|504|Connection reset",
+          result$message, ignore.case = TRUE
+        )
+        if (!is_transient || attempt > max_retries) stop(result)
+
+        delay <- base_delay * (2 ^ (attempt - 1))
+        logger$warn(sprintf(
+          "BOLD API error (attempt %d/%d), retrying in %ds: %s",
+          attempt, max_retries + 1, delay, result$message
+        ))
+        Sys.sleep(delay)
+      }
     }
 
     # Helper function to merge specimen results

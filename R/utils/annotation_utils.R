@@ -218,5 +218,9 @@ merge_annotations_for_export <- function(data, selections = NULL, flags = NULL, 
     if (is.list(entry)) extract_annotation(entry, "timestamp") else ""
   }, character(1), USE.NAMES = FALSE)
 
-  data
+  # Reorder: annotation columns first, then the rest
+  annotation_cols <- c("selected", "flag", "curator_notes",
+                       "flag_user", "flag_timestamp")
+  other_cols <- setdiff(names(data), annotation_cols)
+  data[, c(annotation_cols, other_cols)]
 }

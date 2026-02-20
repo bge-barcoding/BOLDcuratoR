@@ -108,11 +108,21 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
 
       req(rv$filtered_data)
 
-      # Read annotations from the single source of truth (StateManager)
-      store <- isolate(state$get_store())
-      current_sel   <- store$selected_specimens
-      current_flags <- store$specimen_flags
-      current_notes <- store$specimen_curator_notes
+      # Read annotations from the single source of truth (StateManager).
+      # All accesses must be inside a single isolate() block — otherwise
+      # store$specimen_flags etc. create reactive dependencies that cause
+      # the tables to re-render on every flag/note change.
+      annotations <- isolate({
+        store <- state$get_store()
+        list(
+          sel   = store$selected_specimens,
+          flags = store$specimen_flags,
+          notes = store$specimen_curator_notes
+        )
+      })
+      current_sel   <- annotations$sel
+      current_flags <- annotations$flags
+      current_notes <- annotations$notes
 
       withProgress(message = 'Creating specimen tables', value = 0, {
         tryCatch({
