@@ -119,8 +119,9 @@ mod_species_analysis_server <- function(id, state, logger) {
         rv$checklist,
         options = list(
           pageLength = 25,
-          scrollX = FALSE,
-          autoWidth = TRUE,
+          scrollX = TRUE,
+          scrollY = "500px",
+          autoWidth = FALSE,
           dom = 'Bfrtip',
           buttons = c('copy', 'csv', 'excel'),
           order = list(list(1, 'desc')),
