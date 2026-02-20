@@ -462,10 +462,49 @@ mod_data_import_server <- function(id, state, logger = NULL) {
         search_results <- search_results[!duplicated(search_results$processid), ]
 
         if (nrow(search_results) > 0) {
-          specimens <- BOLDconnectR::bold.fetch(
-            get_by = "processid",
-            identifiers = search_results$processid
-          )
+          all_ids <- search_results$processid
+
+          # Batch processid fetches to avoid HTTP 504 Gateway Timeouts
+          # on large result sets (the BOLD API struggles with 500+ IDs
+          # in a single request).
+          batch_size <- 100
+          if (length(all_ids) <= batch_size) {
+            specimens <- BOLDconnectR::bold.fetch(
+              get_by = "processid",
+              identifiers = all_ids
+            )
+          } else {
+            id_batches <- split(all_ids, ceiling(seq_along(all_ids) / batch_size))
+            logger$info(sprintf(
+              "Fetching %d processids in %d batches",
+              length(all_ids), length(id_batches)
+            ))
+
+            batch_results <- list()
+            for (i in seq_along(id_batches)) {
+              batch_specimens <- tryCatch({
+                BOLDconnectR::bold.fetch(
+                  get_by = "processid",
+                  identifiers = id_batches[[i]]
+                )
+              }, error = function(e) {
+                logger$warn(sprintf(
+                  "Processid batch %d/%d failed: %s",
+                  i, length(id_batches), e$message
+                ))
+                NULL
+              })
+
+              if (!is.null(batch_specimens) && nrow(batch_specimens) > 0) {
+                batch_results[[length(batch_results) + 1]] <- batch_specimens
+              }
+            }
+
+            if (length(batch_results) == 0) return(NULL)
+            specimens <- do.call(rbind, batch_results)
+            specimens <- specimens[!duplicated(specimens$processid), ]
+          }
+
           return(specimens)
         }
         NULL
