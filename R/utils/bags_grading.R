@@ -6,12 +6,21 @@
 #' @export
 calculate_bags_grade <- function(specimens) {
   tryCatch({
-    # Filter for specimens with species-level identification
-    specimens <- specimens[
-      specimens$identification_rank %in% c("species", "subspecies") &
-        !is.na(specimens$species) &
-        specimens$species != "",
-    ]
+    # Filter for specimens with species-level identification only.
+    # Require a proper binomial name (genus + epithet, at least two words)
+    # to exclude genus-only or higher-rank identifications.
+    # Also check identification_rank when available.
+    has_species_name <- !is.na(specimens$species) &
+      specimens$species != "" &
+      grepl("^\\S+\\s+\\S+", specimens$species)
+
+    has_species_rank <- if ("identification_rank" %in% names(specimens)) {
+      specimens$identification_rank %in% c("species", "subspecies")
+    } else {
+      rep(TRUE, nrow(specimens))
+    }
+
+    specimens <- specimens[has_species_name & has_species_rank, ]
 
     if (nrow(specimens) == 0) {
       return(create_empty_grades_df())
@@ -77,15 +86,19 @@ check_shared_bins <- function(specimens, taxon, taxon_bins) {
 
   # For each BIN assigned to the taxon
   shared <- sapply(taxon_bins, function(bin) {
-    # Get all specimens in this BIN across all species
-    bin_specimens <- specimens[
-      !is.na(specimens$bin_uri) &
-        specimens$bin_uri != "" &
-        specimens$bin_uri == bin &
-        !is.na(specimens$species) &
-        specimens$species != "" &
-        specimens$identification_rank %in% c("species", "subspecies"),
-    ]
+    # Get all specimens in this BIN across all species (species-level ID only)
+    has_bin <- !is.na(specimens$bin_uri) &
+      specimens$bin_uri != "" &
+      specimens$bin_uri == bin
+    has_sp <- !is.na(specimens$species) &
+      specimens$species != "" &
+      grepl("^\\S+\\s+\\S+", specimens$species)
+    has_rank <- if ("identification_rank" %in% names(specimens)) {
+      specimens$identification_rank %in% c("species", "subspecies")
+    } else {
+      rep(TRUE, nrow(specimens))
+    }
+    bin_specimens <- specimens[has_bin & has_sp & has_rank, ]
 
     if (nrow(bin_specimens) == 0) return(FALSE)
 
