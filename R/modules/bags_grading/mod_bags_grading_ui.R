@@ -50,16 +50,6 @@ mod_bags_grading_ui <- function(id, grade) {
         width = 12,
         solidHeader = TRUE,
 
-        # Action buttons
-        div(
-          style = "margin-bottom: 10px;",
-          actionButton(ns("show_help"),
-                       "Help",
-                       class = "btn-info",
-                       icon = icon("question-circle")
-          )
-        ),
-
         # Specimen Tables
         div(
           class = "specimen-tables",
@@ -69,77 +59,6 @@ mod_bags_grading_ui <- function(id, grade) {
       )
     ),
 
-    # Help Modal
-    tags$div(
-      id = ns("help_modal"),
-      class = "modal fade",
-      tags$div(
-        class = "modal-dialog",
-        tags$div(
-          class = "modal-content",
-          tags$div(
-            class = "modal-header",
-            tags$h4("BAGS Grade Help", class = "modal-title"),
-            tags$button(type = "button", class = "close", `data-dismiss` = "modal", "×")
-          ),
-          tags$div(
-            class = "modal-body",
-            tagList(
-              switch(grade,
-                     "A" = tagList(
-                       tags$p("Grade A species have:"),
-                       tags$ul(
-                         tags$li("More than 10 specimens with valid BINs"),
-                         tags$li("A single BIN"),
-                         tags$li("No taxonomic discordance")
-                       )
-                     ),
-                     "B" = tagList(
-                       tags$p("Grade B species have:"),
-                       tags$ul(
-                         tags$li("3-10 specimens with valid BINs"),
-                         tags$li("A single BIN"),
-                         tags$li("No taxonomic discordance")
-                       )
-                     ),
-                     "C" = tagList(
-                       tags$p("Grade C species have:"),
-                       tags$ul(
-                         tags$li("Multiple BINs"),
-                         tags$li("No taxonomic discordance within BINs")
-                       )
-                     ),
-                     "D" = tagList(
-                       tags$p("Grade D species have:"),
-                       tags$ul(
-                         tags$li("Fewer than 3 specimens with valid BINs"),
-                         tags$li("A single BIN")
-                       )
-                     ),
-                     "E" = tagList(
-                       tags$p("Grade E species have:"),
-                       tags$ul(
-                         tags$li("Taxonomic discordance within BINs"),
-                         tags$li("Color coding indicates different species within shared BINs")
-                       )
-                     )
-              ),
-              hr(),
-              tags$p("Table Features:"),
-              tags$ul(
-                tags$li("Use checkboxes to select representative specimens"),
-                tags$li("Use flag dropdown to mark potential issues"),
-                tags$li("Sort columns by clicking headers")
-              )
-            )
-          ),
-          tags$div(
-            class = "modal-footer",
-            modalButton("Close")
-          )
-        )
-      )
-    )
   )
 }
 
