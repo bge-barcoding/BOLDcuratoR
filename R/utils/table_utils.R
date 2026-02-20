@@ -363,8 +363,12 @@ get_table_callback <- function(ns, flag_options = NULL) {
   flag_js <- sprintf("const flagOptions = %s;\n",
                      jsonlite::toJSON(flags, auto_unbox = TRUE))
 
+  # DT's callback parameter expects the BODY of a function that receives
+
+  # `table` as its argument — DT wraps it in function(table){ <body> }.
+  # Do NOT wrap in function(table){...} here or DT double-wraps it,
+  # producing invalid JS that silently prevents the table from rendering.
   JS(sprintf("
-    function(table) {
       %s
 
       // Build column-name-to-index map.  DT with rownames=FALSE returns
@@ -488,7 +492,6 @@ get_table_callback <- function(ns, flag_options = NULL) {
           }
         });
       });
-    }
   ", flag_js, ns("specimen_flag"), ns("specimen_notes")))
 }
 
