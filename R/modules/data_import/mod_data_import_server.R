@@ -627,12 +627,6 @@ mod_data_import_server <- function(id, state, logger = NULL) {
       )
     })
 
-    # Results table output (matches DTOutput(ns("specimen_table")) in UI)
-    output$specimen_table <- renderDT({
-      req(state$get_store()$specimen_data)
-      format_specimen_table(state$get_store()$specimen_data, read_only = TRUE)
-    })
-
     # Download handler
     output$download_csv <- downloadHandler(
       filename = function() {

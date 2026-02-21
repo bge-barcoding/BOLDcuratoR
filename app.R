@@ -82,29 +82,39 @@ ui <- dashboardPage(
     tags$head(
       tags$style(HTML(paste(
         "
-        /* Global Styles */
+        /* Global Styles — prevent page-level scroll */
         .content-wrapper {
           overflow: hidden !important;
+          overflow-y: hidden !important;
           height: calc(100vh - 50px) !important;
+          min-height: 0 !important;
           padding: 0 !important;
         }
+        .content-wrapper > section,
+        .content-wrapper > section.content,
         .content-wrapper > .content {
           height: 100% !important;
+          min-height: 0 !important;
           overflow: hidden !important;
+          overflow-y: hidden !important;
         }
+        .content-wrapper > section > .tab-content,
         .content-wrapper > .content > .tab-content {
           height: calc(100vh - 60px) !important;
+          min-height: 0 !important;
           overflow: hidden !important;
+          overflow-y: hidden !important;
         }
         /* Default: allow tab-pane scroll for tabs that need it (data input, BAGS, about) */
         .tab-content > .tab-pane {
           max-height: calc(100vh - 60px) !important;
           overflow-y: auto !important;
         }
-        /* Analysis tabs: no page scroll, tables scroll internally */
-        .tab-pane[data-value='species_analysis'],
-        .tab-pane[data-value='bins'],
-        .tab-pane[data-value='specimens'] {
+        /* Analysis tabs: no page scroll, tables scroll internally via DT scrollY */
+        .tab-content > .tab-pane[data-value='species_analysis'],
+        .tab-content > .tab-pane[data-value='bins'],
+        .tab-content > .tab-pane[data-value='specimens'] {
+          overflow: hidden !important;
           overflow-y: hidden !important;
         }
         .small-box {

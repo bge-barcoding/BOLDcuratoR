@@ -145,12 +145,6 @@ mod_data_import_ui <- function(id) {
           valueBoxOutput(ns("unique_taxa_box"), width = 3),
           valueBoxOutput(ns("unique_bins_box"), width = 3),
           valueBoxOutput(ns("countries_box"), width = 3)
-        ),
-
-        # Results table
-        div(
-          class = "table-wrapper",
-          DTOutput(ns("specimen_table"))
         )
       )
     ),
