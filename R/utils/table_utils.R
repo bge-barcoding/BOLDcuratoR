@@ -823,6 +823,8 @@ format_bin_content_table <- function(content_data) {
     list()
   }
 
+  bin_filename <- paste0("bin_analysis_", format(Sys.time(), "%Y%m%d_%H%M"))
+
   datatable(
     display_data,
     options = list(
@@ -831,7 +833,11 @@ format_bin_content_table <- function(content_data) {
       scrollY = "500px",
       fixedHeader = TRUE,
       dom = 'Bfrtip',
-      buttons = c('copy', 'csv', 'excel'),
+      buttons = list(
+        'copy',
+        list(extend = 'csv', title = bin_filename, filename = bin_filename),
+        list(extend = 'excel', title = bin_filename, filename = bin_filename)
+      ),
       columnDefs = col_defs
     ),
     rownames = FALSE,

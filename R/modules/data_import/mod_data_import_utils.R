@@ -88,12 +88,24 @@ validate_data_import_input <- function(taxa_input, dataset_codes, project_codes,
 prepare_search_params <- function(input, selected_countries) {
   params <- list()
 
-  # Process taxa input
+  # Process taxa input.
+  # Each line may contain comma-separated names: "valid name, synonym1, synonym2".
+  # Split into individual search terms and also preserve the grouping for gap analysis.
   if (!is.null(input$taxa_input) && nchar(trimws(input$taxa_input)) > 0) {
-    taxa <- unlist(strsplit(input$taxa_input, "\n"))
-    taxa <- trimws(taxa[nchar(taxa) > 0])
-    if (length(taxa) > 0) {
-      params$taxonomy <- taxa
+    lines <- unlist(strsplit(input$taxa_input, "\n"))
+    lines <- trimws(lines[nchar(trimws(lines)) > 0])
+    if (length(lines) > 0) {
+      # Build groups (list of character vectors) and flat search list
+      taxonomy_groups <- lapply(lines, function(line) {
+        names <- trimws(unlist(strsplit(line, ",")))
+        names[nchar(names) > 0]
+      })
+      taxonomy_groups <- taxonomy_groups[lengths(taxonomy_groups) > 0]
+
+      # Flat vector of all individual names to search
+      all_names <- unique(unlist(taxonomy_groups))
+      params$taxonomy <- all_names
+      params$taxonomy_groups <- taxonomy_groups
     }
   }
 

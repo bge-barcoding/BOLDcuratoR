@@ -58,19 +58,19 @@ mod_data_import_ui <- function(id) {
                  column(4,
                         textAreaInput(ns("taxa_input"),
                                       "Enter taxa (one per line, comma-separated for synonyms):",
-                                      rows = 9,
+                                      rows = 5,
                                       placeholder = "Valid name 1, Synonym A, Synonym B\nValid name 2, Synonym C"
                         )
                  ),
                  column(4,
                         textAreaInput(ns("dataset_codes"),
                                       "Dataset codes (one per line):",
-                                      rows = 3,
+                                      rows = 2,
                                       placeholder = "DS-EXAMPLE1\nDS-EXAMPLE2"
                         ),
                         textAreaInput(ns("project_codes"),
                                       "Project codes (one per line):",
-                                      rows = 3,
+                                      rows = 2,
                                       placeholder = "PROJECT1\nPROJECT2"
                         )
                  ),
@@ -83,7 +83,7 @@ mod_data_import_ui <- function(id) {
 
                         textAreaInput(ns("countries"),
                                       "Countries (one per line):",
-                                      rows = 5,
+                                      rows = 2,
                                       placeholder = "Specific countries (one per line)"
                         )
                ),
@@ -101,7 +101,7 @@ mod_data_import_ui <- function(id) {
 
                # Action Buttons
                div(
-                 style = "margin-top: 15px;",
+                 style = "margin-top: 5px;",
                  actionButton(ns("submit"),
                               "Get Data",
                               class = "btn-primary",
@@ -127,7 +127,7 @@ mod_data_import_ui <- function(id) {
 
         # Results Controls
         div(
-          style = "margin-bottom: 15px;",
+          style = "margin-bottom: 5px;",
           downloadButton(ns("download_csv"),
                          "Download Results",
                          class = "btn-success"
