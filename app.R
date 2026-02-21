@@ -84,8 +84,28 @@ ui <- dashboardPage(
         "
         /* Global Styles */
         .content-wrapper {
-          overflow: auto !important;
-          padding: 1 !important;
+          overflow: hidden !important;
+          height: calc(100vh - 50px) !important;
+          padding: 0 !important;
+        }
+        .content-wrapper > .content {
+          height: 100% !important;
+          overflow: hidden !important;
+        }
+        .content-wrapper > .content > .tab-content {
+          height: calc(100vh - 60px) !important;
+          overflow: hidden !important;
+        }
+        /* Default: allow tab-pane scroll for tabs that need it (data input, BAGS, about) */
+        .tab-content > .tab-pane {
+          max-height: calc(100vh - 60px) !important;
+          overflow-y: auto !important;
+        }
+        /* Analysis tabs: no page scroll, tables scroll internally */
+        .tab-pane[data-value='species_analysis'],
+        .tab-pane[data-value='bins'],
+        .tab-pane[data-value='specimens'] {
+          overflow-y: hidden !important;
         }
         .small-box {
           margin-bottom: 5px !important;
@@ -176,17 +196,7 @@ ui <- dashboardPage(
           margin-bottom: 0px !important;
         }
 
-        /* Specimens tab: prevent page-level vertical scroll */
-        .tab-pane[data-value='specimens'] .specimen-table-container {
-          overflow-x: auto !important;
-          overflow-y: auto !important;
-          max-height: 60vh !important;
-        }
-        .tab-pane[data-value='specimens'] .selection-history {
-          max-height: 20vh !important;
-          overflow-y: auto !important;
-        }
-        ",
+",
         get_table_css()
       ))),
     ),
