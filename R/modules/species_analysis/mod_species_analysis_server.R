@@ -115,6 +115,8 @@ mod_species_analysis_server <- function(id, state, logger) {
         )))
       }
 
+      checklist_filename <- paste0("species_checklist_", format(Sys.time(), "%Y%m%d_%H%M"))
+
       DT::datatable(
         rv$checklist,
         options = list(
@@ -123,7 +125,11 @@ mod_species_analysis_server <- function(id, state, logger) {
           scrollY = "500px",
           autoWidth = FALSE,
           dom = 'Bfrtip',
-          buttons = c('copy', 'csv', 'excel'),
+          buttons = list(
+            'copy',
+            list(extend = 'csv', title = checklist_filename, filename = checklist_filename),
+            list(extend = 'excel', title = checklist_filename, filename = checklist_filename)
+          ),
           order = list(list(1, 'desc')),
           columnDefs = col_defs
         ),
@@ -162,12 +168,6 @@ mod_species_analysis_server <- function(id, state, logger) {
         )
       } else {
         tagList(
-          div(
-            style = "margin-bottom: 10px;",
-            downloadButton(ns("download_gap_analysis"),
-                           "Download Gap Analysis",
-                           class = "btn-success")
-          ),
           DTOutput(ns("gap_analysis_table"))
         )
       }
@@ -176,13 +176,19 @@ mod_species_analysis_server <- function(id, state, logger) {
     # Gap analysis table
     output$gap_analysis_table <- renderDT({
       req(rv$gap_analysis)
+      gap_filename <- paste0("gap_analysis_", format(Sys.time(), "%Y%m%d_%H%M"))
+
       DT::datatable(
         rv$gap_analysis,
         options = list(
           pageLength = 25,
           scrollX = TRUE,
           dom = 'Bfrtip',
-          buttons = c('copy', 'csv', 'excel')
+          buttons = list(
+            'copy',
+            list(extend = 'csv', title = gap_filename, filename = gap_filename),
+            list(extend = 'excel', title = gap_filename, filename = gap_filename)
+          )
         ),
         rownames = FALSE,
         extensions = c('Buttons')
@@ -200,42 +206,25 @@ mod_species_analysis_server <- function(id, state, logger) {
     # Summary statistics table
     output$summary_stats_table <- renderDT({
       req(rv$summary_stats)
+      stats_filename <- paste0("summary_statistics_", format(Sys.time(), "%Y%m%d_%H%M"))
+
       DT::datatable(
         rv$summary_stats,
         options = list(
           pageLength = 25,
           scrollX = TRUE,
           dom = 'Bfrtip',
-          buttons = c('copy', 'csv', 'excel'),
+          buttons = list(
+            'copy',
+            list(extend = 'csv', title = stats_filename, filename = stats_filename),
+            list(extend = 'excel', title = stats_filename, filename = stats_filename)
+          ),
           order = list(list(2, 'desc'))
         ),
         rownames = FALSE,
         extensions = c('Buttons')
       )
     })
-
-    # Download handlers
-    output$download_checklist <- downloadHandler(
-      filename = function() {
-        paste0("species_checklist_", format(Sys.time(), "%Y%m%d_%H%M"), ".tsv")
-      },
-      content = function(file) {
-        req(rv$checklist)
-        write.table(rv$checklist, file, sep = "\t", row.names = FALSE, quote = FALSE)
-        logger$info("Downloaded species checklist", list(count = nrow(rv$checklist)))
-      }
-    )
-
-    output$download_gap_analysis <- downloadHandler(
-      filename = function() {
-        paste0("gap_analysis_", format(Sys.time(), "%Y%m%d_%H%M"), ".tsv")
-      },
-      content = function(file) {
-        req(rv$gap_analysis)
-        write.table(rv$gap_analysis, file, sep = "\t", row.names = FALSE, quote = FALSE)
-        logger$info("Downloaded gap analysis", list(count = nrow(rv$gap_analysis)))
-      }
-    )
 
     # Return reactive endpoints
     list(

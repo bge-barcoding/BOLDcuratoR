@@ -34,12 +34,6 @@ mod_species_analysis_ui <- function(id) {
           tabPanel(
             "Species Checklist",
             div(
-              style = "margin-bottom: 10px;",
-              downloadButton(ns("download_checklist"),
-                             "Download Checklist",
-                             class = "btn-success")
-            ),
-            div(
               class = "table-responsive",
               DTOutput(ns("species_checklist_table"))
             )
