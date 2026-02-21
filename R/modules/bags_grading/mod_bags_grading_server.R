@@ -28,12 +28,16 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
       logger$info(sprintf("Starting main data observer for grade %s", grade))
       store <- state$get_store()
 
-      # Check required data
+      # Clear local state when specimen data is removed (e.g. Clear Results)
       if (is.null(store$specimen_data) || is.null(store$bags_grades)) {
         logger$warn("Missing required data", list(
           has_specimens = !is.null(store$specimen_data),
           has_grades = !is.null(store$bags_grades)
         ))
+        isolate({
+          rv$filtered_data <- NULL
+          rv$metrics <- NULL
+        })
         return()
       }
 

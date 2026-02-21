@@ -19,6 +19,15 @@ mod_species_analysis_server <- function(id, state, logger) {
     # Main analysis observer
     observe({
       store <- state$get_store()
+
+      # Clear local state when specimen data is removed (e.g. Clear Results)
+      if (is.null(store$specimen_data)) {
+        rv$checklist <- NULL
+        rv$gap_analysis <- NULL
+        rv$summary_stats <- NULL
+        return()
+      }
+
       req(store$specimen_data)
 
       tryCatch({
