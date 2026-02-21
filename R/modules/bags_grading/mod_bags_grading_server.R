@@ -212,6 +212,32 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
       )
     })
 
+    # Watch for selection changes — write directly to StateManager
+    observeEvent(input$specimen_select, {
+      req(input$specimen_select)
+      sel <- input$specimen_select
+
+      if (!is.null(sel$processid)) {
+        store <- state$get_store()
+        current_selections <- isolate(store$selected_specimens)
+        if (is.null(current_selections)) current_selections <- list()
+
+        if (isTRUE(sel$selected)) {
+          current_selections[[sel$processid]] <- list(
+            timestamp = Sys.time(),
+            species = sel$species,
+            quality_score = sel$quality_score,
+            user = store$user_info$email,
+            selected = TRUE
+          )
+        } else {
+          current_selections[[sel$processid]] <- NULL
+        }
+
+        state$update_state("selected_specimens", current_selections)
+      }
+    })
+
     # Watch for flag changes — write directly to StateManager
     observeEvent(input$specimen_flag, {
       req(input$specimen_flag)
