@@ -171,6 +171,7 @@ StateManager <- R6::R6Class(
         selected_specimens = list(),
         specimen_flags = list(),
         specimen_curator_notes = list(),
+        specimen_updated_ids = list(),
         specimen_metrics = NULL,
         specimen_history = list(),
 

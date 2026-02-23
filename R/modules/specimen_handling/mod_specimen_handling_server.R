@@ -36,6 +36,7 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
       current_selections <- store$selected_specimens
       current_flags      <- store$specimen_flags
       current_notes      <- store$specimen_curator_notes
+      current_uids       <- store$specimen_updated_ids
 
       # Reactive dependency: filtered data (NOT isolated)
       data <- rv$filtered_data
@@ -46,6 +47,7 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
         current_selections = current_selections,
         current_flags = current_flags,
         current_notes = current_notes,
+        current_updated_ids = current_uids,
         logger = logger
       )
 
@@ -216,6 +218,7 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
         current_selections = store$selected_specimens,
         current_flags = store$specimen_flags,
         current_notes = store$specimen_curator_notes,
+        current_updated_ids = store$specimen_updated_ids,
         logger = logger
       )
 
@@ -298,7 +301,8 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
           data,
           selections = store$selected_specimens,
           flags = store$specimen_flags,
-          notes = store$specimen_curator_notes
+          notes = store$specimen_curator_notes,
+          updated_ids = store$specimen_updated_ids
         )
 
         write.table(data, file, sep = "\t", row.names = FALSE, quote = FALSE)
@@ -334,7 +338,8 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
           selected_data,
           selections = store$selected_specimens,
           flags = store$specimen_flags,
-          notes = store$specimen_curator_notes
+          notes = store$specimen_curator_notes,
+          updated_ids = store$specimen_updated_ids
         )
 
         write.table(selected_data, file, sep = "\t", row.names = FALSE, quote = FALSE)
@@ -353,9 +358,10 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
         store <- state$get_store()
         flags <- store$specimen_flags
         notes <- store$specimen_curator_notes
+        uids <- store$specimen_updated_ids
 
-        # Get processids with any annotation (flag or note)
-        annotated_ids <- unique(c(names(flags), names(notes)))
+        # Get processids with any annotation (flag, note, or updated_id)
+        annotated_ids <- unique(c(names(flags), names(notes), names(uids)))
 
         if (is.null(data) || nrow(data) == 0 ||
             length(annotated_ids) == 0) {
@@ -373,7 +379,8 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
           annotated_data,
           selections = store$selected_specimens,
           flags = flags,
-          notes = notes
+          notes = notes,
+          updated_ids = store$specimen_updated_ids
         )
 
         write.table(annotated_data, file, sep = "\t", row.names = FALSE, quote = FALSE)

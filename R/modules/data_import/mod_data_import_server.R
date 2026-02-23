@@ -565,6 +565,7 @@ mod_data_import_server <- function(id, state, logger = NULL) {
       state$update_state("selected_specimens", list())
       state$update_state("specimen_flags", list())
       state$update_state("specimen_curator_notes", list())
+      state$update_state("specimen_updated_ids", list())
       state$update_state("specimen_metrics", NULL)
       state$update_state("specimen_history", list())
       state$update_state("processing", list(

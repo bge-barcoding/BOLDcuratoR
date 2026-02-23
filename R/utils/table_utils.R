@@ -51,6 +51,7 @@ format_specimen_table <- function(data, ns = NULL,
   # Ensure annotation columns exist with proper types (single pass)
   data$selected <- if (!is.null(data$selected)) as.logical(data$selected) else FALSE
   data$flag <- if (!is.null(data$flag)) as.character(data$flag) else ""
+  data$updated_id <- if (!is.null(data$updated_id)) as.character(data$updated_id) else ""
   data$curator_notes <- if (!is.null(data$curator_notes)) as.character(data$curator_notes) else ""
 
   # Order the columns properly
@@ -136,6 +137,14 @@ format_specimen_table <- function(data, ns = NULL,
             }
           ")
         ),
+        # Updated ID — plain text
+        list(
+          targets = which(names(data) == "updated_id") - 1,
+          width = "120px",
+          className = 'dt-body-left fixed-col',
+          orderable = FALSE,
+          searchable = TRUE
+        ),
         # Curator notes — plain text
         list(
           targets = which(names(data) == "curator_notes") - 1,
@@ -205,6 +214,24 @@ format_specimen_table <- function(data, ns = NULL,
         return data;
       }
     ", jsonlite::toJSON(get_flag_options(), auto_unbox = TRUE)))
+        ),
+        # Updated ID column
+        list(
+          targets = which(names(data) == "updated_id") - 1,
+          width = "120px",
+          className = 'dt-center fixed-col',
+          orderable = FALSE,
+          searchable = FALSE,
+          render = JS("
+            function(data, type, row) {
+              if (type === 'display') {
+                return '<input type=\"text\" class=\"specimen-updated-id form-control form-control-sm\"' +
+                       ' value=\"' + (data || '').toString().replace(/\"/g, '&quot;') + '\"' +
+                       ' placeholder=\"Updated ID...\">';
+              }
+              return data;
+            }
+          ")
         ),
         # Curator notes column
         list(
@@ -429,6 +456,8 @@ get_table_callback <- function(ns, flag_options = NULL) {
           Shiny.setInputValue('%s', payload, {priority: 'event'});
         } else if (type === 'flag') {
           Shiny.setInputValue('%s', payload, {priority: 'event'});
+        } else if (type === 'updated_id') {
+          Shiny.setInputValue('%s', payload, {priority: 'event'});
         } else if (type === 'curator_notes') {
           Shiny.setInputValue('%s', payload, {priority: 'event'});
         }
@@ -441,6 +470,9 @@ get_table_callback <- function(ns, flag_options = NULL) {
         }
         if (changes.flag !== undefined) {
           $row.find('select.specimen-flag').val(changes.flag);
+        }
+        if (changes.updated_id !== undefined) {
+          $row.find('input.specimen-updated-id').val(changes.updated_id);
         }
         if (changes.curator_notes !== undefined) {
           $row.find('input.specimen-notes').val(changes.curator_notes);
@@ -485,6 +517,18 @@ get_table_callback <- function(ns, flag_options = NULL) {
         broadcast(data.processid, 'flag', value);
       });
 
+      table.on('change', 'input.specimen-updated-id', function(e) {
+        e.stopPropagation();
+        var row = table.row($(this).closest('tr'));
+        var data = rowObj(row);
+        if (!data || !data.processid) return;
+
+        var value = this.value.trim();
+        setField(row, 'updated_id', value);
+        notifyShiny(data.processid, 'updated_id', value, data);
+        broadcast(data.processid, 'updated_id', value);
+      });
+
       table.on('change', 'input.specimen-notes', function(e) {
         e.stopPropagation();
         var row = table.row($(this).closest('tr'));
@@ -510,7 +554,7 @@ get_table_callback <- function(ns, flag_options = NULL) {
           }
         });
       });
-  ", flag_js, ns("specimen_select"), ns("specimen_flag"), ns("specimen_notes")))
+  ", flag_js, ns("specimen_select"), ns("specimen_flag"), ns("specimen_updated_id"), ns("specimen_notes")))
 }
 
 #' Get standard table CSS
@@ -643,6 +687,21 @@ get_table_css <- function() {
   }
 
   .specimen-flag:focus {
+    border-color: #80bdff !important;
+    outline: 0 !important;
+    box-shadow: 0 0 0 0.2rem rgba(0,123,255,.25) !important;
+  }
+
+  .specimen-updated-id {
+    width: 100% !important;
+    height: 20px !important;
+    font-size: 11px !important;
+    line-height: 1.2 !important;
+    padding: 1px 4px !important;
+  }
+
+  .specimen-updated-id:focus {
+    background: white !important;
     border-color: #80bdff !important;
     outline: 0 !important;
     box-shadow: 0 0 0 0.2rem rgba(0,123,255,.25) !important;

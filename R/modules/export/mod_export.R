@@ -27,7 +27,8 @@ ExportManager <- R6::R6Class("ExportManager",
                                          specimen_export,
                                          annotations$selections,
                                          annotations$flags,
-                                         annotations$notes
+                                         annotations$notes,
+                                         annotations$updated_ids
                                        )
                                      }
                                      cols <- intersect(private$get_specimen_columns(), names(specimen_export))
@@ -226,7 +227,7 @@ ExportManager <- R6::R6Class("ExportManager",
                                    "collectors", "collection_date_start", "country.ocean",
                                    "coord", "institution", "voucher_type", "quality_score",
                                    "criteria_met", "nuc",
-                                   "selected", "flag", "curator_notes")
+                                   "selected", "flag", "updated_id", "curator_notes")
                                },
 
                                prepare_bin_summary = function(bin_analysis) {

@@ -121,12 +121,14 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
         list(
           sel   = store$selected_specimens,
           flags = store$specimen_flags,
-          notes = store$specimen_curator_notes
+          notes = store$specimen_curator_notes,
+          uids  = store$specimen_updated_ids
         )
       })
       current_sel   <- annotations$sel
       current_flags <- annotations$flags
       current_notes <- annotations$notes
+      current_uids  <- annotations$uids
 
       withProgress(message = 'Creating specimen tables', value = 0, {
         tryCatch({
@@ -152,6 +154,7 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
             current_sel = current_sel,
             current_flags = current_flags,
             current_notes = current_notes,
+            current_uids = current_uids,
             logger = logger
           )
 
@@ -231,7 +234,7 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
             timestamp = Sys.time(),
             species = sel$species,
             quality_score = sel$quality_score,
-            user = store$user_info$email,
+            user = store$user_info$name %||% store$user_info$email,
             selected = TRUE
           )
         } else {
@@ -257,13 +260,38 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
             flag = flag$flag,
             timestamp = Sys.time(),
             species = flag$species,
-            user = store$user_info$email
+            user = store$user_info$name %||% store$user_info$email
           )
         } else {
           current_flags[[flag$processid]] <- NULL
         }
 
         state$update_state("specimen_flags", current_flags)
+      }
+    })
+
+    # Watch for updated_id changes — write directly to StateManager
+    observeEvent(input$specimen_updated_id, {
+      req(input$specimen_updated_id)
+      uid <- input$specimen_updated_id
+
+      if (!is.null(uid$processid)) {
+        store <- state$get_store()
+        current_uids <- isolate(store$specimen_updated_ids)
+        if (is.null(current_uids)) current_uids <- list()
+
+        uid_text <- uid$updated_id %||% ""
+        if (nchar(uid_text) > 0) {
+          current_uids[[uid$processid]] <- list(
+            text = uid_text,
+            timestamp = Sys.time(),
+            user = store$user_info$name %||% store$user_info$email
+          )
+        } else {
+          current_uids[[uid$processid]] <- NULL
+        }
+
+        state$update_state("specimen_updated_ids", current_uids)
       }
     })
 
@@ -283,7 +311,7 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
           current_notes[[note$processid]] <- list(
             text = note_text,
             timestamp = Sys.time(),
-            user = store$user_info$email
+            user = store$user_info$name %||% store$user_info$email
           )
         } else {
           current_notes[[note$processid]] <- NULL

@@ -35,6 +35,7 @@ save_session_state <- function(session_id, store, session_dir = "data/sessions")
     saveRDS(store$selected_specimens, file.path(dir_path, "selected_specimens.rds"))
     saveRDS(store$specimen_flags, file.path(dir_path, "specimen_flags.rds"))
     saveRDS(store$specimen_curator_notes, file.path(dir_path, "specimen_curator_notes.rds"))
+    saveRDS(store$specimen_updated_ids, file.path(dir_path, "specimen_updated_ids.rds"))
 
     # Save session metadata as JSON
     meta <- list(
@@ -85,7 +86,8 @@ load_session_state <- function(session_id, session_dir = "data/sessions") {
       bin_analysis = "bin_analysis.rds",
       selected_specimens = "selected_specimens.rds",
       specimen_flags = "specimen_flags.rds",
-      specimen_curator_notes = "specimen_curator_notes.rds"
+      specimen_curator_notes = "specimen_curator_notes.rds",
+      specimen_updated_ids = "specimen_updated_ids.rds"
     )
 
     for (key in names(rds_files)) {

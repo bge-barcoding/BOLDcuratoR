@@ -19,7 +19,7 @@ mod_specimen_handling_ui <- function(id) {
       box(
         title = "Specimen Quality Summary",
         status = "info",
-        width = 14,
+        width = 12,
         solidHeader = TRUE,
 
         fluidRow(

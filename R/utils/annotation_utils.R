@@ -78,6 +78,7 @@ order_columns <- function(data) {
 #' @param current_selections Named list of selections keyed by processid
 #' @param current_flags Named list of flags keyed by processid
 #' @param current_notes Named list of curator notes keyed by processid
+#' @param current_updated_ids Named list of updated IDs keyed by processid
 #' @param logger Optional logger instance
 #' @return Data frame with annotation columns merged
 #' @export
@@ -85,6 +86,7 @@ prepare_module_data <- function(data,
                                 current_selections = NULL,
                                 current_flags = NULL,
                                 current_notes = NULL,
+                                current_updated_ids = NULL,
                                 logger = NULL) {
 
   if (is.null(data) || nrow(data) == 0) {
@@ -124,6 +126,10 @@ prepare_module_data <- function(data,
     extract_annotation(current_flags[[pid]], c("flag", "value"))
   }, character(1), USE.NAMES = FALSE)
 
+  data$updated_id <- vapply(data$processid, function(pid) {
+    extract_annotation(current_updated_ids[[pid]], c("text", "value"))
+  }, character(1), USE.NAMES = FALSE)
+
   data$curator_notes <- vapply(data$processid, function(pid) {
     extract_annotation(current_notes[[pid]], c("text", "note", "value"))
   }, character(1), USE.NAMES = FALSE)
@@ -146,6 +152,7 @@ prepare_module_data <- function(data,
   # Ensure proper types before returning
   data$selected <- as.logical(data$selected)
   data$flag <- as.character(data$flag)
+  data$updated_id <- as.character(data$updated_id)
   data$curator_notes <- as.character(data$curator_notes)
   if ("quality_score" %in% names(data)) {
     data$quality_score <- as.numeric(data$quality_score)
@@ -167,9 +174,10 @@ prepare_module_data <- function(data,
 #' @param selections Named list of selections keyed by processid
 #' @param flags Named list of flags keyed by processid (each entry has $flag, $user, $timestamp)
 #' @param notes Named list of curator notes keyed by processid (each entry has $text, $user, $timestamp)
+#' @param updated_ids Named list of updated IDs keyed by processid (each entry has $text, $user, $timestamp)
 #' @return Data frame with clean text annotation columns appended
 #' @export
-merge_annotations_for_export <- function(data, selections = NULL, flags = NULL, notes = NULL) {
+merge_annotations_for_export <- function(data, selections = NULL, flags = NULL, notes = NULL, updated_ids = NULL) {
   if (is.null(data) || nrow(data) == 0) return(data)
 
   # Coerce list and factor columns to plain character first so that
@@ -202,6 +210,10 @@ merge_annotations_for_export <- function(data, selections = NULL, flags = NULL, 
     extract_annotation(flags[[pid]], c("flag", "value"))
   }, character(1), USE.NAMES = FALSE)
 
+  data$updated_id <- vapply(data$processid, function(pid) {
+    extract_annotation(updated_ids[[pid]], c("text", "value"))
+  }, character(1), USE.NAMES = FALSE)
+
   data$curator_notes <- vapply(data$processid, function(pid) {
     extract_annotation(notes[[pid]], c("text", "note", "value"))
   }, character(1), USE.NAMES = FALSE)
@@ -219,7 +231,7 @@ merge_annotations_for_export <- function(data, selections = NULL, flags = NULL, 
   }, character(1), USE.NAMES = FALSE)
 
   # Reorder: annotation columns first, then the rest
-  annotation_cols <- c("selected", "flag", "curator_notes",
+  annotation_cols <- c("selected", "flag", "updated_id", "curator_notes",
                        "flag_user", "flag_timestamp")
   other_cols <- setdiff(names(data), annotation_cols)
   data[, c(annotation_cols, other_cols)]
