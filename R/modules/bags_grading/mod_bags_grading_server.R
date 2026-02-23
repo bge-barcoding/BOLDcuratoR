@@ -28,12 +28,16 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
       logger$info(sprintf("Starting main data observer for grade %s", grade))
       store <- state$get_store()
 
-      # Check required data
+      # Clear local state when specimen data is removed (e.g. Clear Results)
       if (is.null(store$specimen_data) || is.null(store$bags_grades)) {
         logger$warn("Missing required data", list(
           has_specimens = !is.null(store$specimen_data),
           has_grades = !is.null(store$bags_grades)
         ))
+        isolate({
+          rv$filtered_data <- NULL
+          rv$metrics <- NULL
+        })
         return()
       }
 
@@ -210,6 +214,32 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
           "E" = "red"
         )
       )
+    })
+
+    # Watch for selection changes — write directly to StateManager
+    observeEvent(input$specimen_select, {
+      req(input$specimen_select)
+      sel <- input$specimen_select
+
+      if (!is.null(sel$processid)) {
+        store <- state$get_store()
+        current_selections <- isolate(store$selected_specimens)
+        if (is.null(current_selections)) current_selections <- list()
+
+        if (isTRUE(sel$selected)) {
+          current_selections[[sel$processid]] <- list(
+            timestamp = Sys.time(),
+            species = sel$species,
+            quality_score = sel$quality_score,
+            user = store$user_info$email,
+            selected = TRUE
+          )
+        } else {
+          current_selections[[sel$processid]] <- NULL
+        }
+
+        state$update_state("selected_specimens", current_selections)
+      }
     })
 
     # Watch for flag changes — write directly to StateManager

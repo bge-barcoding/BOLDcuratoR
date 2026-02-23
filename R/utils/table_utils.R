@@ -419,12 +419,15 @@ get_table_callback <- function(ns, flag_options = NULL) {
           processid: processid,
           species: rowData.species || '',
           bin_uri: rowData.bin_uri || '',
+          quality_score: rowData.quality_score || null,
           timestamp: Date.now(),
           table_id: table.table().node().id || 'default'
         };
         payload[type] = value;
 
-        if (type === 'flag') {
+        if (type === 'selected') {
+          Shiny.setInputValue('%s', payload, {priority: 'event'});
+        } else if (type === 'flag') {
           Shiny.setInputValue('%s', payload, {priority: 'event'});
         } else if (type === 'curator_notes') {
           Shiny.setInputValue('%s', payload, {priority: 'event'});
@@ -433,6 +436,9 @@ get_table_callback <- function(ns, flag_options = NULL) {
 
       var updateDOM = function($row, changes) {
         if (!$row || !changes) return;
+        if (changes.selected !== undefined) {
+          $row.find('input.specimen-select').prop('checked', changes.selected);
+        }
         if (changes.flag !== undefined) {
           $row.find('select.specimen-flag').val(changes.flag);
         }
@@ -454,6 +460,18 @@ get_table_callback <- function(ns, flag_options = NULL) {
       };
 
       // --- Event handlers ---
+
+      table.on('change', 'input.specimen-select', function(e) {
+        e.stopPropagation();
+        var row = table.row($(this).closest('tr'));
+        var data = rowObj(row);
+        if (!data || !data.processid) return;
+
+        var value = this.checked;
+        setField(row, 'selected', value);
+        notifyShiny(data.processid, 'selected', value, data);
+        broadcast(data.processid, 'selected', value);
+      });
 
       table.on('change', 'select.specimen-flag', function(e) {
         e.stopPropagation();
@@ -492,7 +510,7 @@ get_table_callback <- function(ns, flag_options = NULL) {
           }
         });
       });
-  ", flag_js, ns("specimen_flag"), ns("specimen_notes")))
+  ", flag_js, ns("specimen_select"), ns("specimen_flag"), ns("specimen_notes")))
 }
 
 #' Get standard table CSS

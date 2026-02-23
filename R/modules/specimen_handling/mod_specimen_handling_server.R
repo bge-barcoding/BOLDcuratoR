@@ -120,6 +120,16 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
     # Update the filtered data observer to use rv instead of reactiveVal
     observe({
       store <- state$get_store()
+
+      # Clear local state when specimen data is removed (e.g. Clear Results)
+      if (is.null(store$specimen_data)) {
+        isolate({
+          rv$filtered_data <- NULL
+          rv$metrics <- NULL
+        })
+        return()
+      }
+
       req(store$specimen_data)
 
       logger$info("Starting data filtering - Initial columns", list(

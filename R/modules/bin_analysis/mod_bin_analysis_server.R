@@ -22,6 +22,18 @@ mod_bin_analysis_server <- function(id, state, processor, logger) {
     observe({
       # Validate state and required data
       store <- state$get_store()
+
+      # Clear local state when specimen data is removed (e.g. Clear Results)
+      if (is.null(store$specimen_data)) {
+        analysis_results(NULL)
+        processing_status(list(
+          is_processing = FALSE,
+          message = NULL,
+          error = NULL
+        ))
+        return()
+      }
+
       req(store$specimen_data)
 
       tryCatch({
