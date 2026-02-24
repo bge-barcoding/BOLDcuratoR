@@ -7,87 +7,11 @@ mod_specimen_handling_ui <- function(id) {
   ns <- NS(id)
 
   tagList(
-    # Ensure filter dropdowns render above the specimen table
-    tags$style(HTML("
-      .quality-filters-box {
-        position: relative;
-        z-index: 100;
-      }
-      .quality-filters-box .box-body {
-        overflow: visible !important;
-        min-height: 120px;
-        padding-bottom: 20px;
-      }
-      .quality-filters-box .selectize-dropdown {
-        z-index: 1050 !important;
-        position: absolute !important;
-      }
-      .quality-filters-box .selectize-input {
-        min-height: 38px;
-      }
-    ")),
-
     # Error/Alert Container
     tags$div(
       id = ns("error_container"),
       class = "shiny-notification-error",
       style = "display: none;"
-    ),
-
-    # Filtering Controls
-    fluidRow(
-      div(class = "quality-filters-box",
-        box(
-          title = "Quality Filters",
-          status = "primary",
-          width = 12,
-          solidHeader = TRUE,
-          collapsible = TRUE,
-
-          fluidRow(
-            # Rank Filter
-            column(6,
-                   selectInput(ns("rank_filter"),
-                               "Filter by Rank:",
-                               choices = c("All", "1", "2", "3", "4", "5", "6", "7"),
-                               selected = "All"
-                   )
-            ),
-
-            # Criteria Filter
-            column(6,
-                   selectInput(ns("criteria_filter"),
-                               "Filter by Required Criteria:",
-                               choices = c(
-                                 "Species ID" = "SPECIES_ID",
-                                 "Type Specimen" = "TYPE_SPECIMEN",
-                                 "Sequence Quality" = "SEQ_QUALITY",
-                                 "Public Voucher" = "PUBLIC_VOUCHER",
-                                 "Has Image" = "HAS_IMAGE",
-                                 "Identifier" = "IDENTIFIER",
-                                 "Collection Date" = "COLLECTION_DATE",
-                                 "Country" = "COUNTRY",
-                                 "Coordinates" = "COORD"
-                               ),
-                               multiple = TRUE
-                   )
-            )
-          ),
-
-          # Filter Status
-          fluidRow(
-            column(12,
-                   div(
-                     style = "margin-top: 5px;",
-                     tags$span(
-                       class = "filter-status",
-                       textOutput(ns("filter_status"), inline = TRUE)
-                     )
-                   )
-            )
-          )
-        )
-      )
     ),
 
     # Specimen Records Section

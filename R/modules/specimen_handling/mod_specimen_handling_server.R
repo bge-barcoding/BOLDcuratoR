@@ -226,7 +226,7 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
         data = prepared,
         ns = NULL,
         buttons = list(),
-        page_length = 10,
+        page_length = 20,
         selection = 'none',
         logger = logger,
         dom = "frtip",
