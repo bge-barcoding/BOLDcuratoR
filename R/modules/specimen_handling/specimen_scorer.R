@@ -137,6 +137,7 @@ SpecimenScorer <- R6::R6Class(
              "TYPE_SPECIMEN" = private$check_type_specimen(field_values, criterion_rules),
              "SEQ_QUALITY" = private$check_sequence_quality(field_values, criterion_rules),
              "PUBLIC_VOUCHER" = private$check_public_voucher(field_values, criterion_rules),
+             "HAS_IMAGE" = private$check_has_image(field_values, criterion_rules),
              private$check_general_criterion(field_values, criterion_rules))
     },
 
@@ -188,6 +189,14 @@ SpecimenScorer <- R6::R6Class(
         !grepl(rules$negative_pattern, voucher_value, ignore.case = TRUE) &&
         (is.null(rules$positive_pattern) ||
            grepl(rules$positive_pattern, voucher_value, ignore.case = TRUE))
+    },
+
+    #' @description Check if specimen has an image (based on API lookup)
+    check_has_image = function(values, rules) {
+      val <- values[["has_image"]]
+      if (is.na(val)) return(FALSE)
+      # has_image is stored as logical TRUE/FALSE; as.character gives "TRUE"/"FALSE"
+      isTRUE(as.logical(val))
     },
 
     #' @description Check general criterion

@@ -14,81 +14,6 @@ mod_specimen_handling_ui <- function(id) {
       style = "display: none;"
     ),
 
-    # Quality Summary Section
-    fluidRow(
-      box(
-        title = "Specimen Quality Summary",
-        status = "info",
-        width = 14,
-        solidHeader = TRUE,
-
-        fluidRow(
-          # Quality Distribution Boxes
-          column(2, valueBoxOutput(ns("rank_1_box"), width = NULL)),
-          column(2, valueBoxOutput(ns("rank_2_box"), width = NULL)),
-          column(2, valueBoxOutput(ns("rank_3_box"), width = NULL)),
-          column(2, valueBoxOutput(ns("rank_4_box"), width = NULL)),
-          column(2, valueBoxOutput(ns("rank_5_box"), width = NULL)),
-          column(2, valueBoxOutput(ns("rank_6_box"), width = NULL)),
-          column(2, valueBoxOutput(ns("rank_7_box"), width = NULL))
-        )
-      )
-    ),
-
-    # Filtering Controls
-    fluidRow(
-      box(
-        title = "Quality Filters",
-        status = "primary",
-        width = 12,
-        solidHeader = TRUE,
-        collapsible = TRUE,
-
-        fluidRow(
-          # Rank Filter
-          column(6,
-                 selectInput(ns("rank_filter"),
-                             "Filter by Rank:",
-                             choices = c("All", "1", "2", "3", "4", "5", "6", "7"),
-                             selected = "All"
-                 )
-          ),
-
-          # Criteria Filter
-          column(6,
-                 selectInput(ns("criteria_filter"),
-                             "Filter by Required Criteria:",
-                             choices = c(
-                               "Species ID" = "SPECIES_ID",
-                               "Type Specimen" = "TYPE_SPECIMEN",
-                               "Sequence Quality" = "SEQ_QUALITY",
-                               "Public Voucher" = "PUBLIC_VOUCHER",
-                               "Has Image" = "HAS_IMAGE",
-                               "Identifier" = "IDENTIFIER",
-                               "Collection Date" = "COLLECTION_DATE",
-                               "Country" = "COUNTRY",
-                               "Coordinates" = "COORD"
-                             ),
-                             multiple = TRUE
-                 )
-          )
-        ),
-
-        # Filter Status
-        fluidRow(
-          column(12,
-                 div(
-                   style = "margin-top: 5px;",
-                   tags$span(
-                     class = "filter-status",
-                     textOutput(ns("filter_status"), inline = TRUE)
-                   )
-                 )
-          )
-        )
-      )
-    ),
-
     # Specimen Records Section
     fluidRow(
       box(
@@ -135,15 +60,7 @@ mod_specimen_handling_ui <- function(id) {
           ),
 
           # Specimen Table
-          DTOutput(ns("specimen_table")),
-
-          # Selection History
-          div(
-            class = "selection-history",
-            style = "margin-top: 20px;",
-            h4("Selection History"),
-            DTOutput(ns("selection_history"))
-          )
+          DTOutput(ns("specimen_table"))
         )
       )
     ),

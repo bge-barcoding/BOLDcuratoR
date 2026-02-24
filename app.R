@@ -16,6 +16,7 @@ source("R/utils/bags_grading.R")
 source("R/utils/annotation_utils.R")
 source("R/utils/table_utils.R")
 source("R/utils/session_persistence.R")
+source("R/utils/image_utils.R")
 
 # Source core modules
 source("R/modules/state/state_manager.R")
@@ -59,7 +60,6 @@ ui <- dashboardPage(
 
   dashboardSidebar(
     useShinyjs(),
-    mod_user_info_ui("user_info"),
     sidebarMenu(
       menuItem("Data Input", tabName = "input", icon = icon("table")),
       menuItem("Species Analysis", tabName = "species_analysis", icon = icon("list-check")),
@@ -82,13 +82,24 @@ ui <- dashboardPage(
     tags$head(
       tags$style(HTML(paste(
         "
-        /* Global Styles — prevent page-level scroll */
+        /* Prevent page-level scroll — only tables scroll internally */
+        html, body {
+          overflow: hidden !important;
+          height: 100vh !important;
+          width: 100vw !important;
+          margin: 0 !important;
+          padding: 0 !important;
+        }
+        .wrapper {
+          overflow: hidden !important;
+          height: 100vh !important;
+        }
         .content-wrapper {
           overflow: hidden !important;
-          overflow-y: hidden !important;
           height: calc(100vh - 50px) !important;
           min-height: 0 !important;
           padding: 0 !important;
+          max-width: 100% !important;
         }
         .content-wrapper > section,
         .content-wrapper > section.content,
@@ -96,26 +107,25 @@ ui <- dashboardPage(
           height: 100% !important;
           min-height: 0 !important;
           overflow: hidden !important;
-          overflow-y: hidden !important;
+          max-width: 100% !important;
         }
         .content-wrapper > section > .tab-content,
         .content-wrapper > .content > .tab-content {
-          height: calc(100vh - 60px) !important;
+          height: calc(100vh - 100px) !important;
           min-height: 0 !important;
           overflow: hidden !important;
-          overflow-y: hidden !important;
         }
         /* Default: allow tab-pane scroll for tabs that need it (data input, BAGS, about) */
         .tab-content > .tab-pane {
-          max-height: calc(100vh - 60px) !important;
+          max-height: calc(100vh - 100px) !important;
           overflow-y: auto !important;
+          overflow-x: hidden !important;
         }
         /* Analysis tabs: no page scroll, tables scroll internally via DT scrollY */
         .tab-content > .tab-pane[data-value='species_analysis'],
         .tab-content > .tab-pane[data-value='bins'],
         .tab-content > .tab-pane[data-value='specimens'] {
           overflow: hidden !important;
-          overflow-y: hidden !important;
         }
         .small-box {
           margin-bottom: 5px !important;
@@ -126,47 +136,50 @@ ui <- dashboardPage(
           display: none !important;
         }
 
+        /* User info top bar — compact inline form */
+        .user-info-bar .form-group {
+          margin-bottom: 0 !important;
+          margin-top: 0 !important;
+        }
+        .user-info-bar .shiny-input-container {
+          margin: 0 !important;
+          width: 100% !important;
+        }
+        .user-info-bar .form-control {
+          height: 28px !important;
+          font-size: 12px !important;
+          padding: 2px 6px !important;
+        }
+        .user-info-bar .validation-messages {
+          font-size: 10px !important;
+          margin: 0 !important;
+          line-height: 1.2 !important;
+        }
+
         /* DataTables Overrides */
         .dataTables_wrapper {
           padding: 0 !important;
           line-height: 1 !important;
+          max-width: 100% !important;
+          overflow: hidden !important;
         }
         .dataTables_wrapper .dataTables_scroll {
           padding: 0 !important;
           margin: 0 !important;
         }
         .dataTables_scrollBody {
-          max-height: 70vh !important;
+          max-height: 60vh !important;
         }
         .dataTables_wrapper .row {
           margin: 0 !important;
           padding: 2px 0 !important;
         }
 
-        /* Reduce spacing in user info forms */
-        .content-wrapper .user-info-container .form-group {
-          margin-bottom: 1px !important;
-          margin-top: 1px !important;
-        }
-
-        .content-wrapper .user-info-container .shiny-input-container {
-          margin: 1px !important;
-          padding: 1px !important;
-        }
-
-        .content-wrapper .user-info-container .form-control {
-          margin: 1px !important;
-          padding: 1px 1px !important;
-          height: 1px !important;
-        }
-
-        .content-wrapper .user-info-container .box-body {
-          padding: 1px !important;
-        }
-
         /* Compact shinydashboard boxes */
         .content-wrapper .box {
           margin-bottom: 5px !important;
+          max-width: 100% !important;
+          overflow: hidden !important;
         }
 
         .content-wrapper .box-header {
@@ -175,6 +188,8 @@ ui <- dashboardPage(
 
         .content-wrapper .box-body {
           padding: 5px !important;
+          max-width: 100% !important;
+          overflow: hidden !important;
         }
 
         /* Compact data input form */
@@ -206,10 +221,26 @@ ui <- dashboardPage(
           margin-bottom: 0px !important;
         }
 
+        /* Ensure all content stays within viewport */
+        .tab-pane .row {
+          max-width: 100% !important;
+          margin-left: 0 !important;
+          margin-right: 0 !important;
+        }
+        .tab-pane .col-sm-12,
+        .tab-pane .col-sm-14 {
+          max-width: 100% !important;
+          padding-left: 5px !important;
+          padding-right: 5px !important;
+        }
+
 ",
         get_table_css()
       ))),
     ),
+
+    # User info bar along the top
+    mod_user_info_ui("user_info"),
 
     tabItems(
       tabItem(tabName = "input",
@@ -454,7 +485,7 @@ server <- function(input, output, session) {
             timestamp = Sys.time(),
             species = info$species,
             quality_score = if (nrow(specimen_row) > 0) specimen_row$quality_score[1] else NA,
-            user = store$user_info$email,
+            user = store$user_info$name %||% store$user_info$email,
             selected = TRUE
           )
         }
@@ -551,6 +582,7 @@ server <- function(input, output, session) {
       selected_specimens = store$selected_specimens,
       specimen_flags = store$specimen_flags,
       specimen_curator_notes = store$specimen_curator_notes,
+      specimen_updated_ids = store$specimen_updated_ids,
       search_taxa = store$search_taxa,
       user_info = store$user_info
     )
@@ -569,7 +601,8 @@ server <- function(input, output, session) {
     # Only save if there are annotations worth saving
     has_annotations <- length(store$selected_specimens) > 0 ||
       length(store$specimen_flags) > 0 ||
-      length(store$specimen_curator_notes) > 0
+      length(store$specimen_curator_notes) > 0 ||
+      length(store$specimen_updated_ids) > 0
     if (!has_annotations) return()
 
     tryCatch({

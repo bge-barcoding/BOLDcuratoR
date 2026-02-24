@@ -69,7 +69,7 @@ SPECIMEN_SCORING_CRITERIA <- list(
   ),
 
   HAS_IMAGE = list(
-    fields = c("processid") # update this once proper image checking available in api
+    fields = c("has_image")
   ),
 
   IDENTIFIER = list(
@@ -195,7 +195,7 @@ UI_CONSTANTS <- list(
 # Column configurations for data display
 PREFERRED_COLUMNS <- function(data) {
   custom_cols <- c(
-    "selected", "flag", "curator_notes",
+    "selected", "flag", "updated_id", "curator_notes",
     "rank","quality_score", "processid", "bin_uri",
     "identification", "identified_by",
     "identification_method", "country.ocean",

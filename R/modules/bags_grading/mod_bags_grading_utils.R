@@ -124,7 +124,7 @@ organize_grade_specimens <- function(specimens, grade) {
 #' @return List of formatted tables
 #' @keywords internal
 create_grade_tables <- function(organized, grade, ns, current_sel, current_flags,
-                                current_notes, logger) {
+                                current_notes, current_uids = NULL, logger) {
 
   if (is.null(organized) || length(organized) == 0) {
     logger$warn("No organized data to create tables")
@@ -144,6 +144,7 @@ create_grade_tables <- function(organized, grade, ns, current_sel, current_flags
         current_selections = current_sel,
         current_flags = current_flags,
         current_notes = current_notes,
+        current_updated_ids = current_uids,
         logger = logger
       )
 
