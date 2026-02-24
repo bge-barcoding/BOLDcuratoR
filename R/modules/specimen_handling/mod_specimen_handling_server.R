@@ -226,11 +226,12 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
         data = prepared,
         ns = NULL,
         buttons = list(),
-        page_length = 50,
+        page_length = 10,
         selection = 'none',
         logger = logger,
         dom = "frtip",
-        read_only = TRUE
+        read_only = TRUE,
+        scroll_y = "400px"
       )
     })
 
