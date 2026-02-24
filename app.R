@@ -130,6 +130,16 @@ ui <- dashboardPage(
           margin-bottom: 5px !important;
         }
 
+        /* BAGS Grade D — dark grey header (matches species analysis chart) */
+        .box-grade-d-wrapper .box.box-solid > .box-header {
+          background-color: #6c757d !important;
+          border-color: #6c757d !important;
+          color: #fff !important;
+        }
+        .box-grade-d-wrapper .box.box-solid {
+          border-color: #6c757d !important;
+        }
+
         /* Hide sidebar toggle button */
         .sidebar-toggle {
           display: none !important;

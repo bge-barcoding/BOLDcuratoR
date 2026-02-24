@@ -392,7 +392,7 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
 
     # Download BOLD curation report — annotated records only, with a
     # subset of columns: sampleid, processid, identification, flag,
-    # updated_id, curator_notes.
+    # updated_id, flag_user, curator_notes.
     output$download_curation_report <- downloadHandler(
       filename = function() {
         paste0("bold_curation_report_", format(Sys.time(), "%Y%m%d_%H%M"), ".tsv")
@@ -429,7 +429,7 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
 
         # Select only the required columns in the specified order
         report_cols <- c("sampleid", "processid", "identification",
-                         "flag", "updated_id", "curator_notes")
+                         "flag", "updated_id", "flag_user", "curator_notes")
         # Keep only columns that exist in the data
         available_cols <- intersect(report_cols, names(annotated_data))
         report_data <- annotated_data[, available_cols, drop = FALSE]
