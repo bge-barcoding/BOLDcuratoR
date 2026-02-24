@@ -14,32 +14,32 @@ mod_bags_grading_ui <- function(id, grade) {
     # Grade Description Box
     fluidRow(
       column(12,
-             box(
-               title = paste("BAGS Grade", grade, "Overview"),
-               status = switch(grade,
-                               "A" = "success",
-                               "B" = "info",
-                               "C" = "warning",
-                               "D" = NULL,
-                               "E" = "danger"
-               ),
-               width = NULL,
-               solidHeader = TRUE,
+		   box(
+			 title = paste("BAGS Grade", grade, "Overview"),
+			 status = switch(grade,
+							 "A" = "success",
+							 "B" = "info",
+							 "C" = "warning",
+							 "D" = "primary",
+							 "E" = "danger"
+			 ),
+			 width = NULL,
+			 solidHeader = TRUE,
 
-               # Grade Description
-               div(
-                 class = "grade-description",
-                 style = "margin-bottom: 10px;",
-                 switch(grade,
-                        "A" = "Species with >10 specimens and a single BIN",
-                        "B" = "Species with 3-10 specimens and a single BIN",
-                        "C" = "Species with multiple BINs",
-                        "D" = "Species with <3 specimens and a single BIN",
-                        "E" = "Species sharing a BIN with other species"
-                 )
-               )
-             )
-      )
+			 # Grade Description
+			 div(
+			   class = "grade-description",
+			   style = "margin-bottom: 10px;",
+			   switch(grade,
+					  "A" = "Species with >10 specimens and a single BIN",
+					  "B" = "Species with 3-10 specimens and a single BIN",
+					  "C" = "Species with multiple BINs",
+					  "D" = "Species with <3 specimens and a single BIN",
+					  "E" = "Species sharing a BIN with other species"
+			   )
+			 )
+		   )
+		 )
     ),
 
     # Main Content Section
@@ -58,6 +58,9 @@ mod_bags_grading_ui <- function(id, grade) {
         )
       )
     ),
+
+    # Buffer below Specimen Data to prevent table overflow at page bottom
+    div(style = "height: 80px;"),
 
   )
 }

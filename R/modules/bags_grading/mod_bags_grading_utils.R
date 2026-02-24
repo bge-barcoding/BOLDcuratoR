@@ -183,9 +183,9 @@ create_grade_tables <- function(organized, grade, ns, current_sel, current_flags
 format_grade_table <- function(data, ns = NULL, grade) {
   if (is.null(data) || nrow(data) == 0) return(NULL)
 
-  # Dynamic page length: show all rows up to 25, paginate beyond that
+  # Dynamic page length: show all rows up to 15, paginate beyond that
   n_rows <- nrow(data)
-  dynamic_page_length <- min(n_rows, 25)
+  dynamic_page_length <- min(n_rows, 15)
 
   # Calculate dynamic scroll height based on actual row count.
   # Each row is 24px, header is 28px, plus some padding.
@@ -202,7 +202,7 @@ format_grade_table <- function(data, ns = NULL, grade) {
     buttons = list(),
     page_length = dynamic_page_length,
     selection = 'none',
-    dom = if (n_rows > 25) "frtip" else "t",
+    dom = if (n_rows > 15) "frtip" else "t",
     scroll_y = dynamic_scroll_y
   )
 

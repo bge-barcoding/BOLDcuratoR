@@ -424,6 +424,11 @@ mod_data_import_server <- function(id, state, logger = NULL) {
     # (e.g. a typo or a name absent from BOLD) does not cause the
     # entire batch to fail.  Genus names are title-cased because the
     # BOLD preprocessor does an exact-match comparison.
+    #
+    # When geography is provided, countries are batched into groups
+    # of 10 to avoid URL length issues (HTTP 422 errors).  Each
+    # taxon × country-batch combination is searched independently so
+    # a single country returning no results doesn't break the search.
     process_taxonomy_search <- function(taxonomy, geography) {
       tryCatch({
         # Get API key from state
@@ -435,29 +440,51 @@ mod_data_import_server <- function(id, state, logger = NULL) {
         # Set API key for request
         BOLDconnectR::bold.apikey(user_info$bold_api_key)
 
-        geo_arg <- if (!is.null(geography)) as.list(geography) else NULL
+        # Batch countries into groups of 10 to avoid URL length issues
+        country_batch_size <- 10
+        if (!is.null(geography) && length(geography) > 0) {
+          geo_batches <- split(geography, ceiling(seq_along(geography) / country_batch_size))
+        } else {
+          geo_batches <- list(NULL)  # Single batch with no geography filter
+        }
 
         # Search each taxon independently, collecting process IDs
         all_search_results <- lapply(taxonomy, function(taxon) {
           # Title-case the genus (first word) to satisfy BOLD's exact-match check
           taxon <- sub("^(\\w)", "\\U\\1", trimws(taxon), perl = TRUE)
 
-          tryCatch({
-            res <- BOLDconnectR::bold.public.search(
-              taxonomy = list(taxon),
-              geography = geo_arg
-            )
-            if (!is.null(res) && nrow(res) > 0) {
-              logger$info(sprintf("Found %d records for '%s'", nrow(res), taxon))
-              res
-            } else {
-              logger$warn(sprintf("No records for taxon: %s", taxon))
+          # Search across all country batches for this taxon
+          taxon_results <- lapply(geo_batches, function(geo_batch) {
+            geo_arg <- if (!is.null(geo_batch)) as.list(geo_batch) else NULL
+
+            tryCatch({
+              res <- BOLDconnectR::bold.public.search(
+                taxonomy = list(taxon),
+                geography = geo_arg
+              )
+              if (!is.null(res) && nrow(res) > 0) {
+                logger$info(sprintf("Found %d records for '%s' (countries batch: %d)",
+                                    nrow(res), taxon,
+                                    if (!is.null(geo_batch)) length(geo_batch) else 0))
+                res
+              } else {
+                NULL
+              }
+            }, error = function(e) {
+              logger$warn(sprintf("Taxon search failed for '%s' (country batch): %s",
+                                  taxon, e$message))
               NULL
-            }
-          }, error = function(e) {
-            logger$warn(sprintf("Taxon search failed for '%s': %s", taxon, e$message))
-            NULL
+            })
           })
+
+          # Combine results from all country batches for this taxon
+          valid_batches <- Filter(Negate(is.null), taxon_results)
+          if (length(valid_batches) == 0) {
+            logger$warn(sprintf("No records for taxon: %s", taxon))
+            return(NULL)
+          }
+          combined <- do.call(rbind, valid_batches)
+          combined[!duplicated(combined$processid), ]
         })
 
         # Combine results, dropping NULLs
@@ -468,6 +495,8 @@ mod_data_import_server <- function(id, state, logger = NULL) {
         search_results <- search_results[!duplicated(search_results$processid), ]
 
         if (nrow(search_results) > 0) {
+          logger$info(sprintf("Total unique records from taxonomy search: %d",
+                              nrow(search_results)))
           specimens <- bold_fetch_with_retry(
             get_by = "processid",
             identifiers = search_results$processid

@@ -27,6 +27,7 @@ required_packages <- c(
   "devtools",
   "jsonlite",
   "httr",
+  "digest",
 
   # Database packages
   "DBI",

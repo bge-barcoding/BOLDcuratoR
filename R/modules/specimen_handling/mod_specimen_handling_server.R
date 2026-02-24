@@ -390,6 +390,56 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
       contentType = "text/tab-separated-values"
     )
 
+    # Download BOLD curation report — annotated records only, with a
+    # subset of columns: sampleid, processid, identification, flag,
+    # updated_id, flag_user, curator_notes.
+    output$download_curation_report <- downloadHandler(
+      filename = function() {
+        paste0("bold_curation_report_", format(Sys.time(), "%Y%m%d_%H%M"), ".tsv")
+      },
+      content = function(file) {
+        data <- rv$filtered_data
+        store <- state$get_store()
+        flags <- store$specimen_flags
+        notes <- store$specimen_curator_notes
+        uids <- store$specimen_updated_ids
+
+        # Get processids with any annotation (flag, note, or updated_id)
+        annotated_ids <- unique(c(names(flags), names(notes), names(uids)))
+
+        if (is.null(data) || nrow(data) == 0 ||
+            length(annotated_ids) == 0) {
+          writeLines("No annotated specimens for curation report.", file)
+          return()
+        }
+
+        annotated_data <- data[data$processid %in% annotated_ids, ]
+        if (nrow(annotated_data) == 0) {
+          writeLines("No annotated specimens for curation report.", file)
+          return()
+        }
+
+        annotated_data <- merge_annotations_for_export(
+          annotated_data,
+          selections = store$selected_specimens,
+          flags = flags,
+          notes = notes,
+          updated_ids = uids
+        )
+
+        # Select only the required columns in the specified order
+        report_cols <- c("sampleid", "processid", "identification",
+                         "flag", "updated_id", "flag_user", "curator_notes")
+        # Keep only columns that exist in the data
+        available_cols <- intersect(report_cols, names(annotated_data))
+        report_data <- annotated_data[, available_cols, drop = FALSE]
+
+        write.table(report_data, file, sep = "\t", row.names = FALSE, quote = FALSE)
+        logger$info("Downloaded BOLD curation report", list(count = nrow(report_data)))
+      },
+      contentType = "text/tab-separated-values"
+    )
+
     # Calculate metrics helper
     calculate_metrics <- function(data) {
       list(

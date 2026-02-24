@@ -44,6 +44,7 @@ get_flag_options <- function() {
   c(
     "None" = "",
     "Misidentification" = "misidentification",
+    "Synonym" = "synonym",
     "ID Uncertain" = "id_uncertain",
     "Data Issue" = "data_issue",
     "Other Issue" = "other_issue"

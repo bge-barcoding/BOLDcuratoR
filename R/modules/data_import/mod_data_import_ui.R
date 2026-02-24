@@ -149,6 +149,19 @@ mod_data_import_ui <- function(id) {
       )
     ),
 
+    # About Section (integrated from About page)
+    fluidRow(
+      box(
+        title = "About BOLDcuratoR",
+        status = "info",
+        width = 12,
+        solidHeader = TRUE,
+        collapsible = TRUE,
+        collapsed = TRUE,
+        includeMarkdown("about.md")
+      )
+    ),
+
     # Help Modal
     tags$div(
       id = ns("help_modal"),
