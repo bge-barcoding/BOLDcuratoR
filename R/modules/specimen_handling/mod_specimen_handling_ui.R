@@ -9,11 +9,21 @@ mod_specimen_handling_ui <- function(id) {
   tagList(
     # Ensure filter dropdowns render above the specimen table
     tags$style(HTML("
+      .quality-filters-box {
+        position: relative;
+        z-index: 100;
+      }
       .quality-filters-box .box-body {
         overflow: visible !important;
+        min-height: 120px;
+        padding-bottom: 20px;
       }
       .quality-filters-box .selectize-dropdown {
         z-index: 1050 !important;
+        position: absolute !important;
+      }
+      .quality-filters-box .selectize-input {
+        min-height: 38px;
       }
     ")),
 
@@ -22,27 +32,6 @@ mod_specimen_handling_ui <- function(id) {
       id = ns("error_container"),
       class = "shiny-notification-error",
       style = "display: none;"
-    ),
-
-    # Quality Summary Section
-    fluidRow(
-      box(
-        title = "Specimen Quality Summary",
-        status = "info",
-        width = 12,
-        solidHeader = TRUE,
-
-        fluidRow(
-          # Quality Distribution Boxes
-          column(2, valueBoxOutput(ns("rank_1_box"), width = NULL)),
-          column(2, valueBoxOutput(ns("rank_2_box"), width = NULL)),
-          column(2, valueBoxOutput(ns("rank_3_box"), width = NULL)),
-          column(2, valueBoxOutput(ns("rank_4_box"), width = NULL)),
-          column(2, valueBoxOutput(ns("rank_5_box"), width = NULL)),
-          column(2, valueBoxOutput(ns("rank_6_box"), width = NULL)),
-          column(2, valueBoxOutput(ns("rank_7_box"), width = NULL))
-        )
-      )
     ),
 
     # Filtering Controls
@@ -147,15 +136,7 @@ mod_specimen_handling_ui <- function(id) {
           ),
 
           # Specimen Table
-          DTOutput(ns("specimen_table")),
-
-          # Selection History
-          div(
-            class = "selection-history",
-            style = "margin-top: 20px;",
-            h4("Selection History"),
-            DTOutput(ns("selection_history"))
-          )
+          DTOutput(ns("specimen_table"))
         )
       )
     ),
