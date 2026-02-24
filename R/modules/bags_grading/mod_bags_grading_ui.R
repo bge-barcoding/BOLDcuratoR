@@ -59,6 +59,9 @@ mod_bags_grading_ui <- function(id, grade) {
       )
     ),
 
+    # Buffer below Specimen Data to prevent table overflow at page bottom
+    div(style = "height: 80px;"),
+
   )
 }
 

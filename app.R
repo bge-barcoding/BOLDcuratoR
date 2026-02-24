@@ -69,8 +69,7 @@ ui <- dashboardPage(
       menuItem("BAGS Grade C", tabName = "bags_c", icon = icon("exclamation-circle")),
       menuItem("BAGS Grade D", tabName = "bags_d", icon = icon("exclamation-triangle")),
       menuItem("BAGS Grade E", tabName = "bags_e", icon = icon("times-circle")),
-      menuItem("Specimens", tabName = "specimens", icon = icon("microscope")),
-      menuItem("About", tabName = "about", icon = icon("info-circle"))
+      menuItem("Specimens", tabName = "specimens", icon = icon("microscope"))
     )
   ),
 
@@ -115,7 +114,7 @@ ui <- dashboardPage(
           min-height: 0 !important;
           overflow: hidden !important;
         }
-        /* Default: allow tab-pane scroll for tabs that need it (data input, BAGS, about) */
+        /* Default: allow tab-pane scroll for tabs that need it (data input, BAGS) */
         .tab-content > .tab-pane {
           max-height: calc(100vh - 100px) !important;
           overflow-y: auto !important;
@@ -268,12 +267,7 @@ ui <- dashboardPage(
               mod_bags_grading_ui("bags_e", grade = "E")),
 
       tabItem(tabName = "specimens",
-              mod_specimen_handling_ui("specimen_handling")),
-
-      tabItem(tabName = "about",
-              box(title = "BOLDcuratoR",
-                  width = 12,
-                  includeMarkdown("about.md")))
+              mod_specimen_handling_ui("specimen_handling"))
     )
   )
 )
@@ -387,15 +381,30 @@ server <- function(input, output, session) {
       value = 0,
       {
         # Process specimens through pipeline
-        incProgress(0.3, detail = "Analyzing specimens...")
+        incProgress(0.2, detail = "Analyzing specimens...")
         processed_specimens <- specimen_processor$process_specimens(store$specimen_data)
 
         if (!is.null(processed_specimens)) {
           # Calculate BAGS grades
-          incProgress(0.3, detail = "Calculating BAGS grades...")
+          incProgress(0.2, detail = "Calculating BAGS grades...")
           grades <- calculate_bags_grade(processed_specimens)
           if (!is.null(grades)) {
             state$update_state("bags_grades", grades)
+          }
+
+          # Auto-select best specimen per BIN + country combination.
+          # Only runs when there are no existing selections (i.e. fresh
+          # data import), so manual user overrides are preserved.
+          incProgress(0.2, detail = "Auto-selecting best specimens...")
+          current_selections <- isolate(store$selected_specimens)
+          if (is.null(current_selections) || length(current_selections) == 0) {
+            auto_selections <- auto_select_best_specimens(processed_specimens)
+            if (length(auto_selections) > 0) {
+              state$update_state("selected_specimens", auto_selections)
+              logging_manager$info("Auto-selected best specimens", list(
+                count = length(auto_selections)
+              ))
+            }
           }
 
           # Update state with processed data
@@ -405,6 +414,54 @@ server <- function(input, output, session) {
       }
     )
   })
+
+  # Auto-select the best specimen per BIN + country combination.
+  # For each unique (bin_uri, country.ocean) pair, picks the specimen
+  # with the highest quality_score. Returns a named list suitable for
+  # storing in state$selected_specimens.
+  auto_select_best_specimens <- function(specimens) {
+    if (is.null(specimens) || nrow(specimens) == 0) return(list())
+
+    # Only consider specimens with valid BIN and species
+    valid <- specimens[
+      !is.na(specimens$bin_uri) & specimens$bin_uri != "" &
+      !is.na(specimens$species) & specimens$species != "",
+    ]
+    if (nrow(valid) == 0) return(list())
+
+    # Fill missing countries with "Unknown" for grouping
+    valid$country_group <- ifelse(
+      is.na(valid$country.ocean) | valid$country.ocean == "",
+      "Unknown", valid$country.ocean
+    )
+
+    # For each BIN + country combo, pick the highest quality_score
+    selections <- list()
+    combos <- unique(valid[, c("bin_uri", "country_group"), drop = FALSE])
+
+    for (i in seq_len(nrow(combos))) {
+      bin <- combos$bin_uri[i]
+      country <- combos$country_group[i]
+
+      subset <- valid[valid$bin_uri == bin & valid$country_group == country, ]
+      if (nrow(subset) == 0) next
+
+      # Best = highest quality_score, break ties by processid
+      subset <- subset[order(-subset$quality_score, subset$processid), ]
+      best <- subset[1, ]
+
+      selections[[best$processid]] <- list(
+        timestamp = Sys.time(),
+        species = best$species,
+        quality_score = best$quality_score,
+        user = "auto",
+        selected = TRUE,
+        auto_selected = TRUE
+      )
+    }
+
+    selections
+  }
 
   # Handle specimen selection across modules.
   # Register one observeEvent per grade (stable IDs) instead of nesting
@@ -544,8 +601,11 @@ server <- function(input, output, session) {
     }
   })
 
-  # Build a session ID from user info for persistence.
-  # Deterministic so sessions can be found by email/ORCID/name later.
+  # Build a deterministic session ID from user info for persistence.
+  # Uses a hash of the user's primary identifier so that:
+  #   1. The same user always maps to the same session directory
+  #      (saves overwrite rather than creating duplicates).
+  #   2. Raw emails/names are not exposed in the filesystem (privacy).
   get_session_id <- function(store) {
     user_info <- store$user_info
     user_id <- NULL
@@ -554,11 +614,12 @@ server <- function(input, output, session) {
     } else if (!is.null(user_info$orcid) && nchar(trimws(user_info$orcid)) > 0) {
       user_id <- trimws(user_info$orcid)
     } else if (!is.null(user_info$name) && nchar(trimws(user_info$name)) > 0) {
-      user_id <- make.names(trimws(user_info$name))
+      user_id <- tolower(trimws(user_info$name))
     }
     if (!is.null(user_id)) {
-      safe_id <- gsub("[^A-Za-z0-9._@-]", "_", user_id)
-      sprintf("%s_%s", safe_id, format(Sys.time(), "%Y%m%d_%H%M%S"))
+      # Deterministic hash — no timestamp, so repeated saves update
+      # the same directory instead of creating duplicates.
+      digest::digest(user_id, algo = "md5")
     } else {
       session$token
     }

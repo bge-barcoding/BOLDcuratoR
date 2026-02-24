@@ -178,24 +178,34 @@ filter_sessions_by_user <- function(user_email = NULL, user_orcid = NULL,
   all_sessions <- list_saved_sessions(session_dir)
   if (nrow(all_sessions) == 0) return(all_sessions)
 
-  # If no identifiers provided, return all sessions
+  # If no identifiers provided, return empty
   has_email <- !is.null(user_email) && nchar(trimws(user_email)) > 0
   has_orcid <- !is.null(user_orcid) && nchar(trimws(user_orcid)) > 0
   has_name  <- !is.null(user_name) && nchar(trimws(user_name)) > 0
 
   if (!has_email && !has_orcid && !has_name) return(all_sessions[0, , drop = FALSE])
 
-  # Match on any identifier (OR logic)
+  # Match on any identifier (OR logic) — checks both the metadata
+  # fields AND the session_id (which is now a hash of the identifier).
   matches <- rep(FALSE, nrow(all_sessions))
 
   if (has_email) {
-    matches <- matches | (tolower(trimws(all_sessions$user_email)) == tolower(trimws(user_email)))
+    email_hash <- digest::digest(tolower(trimws(user_email)), algo = "md5")
+    matches <- matches |
+      (tolower(trimws(all_sessions$user_email)) == tolower(trimws(user_email))) |
+      (all_sessions$session_id == email_hash)
   }
   if (has_orcid) {
-    matches <- matches | (trimws(all_sessions$user_orcid) == trimws(user_orcid))
+    orcid_hash <- digest::digest(trimws(user_orcid), algo = "md5")
+    matches <- matches |
+      (trimws(all_sessions$user_orcid) == trimws(user_orcid)) |
+      (all_sessions$session_id == orcid_hash)
   }
   if (has_name) {
-    matches <- matches | (tolower(trimws(all_sessions$user_name)) == tolower(trimws(user_name)))
+    name_hash <- digest::digest(tolower(trimws(user_name)), algo = "md5")
+    matches <- matches |
+      (tolower(trimws(all_sessions$user_name)) == tolower(trimws(user_name))) |
+      (all_sessions$session_id == name_hash)
   }
 
   all_sessions[matches, , drop = FALSE]
