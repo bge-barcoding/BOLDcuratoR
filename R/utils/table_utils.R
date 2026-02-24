@@ -127,6 +127,7 @@ format_specimen_table <- function(data, ns = NULL,
               if (type === 'display') {
                 var labels = {
                   'misidentification': 'Misidentification',
+                  'synonym': 'Synonym',
                   'id_uncertain': 'ID Uncertain',
                   'data_issue': 'Data Issue',
                   'other_issue': 'Other Issue'
@@ -205,6 +206,7 @@ format_specimen_table <- function(data, ns = NULL,
           var select = '<select class=\"specimen-flag form-select form-select-sm\">';
           select += '<option value=\"\">None</option>';
           select += '<option value=\"misidentification\"' + (data === 'misidentification' ? ' selected' : '') + '>Misidentification</option>';
+          select += '<option value=\"synonym\"' + (data === 'synonym' ? ' selected' : '') + '>Synonym</option>';
           select += '<option value=\"id_uncertain\"' + (data === 'id_uncertain' ? ' selected' : '') + '>ID Uncertain</option>';
           select += '<option value=\"data_issue\"' + (data === 'data_issue' ? ' selected' : '') + '>Data Issue</option>';
           select += '<option value=\"other_issue\"' + (data === 'other_issue' ? ' selected' : '') + '>Other Issue</option>';
