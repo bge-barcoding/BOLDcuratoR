@@ -22,7 +22,9 @@ calculate_grade_metrics <- function(data) {
   )
 }
 
-#' Organize specimens by grade with proper group info
+#' Organize specimens by grade with proper group info.
+#' Non-species-level records are included in groups via BIN membership:
+#' for each BIN in a species group, any specimen sharing that BIN is included.
 #' @param specimens Data frame of specimens
 #' @param grade BAGS grade
 #' @return Organized list of specimens with attributes
@@ -33,11 +35,44 @@ organize_grade_specimens <- function(specimens, grade) {
   # Sort specimens by quality score within groups
   specimens <- specimens[order(-specimens$quality_score), ]
 
+  # Identify species-level vs non-species-level records
+  is_species_level <- !is.na(specimens$species) &
+    specimens$species != "" &
+    grepl("^\\S+\\s+\\S+", specimens$species)
+  if ("identification_rank" %in% names(specimens)) {
+    is_species_level <- is_species_level &
+      specimens$identification_rank %in% c("species", "subspecies")
+  }
+
+  species_specimens <- specimens[is_species_level, ]
+  non_species_specimens <- specimens[!is_species_level, ]
+
+  # Helper: assign non-species-level records to species groups by BIN
+  assign_bin_members <- function(species_groups) {
+    if (nrow(non_species_specimens) == 0) return(species_groups)
+
+    for (species in names(species_groups)) {
+      group_bins <- unique(species_groups[[species]]$bin_uri[
+        !is.na(species_groups[[species]]$bin_uri) &
+        species_groups[[species]]$bin_uri != ""
+      ])
+      bin_members <- non_species_specimens[
+        non_species_specimens$bin_uri %in% group_bins, , drop = FALSE
+      ]
+      if (nrow(bin_members) > 0) {
+        combined <- rbind(species_groups[[species]], bin_members)
+        combined <- combined[!duplicated(combined$processid), ]
+        species_groups[[species]] <- combined[order(-combined$quality_score), ]
+      }
+    }
+    species_groups
+  }
+
   switch(grade,
-         # Grades A, B, D: Group by species
-         "A" = {
-           groups <- split(specimens, specimens$species)
-           # Add species info to each group
+         # Grades A, B, D: Group by species, include BIN members
+         "A" = , "B" = , "D" = {
+           groups <- split(species_specimens, species_specimens$species)
+           groups <- assign_bin_members(groups)
            for (species in names(groups)) {
              attr(groups[[species]], "info") <- list(
                species = species,
@@ -47,61 +82,61 @@ organize_grade_specimens <- function(specimens, grade) {
            groups
          },
 
-         "B" = {
-           groups <- split(specimens, specimens$species)
-           for (species in names(groups)) {
-             attr(groups[[species]], "info") <- list(
-               species = species,
-               specimen_count = nrow(groups[[species]])
-             )
-           }
-           groups
-         },
-
-         "D" = {
-           groups <- split(specimens, specimens$species)
-           for (species in names(groups)) {
-             attr(groups[[species]], "info") <- list(
-               species = species,
-               specimen_count = nrow(groups[[species]])
-             )
-           }
-           groups
-         },
-
-         # Grade C: Group by species then BIN
+         # Grade C: Group by species then BIN, include BIN members
          "C" = {
            result <- list()
-           species_groups <- split(specimens, specimens$species)
+           species_groups <- split(species_specimens, species_specimens$species)
 
            for (species in names(species_groups)) {
-             bin_groups <- split(species_groups[[species]], species_groups[[species]]$bin_uri)
-             for (bin in names(bin_groups)) {
+             # Get BINs for this species
+             sp_bins <- unique(species_groups[[species]]$bin_uri[
+               !is.na(species_groups[[species]]$bin_uri) &
+               species_groups[[species]]$bin_uri != ""
+             ])
+
+             for (bin in sp_bins) {
+               # Species-level records for this BIN
+               bin_data <- species_groups[[species]][
+                 species_groups[[species]]$bin_uri == bin, , drop = FALSE
+               ]
+               # Add non-species-level BIN members
+               bin_members <- non_species_specimens[
+                 non_species_specimens$bin_uri == bin, , drop = FALSE
+               ]
+               if (nrow(bin_members) > 0) {
+                 bin_data <- rbind(bin_data, bin_members)
+                 bin_data <- bin_data[!duplicated(bin_data$processid), ]
+               }
+               bin_data <- bin_data[order(-bin_data$quality_score), ]
+
                group_name <- paste(species, bin, sep = "_")
-               result[[group_name]] <- bin_groups[[bin]]
+               result[[group_name]] <- bin_data
                attr(result[[group_name]], "info") <- list(
                  species = species,
                  bin = bin,
-                 specimen_count = nrow(bin_groups[[bin]])
+                 specimen_count = nrow(bin_data)
                )
              }
            }
            result
          },
 
-         # Grade E: Group by shared BINs
+         # Grade E: Group by shared BINs — include all BIN members
          "E" = {
            result <- list()
            bins <- unique(specimens$bin_uri)
 
            for (bin in bins) {
-             bin_specimens <- specimens[specimens$bin_uri == bin,]
-             if (length(unique(bin_specimens$species)) > 1) {
-               result[[bin]] <- bin_specimens[order(-bin_specimens$quality_score),]
+             bin_specimens <- specimens[specimens$bin_uri == bin, ]
+             # For shared BIN detection, count species-level IDs
+             sp_in_bin <- bin_specimens[is_species_level[specimens$bin_uri == bin], ]
+             if (length(unique(sp_in_bin$species)) > 1) {
+               result[[bin]] <- bin_specimens[order(-bin_specimens$quality_score), ]
+               sp_names <- unique(sp_in_bin$species)
                attr(result[[bin]], "info") <- list(
                  bin = bin,
-                 species_count = length(unique(bin_specimens$species)),
-                 species = paste(sort(unique(bin_specimens$species)), collapse = ", ")
+                 species_count = length(sp_names),
+                 species = paste(sort(sp_names), collapse = ", ")
                )
              }
            }

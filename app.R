@@ -574,7 +574,8 @@ server <- function(input, output, session) {
       nchar(trimws(input$`data_import-dataset_codes`)) > 0 ||
       !is.null(input$`data_import-project_codes`) &&
       nchar(trimws(input$`data_import-project_codes`)) > 0 ||
-      length(input$`data_import-continents`) > 0
+      !is.null(input$`data_import-countries`) &&
+      nchar(trimws(input$`data_import-countries`)) > 0
 
     if (has_api_key && has_user_info && input_present) {
       shinyjs::enable("data_import-submit")

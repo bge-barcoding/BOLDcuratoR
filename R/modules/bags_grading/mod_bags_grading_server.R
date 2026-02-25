@@ -60,13 +60,31 @@ mod_bags_grading_server <- function(id, state, grade, logger) {
 
           logger$info(sprintf("Found %d species for grade %s", length(grade_species), grade))
 
-          # Filter specimens
-          specimens <- store$specimen_data[
+          # Get specimens identified at species level for this grade
+          species_specimens <- store$specimen_data[
             store$specimen_data$species %in% grade_species &
               !is.na(store$specimen_data$bin_uri) &
               store$specimen_data$bin_uri != "" &
               store$specimen_data$identification_rank %in% c("species", "subspecies"),
           ]
+
+          # Also include non-species-level records that share a BIN with
+          # species in this grade (e.g. genus-only or cf./aff. records).
+          # These are important for curators to review BIN content.
+          grade_bins <- unique(species_specimens$bin_uri[
+            !is.na(species_specimens$bin_uri) & species_specimens$bin_uri != ""
+          ])
+
+          bin_members <- store$specimen_data[
+            store$specimen_data$bin_uri %in% grade_bins &
+              !is.na(store$specimen_data$bin_uri) &
+              store$specimen_data$bin_uri != "" &
+              !(store$specimen_data$identification_rank %in% c("species", "subspecies")),
+          ]
+
+          # Combine: species-level records + BIN-member records
+          specimens <- rbind(species_specimens, bin_members)
+          specimens <- specimens[!duplicated(specimens$processid), ]
 
           if (nrow(specimens) == 0) {
             logger$warn(sprintf("No specimens found for grade %s after filtering", grade))

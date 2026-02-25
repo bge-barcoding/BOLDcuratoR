@@ -87,15 +87,14 @@ mod_data_import_server <- function(id, state, session_db, logger = NULL) {
 
     # Reactive for selected countries
     selected_countries <- reactive({
-      continent_selected <- unlist(CONTINENT_COUNTRIES[input$continents])
-      additional_countries <- NULL
+      countries <- NULL
 
       if (!is.null(input$countries) && nchar(input$countries) > 0) {
-        additional_countries <- unlist(strsplit(input$countries, "\n"))
-        additional_countries <- trimws(additional_countries[nchar(additional_countries) > 0])
+        countries <- unlist(strsplit(input$countries, "\n"))
+        countries <- trimws(countries[nchar(countries) > 0])
       }
 
-      unique(c(continent_selected, additional_countries))
+      unique(countries)
     })
 
     # Validate search parameters
@@ -150,7 +149,7 @@ mod_data_import_server <- function(id, state, session_db, logger = NULL) {
         countries = length(selected_countries())
       ))
 
-      withProgress(message = "Searching BOLD database", {
+      withProgress(message = "Searching BOLD database", value = 0, {
         tryCatch({
           params <- search_params()
 
@@ -163,24 +162,16 @@ mod_data_import_server <- function(id, state, session_db, logger = NULL) {
           ))
 
           combined_specimens <- NULL
-          total_steps <- sum(
-            !is.null(params$dataset_codes),
-            !is.null(params$project_codes),
-            !is.null(params$taxonomy)
-          )
-          current_step <- 0
 
-          # Process dataset codes
+          # --- Phase 1: Dataset codes (0% – 20%) ---
           if (!is.null(params$dataset_codes) && length(params$dataset_codes) > 0) {
             logger$info("Processing datasets", params$dataset_codes)
-            current_step <- current_step + 1
-            state$update_state("processing", list(
-              active = TRUE,
-              progress = (current_step / total_steps) * 100,
-              message = "Processing datasets..."
-            ))
+            setProgress(0.01, detail = sprintf(
+              "Fetching %d dataset(s)...", length(params$dataset_codes)))
 
-            dataset_specimens <- fetch_specimens(params$dataset_codes, "datasets")
+            dataset_specimens <- fetch_specimens(
+              params$dataset_codes, "datasets",
+              progress_range = c(0.0, 0.2))
             if (!is.null(dataset_specimens)) {
               combined_specimens <- dataset_specimens
               logger$info("Dataset fetch successful",
@@ -188,17 +179,15 @@ mod_data_import_server <- function(id, state, session_db, logger = NULL) {
             }
           }
 
-          # Process project codes
+          # --- Phase 2: Project codes (20% – 40%) ---
           if (!is.null(params$project_codes) && length(params$project_codes) > 0) {
             logger$info("Processing projects", params$project_codes)
-            current_step <- current_step + 1
-            state$update_state("processing", list(
-              active = TRUE,
-              progress = (current_step / total_steps) * 100,
-              message = "Processing projects..."
-            ))
+            setProgress(0.20, detail = sprintf(
+              "Fetching %d project(s)...", length(params$project_codes)))
 
-            project_specimens <- fetch_specimens(params$project_codes, "projects")
+            project_specimens <- fetch_specimens(
+              params$project_codes, "projects",
+              progress_range = c(0.2, 0.4))
             if (!is.null(project_specimens)) {
               logger$info("Project fetch successful",
                           list(records = nrow(project_specimens)))
@@ -206,15 +195,11 @@ mod_data_import_server <- function(id, state, session_db, logger = NULL) {
             }
           }
 
-          # Process taxonomy search
+          # --- Phase 3: Taxonomy search (40% – 70%) ---
           if (!is.null(params$taxonomy)) {
             logger$info("Processing taxonomy search", params$taxonomy)
-            current_step <- current_step + 1
-            state$update_state("processing", list(
-              active = TRUE,
-              progress = (current_step / total_steps) * 100,
-              message = "Searching taxonomy..."
-            ))
+            setProgress(0.40, detail = sprintf(
+              "Searching %d taxon/taxa...", length(params$taxonomy)))
 
             taxonomy_specimens <- process_taxonomy_search(
               params$taxonomy,
@@ -226,7 +211,7 @@ mod_data_import_server <- function(id, state, session_db, logger = NULL) {
             }
           }
 
-          # BIN expansion — fetch ALL records in BINs found so far
+          # --- Phase 4: BIN expansion (70% – 90%) ---
           if (!is.null(combined_specimens) && nrow(combined_specimens) > 0) {
             bin_uris <- unique(combined_specimens$bin_uri[
               !is.na(combined_specimens$bin_uri) & combined_specimens$bin_uri != ""
@@ -238,11 +223,9 @@ mod_data_import_server <- function(id, state, session_db, logger = NULL) {
                 bins_to_expand = length(bin_uris)
               ))
 
-              state$update_state("processing", list(
-                active = TRUE,
-                progress = 70,
-                message = sprintf("Expanding BIN coverage (%d BINs)...", length(bin_uris))
-              ))
+              setProgress(0.70, detail = sprintf(
+                "Expanding BIN coverage (%d BINs, %d specimens so far)...",
+                length(bin_uris), nrow(combined_specimens)))
 
               # Ensure API key is set
               user_info <- state$get_store()$user_info
@@ -257,12 +240,11 @@ mod_data_import_server <- function(id, state, session_db, logger = NULL) {
               for (batch_idx in seq_along(bin_batches)) {
                 batch <- bin_batches[[batch_idx]]
 
-                state$update_state("processing", list(
-                  active = TRUE,
-                  progress = 70 + (batch_idx / length(bin_batches)) * 15,
-                  message = sprintf("Expanding BINs (batch %d/%d)...",
-                                    batch_idx, length(bin_batches))
-                ))
+                setProgress(
+                  0.70 + (batch_idx / length(bin_batches)) * 0.20,
+                  detail = sprintf(
+                    "Expanding BINs (batch %d/%d, %d specimens so far)...",
+                    batch_idx, length(bin_batches), nrow(combined_specimens)))
 
                 bin_specimens <- tryCatch({
                   bold_fetch_with_retry(
@@ -289,13 +271,10 @@ mod_data_import_server <- function(id, state, session_db, logger = NULL) {
             }
           }
 
-          # Process final results
+          # --- Phase 5: Processing (90% – 100%) ---
           if (!is.null(combined_specimens) && nrow(combined_specimens) > 0) {
-            state$update_state("processing", list(
-              active = TRUE,
-              progress = 90,
-              message = "Processing results..."
-            ))
+            setProgress(0.90, detail = sprintf(
+              "Processing %d specimens...", nrow(combined_specimens)))
 
             # Validate specimen data
             validation <- validate_specimen_data(combined_specimens)
@@ -324,6 +303,12 @@ mod_data_import_server <- function(id, state, session_db, logger = NULL) {
             state$update_state("selected_specimens", list())
 
             # Update completion status
+            setProgress(1.0, detail = sprintf(
+              "Done — %d specimens, %d species, %d BINs",
+              nrow(processed_data),
+              length(unique(processed_data$species[!is.na(processed_data$species)])),
+              length(unique(processed_data$bin_uri[!is.na(processed_data$bin_uri)]))))
+
             state$update_state("processing", list(
               active = FALSE,
               progress = 100,
@@ -370,55 +355,79 @@ mod_data_import_server <- function(id, state, session_db, logger = NULL) {
       })
     })
 
-    # Helper function to fetch specimens using BOLDconnectR
-    fetch_specimens <- function(codes, type = c("datasets", "projects")) {
+    # Helper function to fetch specimens using BOLDconnectR.
+    # Fetches each code individually so one failing code (e.g. private
+    # dataset returning 401) doesn't prevent the others from loading.
+    # progress_range = c(start, end) maps to the Shiny progress bar.
+    fetch_specimens <- function(codes, type = c("datasets", "projects"),
+                                progress_range = c(0, 1)) {
       type <- match.arg(type)
-      tryCatch({
-        # Get API key from state
-        user_info <- state$get_store()$user_info
-        if (is.null(user_info) || is.null(user_info$bold_api_key)) {
-          stop("No API key available")
-        }
+      get_by <- if (type == "datasets") "dataset_codes" else "project_codes"
+      type_label <- if (type == "datasets") "dataset" else "project"
 
-        # Set API key for request
-        BOLDconnectR::bold.apikey(user_info$bold_api_key)
+      # Get API key from state
+      user_info <- state$get_store()$user_info
+      if (is.null(user_info) || is.null(user_info$bold_api_key)) {
+        logging_manager$error("No API key available for dataset/project fetch")
+        showNotification("Please set your BOLD API key first", type = "error")
+        return(NULL)
+      }
 
-        # Make request based on type
-        if (type == "datasets") {
+      # Set API key for request
+      BOLDconnectR::bold.apikey(user_info$bold_api_key)
+
+      combined <- NULL
+      failed_codes <- character()
+      n_codes <- length(codes)
+
+      for (i in seq_along(codes)) {
+        code <- codes[i]
+        pct <- progress_range[1] +
+          ((i - 1) / n_codes) * (progress_range[2] - progress_range[1])
+        setProgress(pct, detail = sprintf(
+          "Fetching %s %d/%d: %s", type_label, i, n_codes, code))
+
+        result <- tryCatch({
+          logger$info(sprintf("Fetching %s: %s", type, code))
           specimens <- bold_fetch_with_retry(
-            get_by = "dataset_codes",
-            identifiers = codes
+            get_by = get_by,
+            identifiers = code
           )
-        } else {
-          specimens <- bold_fetch_with_retry(
-            get_by = "project_codes",
-            identifiers = codes
-          )
-        }
 
-        # Log directly using logging_manager
+          if (!is.null(specimens) && nrow(specimens) > 0) {
+            logger$info(sprintf("Fetched %d records from %s", nrow(specimens), code))
+          }
+          specimens
+        }, error = function(e) {
+          logging_manager$error(sprintf("Error fetching %s '%s': %s", type, code, e$message))
+          failed_codes <<- c(failed_codes, code)
+          showNotification(
+            sprintf("Failed to fetch %s '%s': %s", type, code, e$message),
+            type = "warning",
+            duration = 10
+          )
+          NULL
+        })
+
+        if (!is.null(result) && nrow(result) > 0) {
+          combined <- merge_specimens(combined, result)
+        }
+      }
+
+      if (length(failed_codes) > 0) {
+        logger$warn(sprintf("Failed to fetch %d %s: %s",
+                            length(failed_codes), type,
+                            paste(failed_codes, collapse = ", ")))
+      }
+
+      if (!is.null(combined) && nrow(combined) > 0) {
         logging_manager$info("Columns after BOLD fetch", list(
-          num_columns = length(names(specimens)),
-          column_names = names(specimens),
-          specimen_count = nrow(specimens),
-          missing_columns = setdiff(
-            c("collection_notes", "funding_src", "nuc",
-              "sampling_protocol", "specimenid", "tribe"),
-            names(specimens)
-          ),
-          has_collection_notes = "collection_notes" %in% names(specimens),
-          has_funding_src = "funding_src" %in% names(specimens),
-          has_nuc = "nuc" %in% names(specimens),
-          has_sampling_protocol = "sampling_protocol" %in% names(specimens),
-          has_specimenid = "specimenid" %in% names(specimens),
-          has_tribe = "tribe" %in% names(specimens)
+          num_columns = length(names(combined)),
+          specimen_count = nrow(combined)
         ))
+      }
 
-        specimens
-      }, error = function(e) {
-        logging_manager$error(sprintf("Error fetching %s: %s", type, e$message))
-        NULL
-      })
+      combined
     }
 
     # Helper function to process taxonomy search.
@@ -450,10 +459,17 @@ mod_data_import_server <- function(id, state, session_db, logger = NULL) {
           geo_batches <- list(NULL)  # Single batch with no geography filter
         }
 
-        # Search each taxon independently, collecting process IDs
-        all_search_results <- lapply(taxonomy, function(taxon) {
+        # Search each taxon independently, collecting process IDs.
+        # Progress: 40% – 60% for the public search, 60% – 70% for full fetch.
+        n_taxa <- length(taxonomy)
+        all_search_results <- lapply(seq_along(taxonomy), function(idx) {
+          taxon <- taxonomy[idx]
           # Title-case the genus (first word) to satisfy BOLD's exact-match check
           taxon <- sub("^(\\w)", "\\U\\1", trimws(taxon), perl = TRUE)
+
+          pct <- 0.40 + ((idx - 1) / n_taxa) * 0.20
+          setProgress(pct, detail = sprintf(
+            "Searching taxon %d/%d: %s", idx, n_taxa, taxon))
 
           # Search across all country batches for this taxon
           taxon_results <- lapply(geo_batches, function(geo_batch) {
@@ -499,6 +515,8 @@ mod_data_import_server <- function(id, state, session_db, logger = NULL) {
         if (nrow(search_results) > 0) {
           logger$info(sprintf("Total unique records from taxonomy search: %d",
                               nrow(search_results)))
+          setProgress(0.60, detail = sprintf(
+            "Downloading full data for %d records...", nrow(search_results)))
           specimens <- bold_fetch_with_retry(
             get_by = "processid",
             identifiers = search_results$processid
@@ -554,9 +572,6 @@ mod_data_import_server <- function(id, state, session_db, logger = NULL) {
       updateTextAreaInput(session, "dataset_codes", value = "")
       updateTextAreaInput(session, "project_codes", value = "")
       updateTextAreaInput(session, "countries", value = "")
-      updateCheckboxGroupInput(session, "continents",
-                               choices = names(CONTINENT_COUNTRIES),
-                               selected = character(0))
 
       # Log action
       logger$info("Input fields cleared")

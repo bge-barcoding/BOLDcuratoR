@@ -28,6 +28,10 @@ mod_specimen_handling_ui <- function(id) {
                  div(
                    class = "download-controls",
                    style = "float: right; margin-bottom: 10px;",
+                   downloadButton(ns("download_all"),
+                                  "Download All",
+                                  class = "btn-success"
+                   ),
                    downloadButton(ns("download_selected"),
                                   "Download Selected",
                                   class = "btn-info"

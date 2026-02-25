@@ -75,16 +75,10 @@ mod_data_import_ui <- function(id) {
                         )
                  ),
                  column(4,
-                        checkboxGroupInput(ns("continents"),
-                                           "Continents:",
-                                           choices = names(CONTINENT_COUNTRIES),
-                                           inline = TRUE
-                        ),
-
                         textAreaInput(ns("countries"),
                                       "Countries (one per line):",
-                                      rows = 2,
-                                      placeholder = "Specific countries (one per line)"
+                                      rows = 4,
+                                      placeholder = "Canada\nUnited States\nMexico"
                         )
                ),
 
@@ -180,7 +174,7 @@ mod_data_import_ui <- function(id) {
             tags$ul(
               tags$li("Enter taxa names, one per line. Include synonyms separated by commas."),
               tags$li("Dataset codes should be in the format DS-XXXX"),
-              tags$li("Select continents or enter specific countries for geographic filtering"),
+              tags$li("Enter specific countries (one per line) for geographic filtering"),
               tags$li("Search results can be downloaded in CSV format"),
               tags$li("Clear results before starting a new search")
             )
