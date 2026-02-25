@@ -361,10 +361,15 @@ format_specimen_table <- function(data, ns = NULL,
 
   # Create base DT object
   tryCatch({
+    # Rename "selected" header to "select" for display
+    display_colnames <- names(data)
+    display_colnames[display_colnames == "selected"] <- "select"
+
     dt_args <- list(
       data = data,
       options = dt_options,
       callback = dt_callback,
+      colnames = display_colnames,
       selection = 'none',
       rownames = FALSE,
       escape = FALSE,

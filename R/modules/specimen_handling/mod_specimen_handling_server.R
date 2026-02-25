@@ -513,6 +513,57 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
       contentType = "text/plain"
     )
 
+    # Download Selected FASTA sequences (only selected specimens)
+    output$download_selected_fasta <- downloadHandler(
+      filename = function() {
+        paste0("selected_sequences_", format(Sys.time(), "%Y%m%d_%H%M"), ".fasta")
+      },
+      content = function(file) {
+        data <- rv$filtered_data
+        store <- state$get_store()
+        selected_ids <- names(store$selected_specimens)
+
+        if (is.null(data) || nrow(data) == 0 || length(selected_ids) == 0) {
+          writeLines("", file)
+          showNotification("No selected specimens to download", type = "warning")
+          return()
+        }
+
+        selected_data <- data[data$processid %in% selected_ids, ]
+
+        if (!"nuc" %in% names(selected_data)) {
+          writeLines("", file)
+          showNotification("No sequence data available", type = "warning")
+          return()
+        }
+
+        seq_data <- selected_data[!is.na(selected_data$nuc) & selected_data$nuc != "", ]
+        if (nrow(seq_data) == 0) {
+          writeLines("", file)
+          showNotification("No sequences found for selected specimens", type = "warning")
+          return()
+        }
+
+        # Write FASTA with header format >processid|identification
+        con <- file(file, "w")
+        on.exit(close(con))
+        for (i in seq_len(nrow(seq_data))) {
+          pid <- seq_data$processid[i]
+          ident <- if ("identification" %in% names(seq_data)) {
+            seq_data$identification[i]
+          } else {
+            seq_data$species[i]
+          }
+          ident <- ifelse(is.na(ident) || ident == "", "Unknown", ident)
+          header <- sprintf(">%s|%s", pid, ident)
+          writeLines(c(header, seq_data$nuc[i]), con)
+        }
+
+        logger$info("Downloaded selected FASTA file", list(sequences = nrow(seq_data)))
+      },
+      contentType = "text/plain"
+    )
+
     # Calculate metrics helper
     calculate_metrics <- function(data) {
       list(

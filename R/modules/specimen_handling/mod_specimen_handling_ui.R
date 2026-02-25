@@ -47,6 +47,10 @@ mod_specimen_handling_ui <- function(id) {
                    downloadButton(ns("download_fasta"),
                                   "Download FASTA",
                                   class = "btn-success"
+                   ),
+                   downloadButton(ns("download_selected_fasta"),
+                                  "Download Selected FASTA",
+                                  class = "btn-info"
                    )
                  )
           )
