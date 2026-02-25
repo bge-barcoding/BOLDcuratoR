@@ -126,6 +126,10 @@ mod_data_import_ui <- function(id) {
                          "Download Results",
                          class = "btn-success"
           ),
+          downloadButton(ns("download_fasta"),
+                         "Download FASTA",
+                         class = "btn-success"
+          ),
           actionButton(ns("clear_results"),
                        "Clear Results",
                        class = "btn-warning",

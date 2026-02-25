@@ -124,6 +124,25 @@ mod_species_analysis_server <- function(id, state, logger) {
         )))
       }
 
+      # Add clickable link for species column
+      species_target <- which(checklist_cols == "species") - 1
+      if (length(species_target) > 0) {
+        col_defs <- c(col_defs, list(list(
+          targets = species_target,
+          render = JS("
+            function(data, type, row) {
+              if (type === 'display' && data) {
+                var s = data.toString();
+                return '<a href=\"https://portal.boldsystems.org/result?query=' +
+                       encodeURIComponent('\"' + s + '\"') + '[tax]\" target=\"_blank\" rel=\"noopener\">' +
+                       s + '</a>';
+              }
+              return data;
+            }
+          ")
+        )))
+      }
+
       checklist_filename <- paste0("species_checklist_", format(Sys.time(), "%Y%m%d_%H%M"))
 
       DT::datatable(
