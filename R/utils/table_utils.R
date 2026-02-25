@@ -221,7 +221,11 @@ format_specimen_table <- function(data, ns = NULL,
           className = 'dt-body-left fixed-col',
           orderable = FALSE,
           searchable = TRUE
+        )
         ),
+        # Link columns must come BEFORE _all so their renderers take priority
+        link_col_defs,
+        list(
         # All other columns
         list(
           targets = "_all",
@@ -239,8 +243,7 @@ format_specimen_table <- function(data, ns = NULL,
             }
           ")
         )
-        ),
-        link_col_defs
+        )
       )
     } else {
       # Interactive mode: checkboxes, dropdowns, editable fields
@@ -323,7 +326,11 @@ format_specimen_table <- function(data, ns = NULL,
               return data;
             }
           ")
+        )
         ),
+        # Link columns must come BEFORE _all so their renderers take priority
+        link_col_defs,
+        list(
         # All other columns
         list(
           targets = "_all",
@@ -342,8 +349,7 @@ format_specimen_table <- function(data, ns = NULL,
           }
         ")
         )
-        ),
-        link_col_defs
+        )
       )
     }
     }
