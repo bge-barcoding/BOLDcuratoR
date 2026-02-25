@@ -285,6 +285,33 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
       )
     })
 
+    # Download all specimens (TSV)
+    output$download_all <- downloadHandler(
+      filename = function() {
+        paste0("all_specimens_", format(Sys.time(), "%Y%m%d_%H%M"), ".tsv")
+      },
+      content = function(file) {
+        store <- state$get_store()
+        data <- store$specimen_data
+        if (is.null(data) || nrow(data) == 0) {
+          writeLines("No specimens to download.", file)
+          return()
+        }
+
+        data <- merge_annotations_for_export(
+          data,
+          selections = store$selected_specimens,
+          flags = store$specimen_flags,
+          notes = store$specimen_curator_notes,
+          updated_ids = store$specimen_updated_ids
+        )
+
+        write.table(data, file, sep = "\t", row.names = FALSE, quote = FALSE)
+        logger$info("Downloaded all specimens", list(count = nrow(data)))
+      },
+      contentType = "text/tab-separated-values"
+    )
+
     # Download handlers
     output$download_filtered <- downloadHandler(
       filename = function() {

@@ -87,15 +87,14 @@ mod_data_import_server <- function(id, state, session_db, logger = NULL) {
 
     # Reactive for selected countries
     selected_countries <- reactive({
-      continent_selected <- unlist(CONTINENT_COUNTRIES[input$continents])
-      additional_countries <- NULL
+      countries <- NULL
 
       if (!is.null(input$countries) && nchar(input$countries) > 0) {
-        additional_countries <- unlist(strsplit(input$countries, "\n"))
-        additional_countries <- trimws(additional_countries[nchar(additional_countries) > 0])
+        countries <- unlist(strsplit(input$countries, "\n"))
+        countries <- trimws(countries[nchar(countries) > 0])
       }
 
-      unique(c(continent_selected, additional_countries))
+      unique(countries)
     })
 
     # Validate search parameters
@@ -370,55 +369,69 @@ mod_data_import_server <- function(id, state, session_db, logger = NULL) {
       })
     })
 
-    # Helper function to fetch specimens using BOLDconnectR
+    # Helper function to fetch specimens using BOLDconnectR.
+    # Fetches each code individually so one failing code (e.g. private
+    # dataset returning 401) doesn't prevent the others from loading.
     fetch_specimens <- function(codes, type = c("datasets", "projects")) {
       type <- match.arg(type)
-      tryCatch({
-        # Get API key from state
-        user_info <- state$get_store()$user_info
-        if (is.null(user_info) || is.null(user_info$bold_api_key)) {
-          stop("No API key available")
-        }
+      get_by <- if (type == "datasets") "dataset_codes" else "project_codes"
 
-        # Set API key for request
-        BOLDconnectR::bold.apikey(user_info$bold_api_key)
+      # Get API key from state
+      user_info <- state$get_store()$user_info
+      if (is.null(user_info) || is.null(user_info$bold_api_key)) {
+        logging_manager$error("No API key available for dataset/project fetch")
+        showNotification("Please set your BOLD API key first", type = "error")
+        return(NULL)
+      }
 
-        # Make request based on type
-        if (type == "datasets") {
+      # Set API key for request
+      BOLDconnectR::bold.apikey(user_info$bold_api_key)
+
+      combined <- NULL
+      failed_codes <- character()
+
+      for (code in codes) {
+        result <- tryCatch({
+          logger$info(sprintf("Fetching %s: %s", type, code))
           specimens <- bold_fetch_with_retry(
-            get_by = "dataset_codes",
-            identifiers = codes
+            get_by = get_by,
+            identifiers = code
           )
-        } else {
-          specimens <- bold_fetch_with_retry(
-            get_by = "project_codes",
-            identifiers = codes
-          )
-        }
 
-        # Log directly using logging_manager
+          if (!is.null(specimens) && nrow(specimens) > 0) {
+            logger$info(sprintf("Fetched %d records from %s", nrow(specimens), code))
+          }
+          specimens
+        }, error = function(e) {
+          logging_manager$error(sprintf("Error fetching %s '%s': %s", type, code, e$message))
+          failed_codes <<- c(failed_codes, code)
+          showNotification(
+            sprintf("Failed to fetch %s '%s': %s", type, code, e$message),
+            type = "warning",
+            duration = 10
+          )
+          NULL
+        })
+
+        if (!is.null(result) && nrow(result) > 0) {
+          combined <- merge_specimens(combined, result)
+        }
+      }
+
+      if (length(failed_codes) > 0) {
+        logger$warn(sprintf("Failed to fetch %d %s: %s",
+                            length(failed_codes), type,
+                            paste(failed_codes, collapse = ", ")))
+      }
+
+      if (!is.null(combined) && nrow(combined) > 0) {
         logging_manager$info("Columns after BOLD fetch", list(
-          num_columns = length(names(specimens)),
-          column_names = names(specimens),
-          specimen_count = nrow(specimens),
-          missing_columns = setdiff(
-            c("collection_notes", "funding_src", "nuc",
-              "sampling_protocol", "specimenid", "tribe"),
-            names(specimens)
-          ),
-          has_collection_notes = "collection_notes" %in% names(specimens),
-          has_funding_src = "funding_src" %in% names(specimens),
-          has_nuc = "nuc" %in% names(specimens),
-          has_sampling_protocol = "sampling_protocol" %in% names(specimens),
-          has_specimenid = "specimenid" %in% names(specimens),
-          has_tribe = "tribe" %in% names(specimens)
+          num_columns = length(names(combined)),
+          specimen_count = nrow(combined)
         ))
+      }
 
-        specimens
-      }, error = function(e) {
-        logging_manager$error(sprintf("Error fetching %s: %s", type, e$message))
-        NULL
-      })
+      combined
     }
 
     # Helper function to process taxonomy search.
@@ -554,9 +567,6 @@ mod_data_import_server <- function(id, state, session_db, logger = NULL) {
       updateTextAreaInput(session, "dataset_codes", value = "")
       updateTextAreaInput(session, "project_codes", value = "")
       updateTextAreaInput(session, "countries", value = "")
-      updateCheckboxGroupInput(session, "continents",
-                               choices = names(CONTINENT_COUNTRIES),
-                               selected = character(0))
 
       # Log action
       logger$info("Input fields cleared")
