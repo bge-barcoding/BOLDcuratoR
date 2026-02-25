@@ -467,6 +467,52 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
       contentType = "text/tab-separated-values"
     )
 
+    # Download FASTA sequences
+    output$download_fasta <- downloadHandler(
+      filename = function() {
+        paste0("specimens_sequences_", format(Sys.time(), "%Y%m%d_%H%M"), ".fasta")
+      },
+      content = function(file) {
+        data <- rv$filtered_data
+        if (is.null(data) || nrow(data) == 0) {
+          writeLines("", file)
+          return()
+        }
+
+        # Filter to specimens with sequences
+        if (!"nuc" %in% names(data)) {
+          writeLines("", file)
+          showNotification("No sequence data available", type = "warning")
+          return()
+        }
+
+        seq_data <- data[!is.na(data$nuc) & data$nuc != "", ]
+        if (nrow(seq_data) == 0) {
+          writeLines("", file)
+          showNotification("No sequences found", type = "warning")
+          return()
+        }
+
+        # Write FASTA with header format >processid|identification
+        con <- file(file, "w")
+        on.exit(close(con))
+        for (i in seq_len(nrow(seq_data))) {
+          pid <- seq_data$processid[i]
+          ident <- if ("identification" %in% names(seq_data)) {
+            seq_data$identification[i]
+          } else {
+            seq_data$species[i]
+          }
+          ident <- ifelse(is.na(ident) || ident == "", "Unknown", ident)
+          header <- sprintf(">%s|%s", pid, ident)
+          writeLines(c(header, seq_data$nuc[i]), con)
+        }
+
+        logger$info("Downloaded FASTA file", list(sequences = nrow(seq_data)))
+      },
+      contentType = "text/plain"
+    )
+
     # Calculate metrics helper
     calculate_metrics <- function(data) {
       list(

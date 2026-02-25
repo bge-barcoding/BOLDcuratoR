@@ -86,7 +86,7 @@ format_specimen_table <- function(data, ns = NULL,
     ),
     extensions = c('FixedColumns', 'Buttons'),
     fixedColumns = list(
-      left = 3
+      left = 4
     ),
     # Add server-side processing parameters
     processing = FALSE,
@@ -98,14 +98,82 @@ format_specimen_table <- function(data, ns = NULL,
       search = ""
     ),
 
-    columnDefs = if (read_only) {
+    columnDefs = {
+      # Build link column definitions for processid, bin_uri, identification
+      link_col_defs <- list()
+
+      # processid link: https://portal.boldsystems.org/result?query=<ID>[ids]
+      if ("processid" %in% names(data)) {
+        link_col_defs <- c(link_col_defs, list(list(
+          targets = which(names(data) == "processid") - 1,
+          className = "dt-body-left",
+          width = "100px",
+          render = JS("
+            function(data, type, row) {
+              if (type === 'display' && data) {
+                var s = data.toString();
+                return '<div class=\"cell-content\" title=\"' + s.replace(/\\\"/g, '&quot;') + '\">' +
+                       '<a href=\"https://portal.boldsystems.org/result?query=' +
+                       encodeURIComponent(s) + '[ids]\" target=\"_blank\" rel=\"noopener\">' +
+                       s + '</a></div>';
+              }
+              return data;
+            }
+          ")
+        )))
+      }
+
+      # bin_uri link: https://portal.boldsystems.org/result?query=<BIN>[bin]
+      if ("bin_uri" %in% names(data)) {
+        link_col_defs <- c(link_col_defs, list(list(
+          targets = which(names(data) == "bin_uri") - 1,
+          className = "dt-body-left",
+          width = "100px",
+          render = JS("
+            function(data, type, row) {
+              if (type === 'display' && data) {
+                var s = data.toString();
+                return '<div class=\"cell-content\" title=\"' + s.replace(/\\\"/g, '&quot;') + '\">' +
+                       '<a href=\"https://portal.boldsystems.org/result?query=' +
+                       encodeURIComponent(s) + '[bin]\" target=\"_blank\" rel=\"noopener\">' +
+                       s + '</a></div>';
+              }
+              return data;
+            }
+          ")
+        )))
+      }
+
+      # identification (species) link: https://portal.boldsystems.org/result?query="<species>"[tax]
+      if ("identification" %in% names(data)) {
+        link_col_defs <- c(link_col_defs, list(list(
+          targets = which(names(data) == "identification") - 1,
+          className = "dt-body-left",
+          width = "100px",
+          render = JS("
+            function(data, type, row) {
+              if (type === 'display' && data) {
+                var s = data.toString();
+                return '<div class=\"cell-content\" title=\"' + s.replace(/\\\"/g, '&quot;') + '\">' +
+                       '<a href=\"https://portal.boldsystems.org/result?query=' +
+                       encodeURIComponent('\"' + s + '\"') + '[tax]\" target=\"_blank\" rel=\"noopener\">' +
+                       s + '</a></div>';
+              }
+              return data;
+            }
+          ")
+        )))
+      }
+
+      if (read_only) {
       # Read-only mode: plain text for annotation columns
-      list(
+      c(
+        list(
         # Selected column — display checkmark or empty
         list(
           targets = which(names(data) == "selected") - 1,
-          width = "40px",
-          className = 'dt-center fixed-col',
+          width = "30px",
+          className = 'dt-center fixed-col selected-col-narrow',
           orderable = TRUE,
           searchable = FALSE,
           render = JS("
@@ -171,15 +239,18 @@ format_specimen_table <- function(data, ns = NULL,
             }
           ")
         )
+        ),
+        link_col_defs
       )
     } else {
       # Interactive mode: checkboxes, dropdowns, editable fields
-      list(
+      c(
+        list(
         # Selected column
         list(
           targets = which(names(data) == "selected") - 1,
-          width = "40px",
-          className = 'dt-center fixed-col',
+          width = "30px",
+          className = 'dt-center fixed-col selected-col-narrow',
           orderable = FALSE,
           searchable = FALSE,
           render = JS("
@@ -271,7 +342,10 @@ format_specimen_table <- function(data, ns = NULL,
           }
         ")
         )
+        ),
+        link_col_defs
       )
+    }
     }
   )
 
@@ -639,11 +713,18 @@ get_table_css <- function() {
     max-width: 100px !important;
   }
 
+  /* Narrow selected column */
+  .selected-col-narrow {
+    width: 30px !important;
+    min-width: 30px !important;
+    max-width: 30px !important;
+  }
+
   /* Column-specific widths */
   .datatable td.selected-col {
-    width: 40px !important;
-    min-width: 40px !important;
-    max-width: 40px !important;
+    width: 30px !important;
+    min-width: 30px !important;
+    max-width: 30px !important;
   }
 
   .datatable td.flag-col {
@@ -722,6 +803,15 @@ get_table_css <- function() {
     border-color: #80bdff !important;
     outline: 0 !important;
     box-shadow: 0 0 0 0.2rem rgba(0,123,255,.25) !important;
+  }
+
+  /* Clickable links in table cells */
+  .cell-content a {
+    color: #0366d6 !important;
+    text-decoration: none !important;
+  }
+  .cell-content a:hover {
+    text-decoration: underline !important;
   }
 
   /* Scrolling */
@@ -883,7 +973,7 @@ format_bin_content_table <- function(content_data) {
   display_cols <- intersect(required_cols, names(content_data))
   display_data <- content_data[, display_cols, drop = FALSE]
 
-  # Build columnDefs for truncation of countries column
+  # Build columnDefs for truncation of countries column and bin_uri links
   truncate_targets <- which(display_cols == "countries") - 1
   col_defs <- if (length(truncate_targets) > 0) {
     list(list(
@@ -900,6 +990,25 @@ format_bin_content_table <- function(content_data) {
     ))
   } else {
     list()
+  }
+
+  # Add clickable link for bin_uri column
+  bin_uri_target <- which(display_cols == "bin_uri") - 1
+  if (length(bin_uri_target) > 0) {
+    col_defs <- c(col_defs, list(list(
+      targets = bin_uri_target,
+      render = JS("
+        function(data, type, row) {
+          if (type === 'display' && data) {
+            var s = data.toString();
+            return '<a href=\"https://portal.boldsystems.org/result?query=' +
+                   encodeURIComponent(s) + '[bin]\" target=\"_blank\" rel=\"noopener\">' +
+                   s + '</a>';
+          }
+          return data;
+        }
+      ")
+    )))
   }
 
   bin_filename <- paste0("bin_analysis_", format(Sys.time(), "%Y%m%d_%H%M"))

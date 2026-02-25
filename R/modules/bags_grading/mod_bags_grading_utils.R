@@ -191,10 +191,32 @@ create_grade_tables <- function(organized, grade, ns, current_sel, current_flags
       )
 
       if (!is.null(dt)) {
+        caption <- generate_table_caption(grade, group_info)
+        # Unique ID for collapsible panel
+        collapse_id <- paste0("collapse_", grade, "_", i)
         div(
           class = "specimen-table-container mb-2",
-          h4(class = "table-title", generate_table_caption(grade, group_info)),
-          dt
+          # Collapsible header
+          tags$div(
+            class = "bags-collapsible-header",
+            style = "cursor: pointer; padding: 6px 10px; background-color: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px; margin-bottom: 2px; display: flex; align-items: center;",
+            onclick = sprintf(
+              "var el = document.getElementById('%s'); var icon = this.querySelector('.collapse-icon'); if (el.style.display === 'none') { el.style.display = 'block'; icon.className = 'collapse-icon fa fa-chevron-down'; } else { el.style.display = 'none'; icon.className = 'collapse-icon fa fa-chevron-right'; }",
+              collapse_id
+            ),
+            tags$i(class = "collapse-icon fa fa-chevron-down", style = "margin-right: 8px; font-size: 12px; width: 12px;"),
+            tags$strong(caption, style = "font-size: 13px;"),
+            tags$span(
+              style = "margin-left: auto; font-size: 11px; color: #6c757d;",
+              sprintf("%d specimens", nrow(prepared_data))
+            )
+          ),
+          # Collapsible body (expanded by default)
+          tags$div(
+            id = collapse_id,
+            style = "display: block;",
+            dt
+          )
         )
       }
 

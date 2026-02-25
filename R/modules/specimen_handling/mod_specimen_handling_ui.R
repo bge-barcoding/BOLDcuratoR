@@ -43,6 +43,10 @@ mod_specimen_handling_ui <- function(id) {
                    downloadButton(ns("download_curation_report"),
                                   "Download BOLD Curation Report",
                                   class = "btn-primary"
+                   ),
+                   downloadButton(ns("download_fasta"),
+                                  "Download FASTA",
+                                  class = "btn-success"
                    )
                  )
           )
