@@ -1,14 +1,31 @@
-
+# Working/draft files
 R/utils/table_utils working.R
 R/modules/state/state_manager_working.R
 R/utils/broken_table_utils.R
+
+# Development environment
 .Rproj.user
 .bold_api_key
 .RData
 .Rhistory
+
+# Database files (created at runtime)
 /data/sessions.sqlite
+/data/sessions.sqlite-wal
+/data/sessions.sqlite-shm
 /data/specimen_tracking.db
 /data/sessions
-data/sessions.sqlite-wal
-data/sessions.sqlite-shm
-.Rhistory
+
+# Runtime output directories
+/logs/
+/output/
+/temp/
+
+# renv library (packages restored per-machine, not committed)
+renv/library/
+renv/staging/
+renv/sandbox/
+renv/cellar/
+renv/local/
+renv/lock/
+renv/python/

@@ -1,0 +1,52 @@
+# Version control
+.git
+.gitignore
+.gitattributes
+.github
+
+# Development/IDE files
+.Rproj.user
+BOLDcurator.Rproj
+.RData
+.Rhistory
+
+# Development-only R files
+R/utils/table_utils working.R
+R/modules/state/state_manager_working.R
+R/utils/broken_table_utils.R
+
+# Tests (not needed at runtime)
+tests
+
+# Documentation and planning files
+CODEBASE_REVIEW.md
+IMPLEMENTATION_PLAN.md
+TODO.md
+example_log.md
+issues_from_other_branch.md
+README.md
+
+# One-off scripts and patches
+2024-11-22_v7_4_22.R
+assess_images.pl
+boldconnectr-fixes.patch
+test_boldconnectr.r
+
+# Sensitive files
+.bold_api_key
+
+# BOLDconnectR source (installed as package, not needed in bundle)
+BOLDconnectR-main
+
+# Session data (created at runtime)
+data/sessions.sqlite
+data/sessions.sqlite-wal
+data/sessions.sqlite-shm
+data/sessions
+
+# renv library (packages restored on server)
+renv/library
+renv/staging
+
+# rsconnect metadata
+rsconnect

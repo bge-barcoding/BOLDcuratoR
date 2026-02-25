@@ -1,79 +1,28 @@
-# First ensure R6 is available
-if (!require("R6", quietly = TRUE)) {
-  install.packages("R6")
-  if (!require("R6", quietly = TRUE)) {
-    stop("Failed to load critical package: R6")
-  }
-}
+# BOLDcuratoR/global.R
+# Global initialization — loads pre-installed packages and sets up runtime dirs.
+# Package installation is handled by renv::restore() before first run,
+# NOT at runtime (install calls break on managed Shiny servers).
 
-# Define required packages
-required_packages <- c(
-  # Core packages
-  "shiny",
-  "writexl",
-  "DT",
-  "htmlwidgets",
-  "shinydashboard",
-  "shinyjs",
-  "dplyr",
-  "shinycssloaders",
-  "tidyr",
-  "R6",
-  "logger",
-  "markdown",
-  "purrr",
-  "utils",
-  "remotes",
-  "devtools",
-  "jsonlite",
-  "httr",
-  "digest",
-
-  # Database packages
-  "DBI",
-  "RSQLite"
-)
-
-# Install missing packages function
-.install_packages <- function() {
-  tryCatch({
-    installed_pkgs <- installed.packages()[,"Package"]
-    missing_pkgs <- required_packages[!(required_packages %in% installed_pkgs)]
-
-    if(length(missing_pkgs) > 0) {
-      message("Installing missing packages: ", paste(missing_pkgs, collapse = ", "))
-      install.packages(missing_pkgs)
-    }
-    return(TRUE)
-  }, error = function(e) {
-    message("Error installing packages: ", e$message)
-    return(FALSE)
-  })
-}
-
-# Load packages with error handling
-.load_packages <- function() {
-  # Then load other packages
-  for(pkg in setdiff(required_packages, "R6")) {
-    if(!require(pkg, character.only = TRUE, quietly = TRUE)) {
-      stop(sprintf("Failed to load package: %s", pkg))
-    }
-  }
-}
-
-# Install BOLDconnectR if missing
-.install_boldconnectr <- function() {
-  if (!require("BOLDconnectR")) {
-    tryCatch({
-      devtools::install_github("boldsystems-central/BOLDconnectR")
-      return(TRUE)
-    }, error = function(e) {
-      message("Failed to install BOLDconnectR: ", e$message)
-      return(FALSE)
-    })
-  }
-  return(TRUE)
-}
+# Core packages
+library(R6)
+library(shiny)
+library(shinydashboard)
+library(shinyjs)
+library(shinycssloaders)
+library(DT)
+library(htmlwidgets)
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(logger)
+library(markdown)
+library(jsonlite)
+library(writexl)
+library(DBI)
+library(RSQLite)
+library(httr)
+library(digest)
+library(BOLDconnectR)
 
 # Create required directories
 .create_directories <- function() {
@@ -136,16 +85,6 @@ get_fallback_api_key <- function() {
 
 # Main initialization
 tryCatch({
-  # First install and load all required packages
-  if(!.install_packages()) {
-    stop("Package installation failed")
-  }
-  .load_packages()
-
-  if(!.install_boldconnectr()) {
-    stop("BOLDconnectR installation failed")
-  }
-
   # Create required directories
   .create_directories()
 
