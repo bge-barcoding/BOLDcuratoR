@@ -315,6 +315,11 @@ BinProcessor <- R6::R6Class(
 
 # Server Definition
 server <- function(input, output, session) {
+  # Initialize session database (shared across all Shiny workers via WAL mode)
+  session_db <- init_session_db("data/sessions.sqlite")
+  cleanup_old_sessions(max_age_days = 30, con = session_db)
+  onStop(function() { DBI::dbDisconnect(session_db) })
+
   # Initialize core components
   logging_manager <- LoggingManager$new()
   state <- StateManager$new(session, logging_manager)
@@ -339,6 +344,7 @@ server <- function(input, output, session) {
   data_import <- mod_data_import_server(
     "data_import",
     state = state,
+    session_db = session_db,
     logger = logging_manager
   )
 
@@ -668,7 +674,7 @@ server <- function(input, output, session) {
 
     tryCatch({
       sid <- get_session_id(store)
-      save_session_state(sid, store)
+      save_session_state(sid, store, con = session_db)
       logging_manager$log_action(
         session_id = sid,
         action_type = "auto_save",
@@ -691,7 +697,7 @@ server <- function(input, output, session) {
       store <- session_snapshot$store
       if (!is.null(store) && !is.null(store$specimen_data)) {
         sid <- get_session_id(store)
-        save_session_state(sid, store)
+        save_session_state(sid, store, con = session_db)
         logging_manager$log_action(
           session_id = sid,
           action_type = "session_saved",
@@ -720,7 +726,7 @@ server <- function(input, output, session) {
     req(session_id)
 
     tryCatch({
-      saved <- load_session_state(session_id)
+      saved <- load_session_state(session_id, con = session_db)
       if (!is.null(saved)) {
         for (key in names(saved)) {
           if (key != "metadata" && !is.null(saved[[key]])) {
