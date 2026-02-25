@@ -1,8 +1,5 @@
 # BOLDcuratoR/app.R
 
-# debugging mode - delete later
-options(shiny.error = browser)
-
 # Source global configuration
 source("global.R")
 
@@ -759,21 +756,6 @@ server <- function(input, output, session) {
     })
   })
 }
-
-# Create required directories
-for (dir in c("data", "logs", "output")) {
-  if (!dir.exists(dir)) {
-    dir.create(dir)
-  }
-}
-
-# Set global options
-options(
-  shiny.maxRequestSize = 30*1024^2,
-  timeout = 300,
-  scipen = 999,
-  shiny.sanitize.errors = FALSE
-)
 
 # Run application
 shinyApp(ui = ui, server = server)
