@@ -1,64 +1,126 @@
 # R/utils/session_persistence.R
+# SQLite-backed session persistence for BOLDcuratoR.
+# Stores session metadata in a `sessions` table and serialised R objects
+# (data frames, lists) as BLOBs in a `session_data` table.
 
 # Null-coalescing helper (base R %||% requires R >= 4.4.0)
 .null_default <- function(x, default) {
   if (is.null(x)) default else x
 }
 
-#' Save session state to disk
+#' Initialise (or open) the session database
+#'
+#' Creates the SQLite file and tables if they don't already exist.
+#' Uses WAL journal mode for safe concurrent reads across Shiny workers.
+#'
+#' @param db_path Path to the SQLite file (default: "data/sessions.sqlite")
+#' @return A DBI connection object
+#' @export
+init_session_db <- function(db_path = "data/sessions.sqlite") {
+  dir.create(dirname(db_path), recursive = TRUE, showWarnings = FALSE)
+  con <- DBI::dbConnect(RSQLite::SQLite(), db_path)
+  DBI::dbExecute(con, "PRAGMA journal_mode=WAL")
+  DBI::dbExecute(con, "PRAGMA foreign_keys=ON")
+
+  DBI::dbExecute(con, "
+    CREATE TABLE IF NOT EXISTS sessions (
+      session_id     TEXT PRIMARY KEY,
+      created_at     TEXT NOT NULL,
+      updated_at     TEXT NOT NULL,
+      user_email     TEXT DEFAULT '',
+      user_name      TEXT DEFAULT '',
+      user_orcid     TEXT DEFAULT '',
+      specimen_count INTEGER DEFAULT 0,
+      species_count  INTEGER DEFAULT 0,
+      search_taxa    TEXT DEFAULT ''
+    )
+  ")
+
+  DBI::dbExecute(con, "
+    CREATE TABLE IF NOT EXISTS session_data (
+      session_id TEXT NOT NULL,
+      key        TEXT NOT NULL,
+      value      BLOB NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (session_id, key),
+      FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+    )
+  ")
+
+  con
+}
+
+#' Save session state to database
 #'
 #' Persists specimen data, BAGS grades, BIN analysis, annotations, and
-#' metadata to a session directory under data/sessions/.
+#' metadata into the SQLite session database.
 #'
 #' @param session_id Unique session identifier
-#' @param store The state store (reactiveValues accessed via isolate)
-#' @param session_dir Base directory for sessions (default: "data/sessions")
+#' @param store The state store (reactiveValues accessed via isolate, or a plain list)
+#' @param con DBI connection returned by \code{init_session_db}
 #' @return TRUE on success, FALSE on failure
 #' @export
-save_session_state <- function(session_id, store, session_dir = "data/sessions") {
+save_session_state <- function(session_id, store, con) {
   tryCatch({
-    dir_path <- file.path(session_dir, session_id)
-    dir.create(dir_path, recursive = TRUE, showWarnings = FALSE)
+    now <- format(Sys.time(), "%Y-%m-%dT%H:%M:%S")
 
-    # Save large data frames as RDS
-    if (!is.null(store$specimen_data)) {
-      saveRDS(store$specimen_data, file.path(dir_path, "specimen_data.rds"))
-    }
-    if (!is.null(store$bags_grades)) {
-      saveRDS(store$bags_grades, file.path(dir_path, "bags_grades.rds"))
-    }
-    if (!is.null(store$bin_analysis)) {
-      saveRDS(store$bin_analysis, file.path(dir_path, "bin_analysis.rds"))
-    }
-
-    # Save annotations as RDS
-    saveRDS(store$selected_specimens, file.path(dir_path, "selected_specimens.rds"))
-    saveRDS(store$specimen_flags, file.path(dir_path, "specimen_flags.rds"))
-    saveRDS(store$specimen_curator_notes, file.path(dir_path, "specimen_curator_notes.rds"))
-    saveRDS(store$specimen_updated_ids, file.path(dir_path, "specimen_updated_ids.rds"))
-
-    # Save session metadata as JSON
-    meta <- list(
-      session_id = session_id,
-      updated_at = format(Sys.time(), "%Y-%m-%dT%H:%M:%S"),
-      search_taxa = store$search_taxa,
-      specimen_count = if (!is.null(store$specimen_data)) nrow(store$specimen_data) else 0,
-      species_count = if (!is.null(store$specimen_data)) length(unique(store$specimen_data$species)) else 0,
-      user_email = if (!is.null(store$user_info)) store$user_info$email else NULL,
-      user_name = if (!is.null(store$user_info)) store$user_info$name else NULL,
-      user_orcid = if (!is.null(store$user_info)) store$user_info$orcid else NULL
+    # ----- metadata row (UPSERT) -----
+    existing <- DBI::dbGetQuery(
+      con,
+      "SELECT created_at FROM sessions WHERE session_id = ?",
+      params = list(session_id)
     )
+    created_at <- if (nrow(existing) > 0) existing$created_at[1] else now
 
-    # Write created_at only on first save
-    meta_file <- file.path(dir_path, "session_meta.json")
-    if (file.exists(meta_file)) {
-      existing <- tryCatch(jsonlite::fromJSON(meta_file), error = function(e) list())
-      meta$created_at <- existing$created_at
+    search_taxa_json <- if (!is.null(store$search_taxa)) {
+      jsonlite::toJSON(store$search_taxa, auto_unbox = TRUE)
     } else {
-      meta$created_at <- meta$updated_at
+      ""
     }
 
-    jsonlite::write_json(meta, meta_file, auto_unbox = TRUE, pretty = TRUE)
+    DBI::dbExecute(con, "
+      INSERT INTO sessions (session_id, created_at, updated_at,
+                            user_email, user_name, user_orcid,
+                            specimen_count, species_count, search_taxa)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(session_id) DO UPDATE SET
+        updated_at     = excluded.updated_at,
+        user_email     = excluded.user_email,
+        user_name      = excluded.user_name,
+        user_orcid     = excluded.user_orcid,
+        specimen_count = excluded.specimen_count,
+        species_count  = excluded.species_count,
+        search_taxa    = excluded.search_taxa
+    ", params = list(
+      session_id,
+      created_at,
+      now,
+      .null_default(if (!is.null(store$user_info)) store$user_info$email else NULL, ""),
+      .null_default(if (!is.null(store$user_info)) store$user_info$name else NULL, ""),
+      .null_default(if (!is.null(store$user_info)) store$user_info$orcid else NULL, ""),
+      if (!is.null(store$specimen_data)) nrow(store$specimen_data) else 0L,
+      if (!is.null(store$specimen_data)) length(unique(store$specimen_data$species)) else 0L,
+      search_taxa_json
+    ))
+
+    # ----- data blobs -----
+    data_keys <- c("specimen_data", "bags_grades", "bin_analysis",
+                   "selected_specimens", "specimen_flags",
+                   "specimen_curator_notes", "specimen_updated_ids")
+
+    for (key in data_keys) {
+      value <- store[[key]]
+      if (is.null(value)) next
+
+      blob <- list(serialize(value, NULL))
+      DBI::dbExecute(con, "
+        INSERT INTO session_data (session_id, key, value, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(session_id, key) DO UPDATE SET
+          value      = excluded.value,
+          updated_at = excluded.updated_at
+      ", params = list(session_id, key, blob, now))
+    }
 
     TRUE
   }, error = function(e) {
@@ -67,42 +129,42 @@ save_session_state <- function(session_id, store, session_dir = "data/sessions")
   })
 }
 
-#' Load session state from disk
+#' Load session state from database
 #'
 #' @param session_id Session ID to restore
-#' @param session_dir Base directory for sessions
-#' @return Named list of state components, or NULL on failure
+#' @param con DBI connection returned by \code{init_session_db}
+#' @return Named list of state components, or NULL if session not found
 #' @export
-load_session_state <- function(session_id, session_dir = "data/sessions") {
-  dir_path <- file.path(session_dir, session_id)
-  if (!dir.exists(dir_path)) return(NULL)
+load_session_state <- function(session_id, con) {
+  # Check session exists
+  meta <- DBI::dbGetQuery(
+    con,
+    "SELECT * FROM sessions WHERE session_id = ?",
+    params = list(session_id)
+  )
+  if (nrow(meta) == 0) return(NULL)
 
   tryCatch({
     state <- list()
 
-    rds_files <- list(
-      specimen_data = "specimen_data.rds",
-      bags_grades = "bags_grades.rds",
-      bin_analysis = "bin_analysis.rds",
-      selected_specimens = "selected_specimens.rds",
-      specimen_flags = "specimen_flags.rds",
-      specimen_curator_notes = "specimen_curator_notes.rds",
-      specimen_updated_ids = "specimen_updated_ids.rds"
+    # Deserialise data blobs
+    rows <- DBI::dbGetQuery(
+      con,
+      "SELECT key, value FROM session_data WHERE session_id = ?",
+      params = list(session_id)
     )
 
-    for (key in names(rds_files)) {
-      path <- file.path(dir_path, rds_files[[key]])
-      if (file.exists(path)) {
-        state[[key]] <- readRDS(path)
-      }
+    for (i in seq_len(nrow(rows))) {
+      blob <- rows$value[[i]]
+      state[[ rows$key[i] ]] <- unserialize(blob)
     }
 
-    # Load metadata
-    meta_file <- file.path(dir_path, "session_meta.json")
-    if (file.exists(meta_file)) {
-      state$metadata <- jsonlite::fromJSON(meta_file)
-      state$search_taxa <- state$metadata$search_taxa
-    }
+    # Attach metadata
+    state$metadata <- as.list(meta[1, ])
+    state$search_taxa <- tryCatch(
+      jsonlite::fromJSON(meta$search_taxa[1]),
+      error = function(e) meta$search_taxa[1]
+    )
 
     state
   }, error = function(e) {
@@ -113,10 +175,10 @@ load_session_state <- function(session_id, session_dir = "data/sessions") {
 
 #' List saved sessions
 #'
-#' @param session_dir Base directory for sessions
+#' @param con DBI connection returned by \code{init_session_db}
 #' @return Data frame of saved sessions with metadata, or empty data frame
 #' @export
-list_saved_sessions <- function(session_dir = "data/sessions") {
+list_saved_sessions <- function(con) {
   empty_df <- data.frame(
     session_id = character(0),
     created_at = character(0),
@@ -129,64 +191,47 @@ list_saved_sessions <- function(session_dir = "data/sessions") {
     stringsAsFactors = FALSE
   )
 
-  if (!dir.exists(session_dir)) return(empty_df)
-
-  session_dirs <- list.dirs(session_dir, recursive = FALSE, full.names = FALSE)
-  if (length(session_dirs) == 0) return(empty_df)
-
-  sessions <- lapply(session_dirs, function(sid) {
-    meta_file <- file.path(session_dir, sid, "session_meta.json")
-    if (!file.exists(meta_file)) return(NULL)
-
-    tryCatch({
-      meta <- jsonlite::fromJSON(meta_file)
-      data.frame(
-        session_id = sid,
-        created_at = .null_default(meta$created_at, ""),
-        updated_at = .null_default(meta$updated_at, ""),
-        user_email = .null_default(meta$user_email, ""),
-        user_name = .null_default(meta$user_name, ""),
-        user_orcid = .null_default(meta$user_orcid, ""),
-        specimen_count = .null_default(meta$specimen_count, 0L),
-        species_count = .null_default(meta$species_count, 0L),
-        stringsAsFactors = FALSE
-      )
-    }, error = function(e) NULL)
+  tryCatch({
+    result <- DBI::dbGetQuery(con, "
+      SELECT session_id, created_at, updated_at,
+             user_email, user_name, user_orcid,
+             specimen_count, species_count
+      FROM sessions
+      ORDER BY updated_at DESC
+    ")
+    if (nrow(result) == 0) return(empty_df)
+    result
+  }, error = function(e) {
+    warning(sprintf("Failed to list sessions: %s", e$message))
+    empty_df
   })
-
-  sessions <- sessions[!sapply(sessions, is.null)]
-  if (length(sessions) == 0) return(empty_df)
-
-  result <- do.call(rbind, sessions)
-  result[order(result$updated_at, decreasing = TRUE), ]
 }
 
 #' Filter saved sessions by user identifiers
 #'
 #' Matches sessions where ANY of the provided identifiers (email, ORCID, name)
-#' match the session metadata. This allows users to find their previous sessions
-#' regardless of which identifier they used when creating them.
+#' match the session metadata.  Also checks whether the session_id is a hash
+#' of the identifier (the app hashes user IDs into deterministic session IDs).
 #'
 #' @param user_email Optional email to match
 #' @param user_orcid Optional ORCID to match
 #' @param user_name Optional name to match
-#' @param session_dir Base directory for sessions
-#' @return Data frame of matching sessions, or all sessions if no identifiers provided
+#' @param con DBI connection returned by \code{init_session_db}
+#' @return Data frame of matching sessions
 #' @export
 filter_sessions_by_user <- function(user_email = NULL, user_orcid = NULL,
-                                     user_name = NULL, session_dir = "data/sessions") {
-  all_sessions <- list_saved_sessions(session_dir)
+                                     user_name = NULL, con) {
+  all_sessions <- list_saved_sessions(con)
   if (nrow(all_sessions) == 0) return(all_sessions)
 
-  # If no identifiers provided, return empty
   has_email <- !is.null(user_email) && nchar(trimws(user_email)) > 0
   has_orcid <- !is.null(user_orcid) && nchar(trimws(user_orcid)) > 0
   has_name  <- !is.null(user_name) && nchar(trimws(user_name)) > 0
 
-  if (!has_email && !has_orcid && !has_name) return(all_sessions[0, , drop = FALSE])
+  if (!has_email && !has_orcid && !has_name) {
+    return(all_sessions[0, , drop = FALSE])
+  }
 
-  # Match on any identifier (OR logic) — checks both the metadata
-  # fields AND the session_id (which is now a hash of the identifier).
   matches <- rep(FALSE, nrow(all_sessions))
 
   if (has_email) {
@@ -214,24 +259,22 @@ filter_sessions_by_user <- function(user_email = NULL, user_orcid = NULL,
 #' Clean up old sessions beyond a maximum age
 #'
 #' @param max_age_days Maximum age in days before a session is deleted
-#' @param session_dir Base directory for sessions
+#' @param con DBI connection returned by \code{init_session_db}
 #' @return Number of sessions cleaned up
 #' @export
-cleanup_old_sessions <- function(max_age_days = 30, session_dir = "data/sessions") {
-  sessions <- list_saved_sessions(session_dir)
-  if (nrow(sessions) == 0) return(0)
-
-  cutoff <- Sys.time() - as.difftime(max_age_days, units = "days")
-  old_sessions <- sessions[as.POSIXct(sessions$updated_at) < cutoff, ]
-
-  removed <- 0
-  for (sid in old_sessions$session_id) {
-    dir_path <- file.path(session_dir, sid)
-    if (dir.exists(dir_path)) {
-      unlink(dir_path, recursive = TRUE)
-      removed <- removed + 1
-    }
-  }
-
-  removed
+cleanup_old_sessions <- function(max_age_days = 30, con) {
+  tryCatch({
+    cutoff <- format(Sys.time() - as.difftime(max_age_days, units = "days"),
+                     "%Y-%m-%dT%H:%M:%S")
+    # CASCADE foreign key deletes session_data rows automatically
+    result <- DBI::dbExecute(
+      con,
+      "DELETE FROM sessions WHERE updated_at < ?",
+      params = list(cutoff)
+    )
+    result
+  }, error = function(e) {
+    warning(sprintf("Failed to cleanup sessions: %s", e$message))
+    0
+  })
 }

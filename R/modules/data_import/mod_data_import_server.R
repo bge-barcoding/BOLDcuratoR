@@ -3,9 +3,10 @@
 #' Server Module for Data Import
 #' @param id The module ID
 #' @param state State management instance
+#' @param session_db DBI connection to the session SQLite database
 #' @param logger Logger instance
 #' @export
-mod_data_import_server <- function(id, state, logger = NULL) {
+mod_data_import_server <- function(id, state, session_db, logger = NULL) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
 
@@ -17,7 +18,8 @@ mod_data_import_server <- function(id, state, logger = NULL) {
       user_sessions <- filter_sessions_by_user(
         user_email = user_info$email,
         user_orcid = user_info$orcid,
-        user_name  = user_info$name
+        user_name  = user_info$name,
+        con        = session_db
       )
       user_sessions
     })

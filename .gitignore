@@ -6,4 +6,5 @@ R/utils/broken_table_utils.R
 .bold_api_key
 .RData
 .Rhistory
-/data/sessions
+/data/sessions.sqlite
+/data/specimen_tracking.db
