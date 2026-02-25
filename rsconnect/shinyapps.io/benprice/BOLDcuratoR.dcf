@@ -1,0 +1,13 @@
+name: BOLDcuratoR
+title: BOLDcuratoR
+username: benprice
+account: benprice
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 16754881
+bundleId:
+url: https://benprice.shinyapps.io/BOLDcuratoR/
+version: 1
+asMultiple: FALSE
+asStatic: FALSE
+ignoredFiles: .bold_api_key|.gitattributes|.github/workflows/test.yml|2024-11-22_v7_4_22.R|about.md|assess_images.pl|boldconnectr-fixes.patch|CODEBASE_REVIEW.md|DESCRIPTION|example_log.md|IMPLEMENTATION_PLAN.md|issues_from_other_branch.md|test_boldconnectr.r|TODO.md|BOLDconnectR-main
