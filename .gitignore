@@ -9,3 +9,6 @@ R/utils/broken_table_utils.R
 /data/sessions.sqlite
 /data/specimen_tracking.db
 /data/sessions
+data/sessions.sqlite-wal
+data/sessions.sqlite-shm
+.Rhistory
