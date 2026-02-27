@@ -85,16 +85,11 @@ mod_data_import_server <- function(id, state, session_db, logger = NULL) {
       store$processing$progress
     })
 
-    # Reactive for selected countries
-    selected_countries <- reactive({
-      countries <- NULL
-
-      if (!is.null(input$countries) && nchar(input$countries) > 0) {
-        countries <- unlist(strsplit(input$countries, "\n"))
-        countries <- trimws(countries[nchar(countries) > 0])
-      }
-
-      unique(countries)
+    # Countries derived from the continent checkbox selection
+    selected_continent_countries <- reactive({
+      continents <- input$continent_filter
+      if (is.null(continents) || length(continents) == 0) return(NULL)
+      unique(unlist(CONTINENT_COUNTRIES[continents]))
     })
 
     # Validate search parameters
@@ -102,8 +97,8 @@ mod_data_import_server <- function(id, state, session_db, logger = NULL) {
       total_length <- sum(
         nchar(input$taxa_input),
         nchar(input$dataset_codes),
-        nchar(input$project_codes),
-        sum(nchar(selected_countries()))
+        nchar(input$project_codes)
+        # continent_countries is applied post-download; adds no URL length
       )
 
       if (total_length > 1800) {
@@ -113,7 +108,7 @@ mod_data_import_server <- function(id, state, session_db, logger = NULL) {
         shinyjs::hide(id = "url_warning")
       }
 
-      search_params(prepare_search_params(input, selected_countries()))
+      search_params(prepare_search_params(input, selected_continent_countries()))
     })
 
     # Form submission handler
@@ -143,10 +138,10 @@ mod_data_import_server <- function(id, state, session_db, logger = NULL) {
 
       # Log search attempt
       logger$info("Starting BOLD search", list(
-        taxa = input$taxa_input,
-        datasets = input$dataset_codes,
-        projects = input$project_codes,
-        countries = length(selected_countries())
+        taxa       = input$taxa_input,
+        datasets   = input$dataset_codes,
+        projects   = input$project_codes,
+        continents = input$continent_filter
       ))
 
       withProgress(message = "Searching BOLD database", value = 0, {
@@ -201,13 +196,57 @@ mod_data_import_server <- function(id, state, session_db, logger = NULL) {
             setProgress(0.40, detail = sprintf(
               "Searching %d taxon/taxa...", length(params$taxonomy)))
 
-            taxonomy_specimens <- process_taxonomy_search(
-              params$taxonomy,
-              params$geography
-            )
+            taxonomy_specimens <- process_taxonomy_search(params$taxonomy)
 
             if (!is.null(taxonomy_specimens)) {
               combined_specimens <- merge_specimens(combined_specimens, taxonomy_specimens)
+            }
+          }
+
+          # --- Phase 3.5: Continent filtering (pre-BIN expansion) ---
+          # Filter downloaded records to selected continents before deriving the
+          # BIN set, so BIN expansion only fetches BINs observed in the target region.
+          # BIN expansion itself remains global (needed for concordance analysis).
+          if (!is.null(params$continent_countries) && length(params$continent_countries) > 0) {
+            if (!is.null(combined_specimens) && nrow(combined_specimens) > 0) {
+              before_count <- nrow(combined_specimens)
+
+              setProgress(0.70, detail = sprintf(
+                "Filtering %d records to %s...",
+                before_count,
+                paste(params$continents, collapse = ", ")
+              ))
+
+              combined_specimens <- filter_specimens_by_continent(
+                combined_specimens,
+                params$continent_countries
+              )
+
+              after_count <- nrow(combined_specimens)
+
+              logger$info("Continent filtering applied", list(
+                continents          = params$continents,
+                countries_in_filter = length(params$continent_countries),
+                records_before      = before_count,
+                records_after       = after_count,
+                records_removed     = before_count - after_count
+              ))
+
+              if (nrow(combined_specimens) == 0) {
+                stop(sprintf(
+                  "No specimens found in the selected continent(s) (%s) after filtering. %d records were removed. Try broadening your geographic selection.",
+                  paste(params$continents, collapse = ", "),
+                  before_count
+                ))
+              }
+
+              showNotification(
+                sprintf(
+                  "Continent filter applied: %d of %d records retained",
+                  after_count, before_count
+                ),
+                type = "message"
+              )
             }
           }
 
@@ -436,11 +475,10 @@ mod_data_import_server <- function(id, state, session_db, logger = NULL) {
     # entire batch to fail.  Genus names are title-cased because the
     # BOLD preprocessor does an exact-match comparison.
     #
-    # When geography is provided, countries are batched into groups
-    # of 10 to avoid URL length issues (HTTP 422 errors).  Each
-    # taxon × country-batch combination is searched independently so
-    # a single country returning no results doesn't break the search.
-    process_taxonomy_search <- function(taxonomy, geography) {
+    # No geography filter is passed to the API — continent filtering is
+    # applied post-download (Phase 3.5) to avoid HTTP 422 errors that
+    # occur when any country in the list has no records for the taxon.
+    process_taxonomy_search <- function(taxonomy) {
       tryCatch({
         # Get API key from state
         user_info <- state$get_store()$user_info
@@ -450,14 +488,6 @@ mod_data_import_server <- function(id, state, session_db, logger = NULL) {
 
         # Set API key for request
         BOLDconnectR::bold.apikey(user_info$bold_api_key)
-
-        # Batch countries into groups of 10 to avoid URL length issues
-        country_batch_size <- 10
-        if (!is.null(geography) && length(geography) > 0) {
-          geo_batches <- split(geography, ceiling(seq_along(geography) / country_batch_size))
-        } else {
-          geo_batches <- list(NULL)  # Single batch with no geography filter
-        }
 
         # Search each taxon independently, collecting process IDs.
         # Progress: 40% – 60% for the public search, 60% – 70% for full fetch.
@@ -471,38 +501,19 @@ mod_data_import_server <- function(id, state, session_db, logger = NULL) {
           setProgress(pct, detail = sprintf(
             "Searching taxon %d/%d: %s", idx, n_taxa, taxon))
 
-          # Search across all country batches for this taxon
-          taxon_results <- lapply(geo_batches, function(geo_batch) {
-            geo_arg <- if (!is.null(geo_batch)) as.list(geo_batch) else NULL
-
-            tryCatch({
-              res <- BOLDconnectR::bold.public.search(
-                taxonomy = list(taxon),
-                geography = geo_arg
-              )
-              if (!is.null(res) && nrow(res) > 0) {
-                logger$info(sprintf("Found %d records for '%s' (countries batch: %d)",
-                                    nrow(res), taxon,
-                                    if (!is.null(geo_batch)) length(geo_batch) else 0))
-                res
-              } else {
-                NULL
-              }
-            }, error = function(e) {
-              logger$warn(sprintf("Taxon search failed for '%s' (country batch): %s",
-                                  taxon, e$message))
+          tryCatch({
+            res <- BOLDconnectR::bold.public.search(taxonomy = list(taxon))
+            if (!is.null(res) && nrow(res) > 0) {
+              logger$info(sprintf("Found %d records for '%s'", nrow(res), taxon))
+              res[!duplicated(res$processid), ]
+            } else {
+              logger$warn(sprintf("No records for taxon: %s", taxon))
               NULL
-            })
+            }
+          }, error = function(e) {
+            logger$warn(sprintf("Taxon search failed for '%s': %s", taxon, e$message))
+            NULL
           })
-
-          # Combine results from all country batches for this taxon
-          valid_batches <- Filter(Negate(is.null), taxon_results)
-          if (length(valid_batches) == 0) {
-            logger$warn(sprintf("No records for taxon: %s", taxon))
-            return(NULL)
-          }
-          combined <- do.call(rbind, valid_batches)
-          combined[!duplicated(combined$processid), ]
         })
 
         # Combine results, dropping NULLs
@@ -571,7 +582,7 @@ mod_data_import_server <- function(id, state, session_db, logger = NULL) {
       updateTextAreaInput(session, "taxa_input", value = "")
       updateTextAreaInput(session, "dataset_codes", value = "")
       updateTextAreaInput(session, "project_codes", value = "")
-      updateTextAreaInput(session, "countries", value = "")
+      updateCheckboxGroupInput(session, "continent_filter", selected = character(0))
 
       # Log action
       logger$info("Input fields cleared")
