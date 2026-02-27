@@ -76,8 +76,13 @@ mod_data_import_server <- function(id, state, session_db, logger = NULL) {
     })
 
     # Reactive Values
-    search_params <- reactiveVal(NULL)
+    search_params     <- reactiveVal(NULL)
     validation_status <- reactiveVal(list(valid = TRUE, messages = character()))
+
+    # Intermediate state held between Phase 1-3.5 and Phase 4-5 when the
+    # size check requires user confirmation before BIN expansion proceeds.
+    pending_specimens <- reactiveVal(NULL)
+    pending_params    <- reactiveVal(NULL)
 
     # Track search progress
     progress <- reactive({
@@ -128,6 +133,10 @@ mod_data_import_server <- function(id, state, session_db, logger = NULL) {
         showNotification(paste(validation$messages, collapse = "\n"), type = "error")
         return()
       }
+
+      # Clear any pending state from a previous run that was not confirmed
+      pending_specimens(NULL)
+      pending_params(NULL)
 
       # Initialize progress
       state$update_state("processing", list(
@@ -250,123 +259,53 @@ mod_data_import_server <- function(id, state, session_db, logger = NULL) {
             }
           }
 
-          # --- Phase 4: BIN expansion (70% – 90%) ---
+          # --- Phase 3.75: Size check (pre-BIN expansion) ---
+          # Count records and unique BINs in the filtered set. If either
+          # exceeds the configured threshold, pause and show a modal before
+          # starting BIN expansion (which can be very slow for large sets).
           if (!is.null(combined_specimens) && nrow(combined_specimens) > 0) {
-            bin_uris <- unique(combined_specimens$bin_uri[
+            n_records <- nrow(combined_specimens)
+            n_bins    <- length(unique(combined_specimens$bin_uri[
               !is.na(combined_specimens$bin_uri) & combined_specimens$bin_uri != ""
-            ])
+            ]))
 
-            if (length(bin_uris) > 0) {
-              logger$info("Starting BIN expansion", list(
-                initial_specimens = nrow(combined_specimens),
-                bins_to_expand = length(bin_uris)
+            user_info  <- state$get_store()$user_info
+            shared     <- is_shared_key(user_info)
+            over_limit <- (shared && (n_records > DOWNLOAD_LIMITS$SHARED_MAX_RECORDS ||
+                                        n_bins    > DOWNLOAD_LIMITS$SHARED_MAX_BINS)) ||
+                          (!shared && (n_records > DOWNLOAD_LIMITS$WARN_RECORDS ||
+                                         n_bins    > DOWNLOAD_LIMITS$WARN_BINS))
+
+            if (over_limit) {
+              logger$warn("Download size check triggered", list(
+                records = n_records, bins = n_bins, shared_key = shared
               ))
 
-              setProgress(0.70, detail = sprintf(
-                "Expanding BIN coverage (%d BINs, %d specimens so far)...",
-                length(bin_uris), nrow(combined_specimens)))
+              # Park intermediate results so Phase 4-5 can resume after confirmation
+              pending_specimens(combined_specimens)
+              pending_params(params)
 
-              # Ensure API key is set
-              user_info <- state$get_store()$user_info
-              if (!is.null(user_info) && !is.null(user_info$bold_api_key)) {
-                BOLDconnectR::bold.apikey(user_info$bold_api_key)
-              }
-
-              # Fetch in batches to avoid API limits
-              batch_size <- 50
-              bin_batches <- split(bin_uris, ceiling(seq_along(bin_uris) / batch_size))
-
-              for (batch_idx in seq_along(bin_batches)) {
-                batch <- bin_batches[[batch_idx]]
-
-                setProgress(
-                  0.70 + (batch_idx / length(bin_batches)) * 0.20,
-                  detail = sprintf(
-                    "Expanding BINs (batch %d/%d, %d specimens so far)...",
-                    batch_idx, length(bin_batches), nrow(combined_specimens)))
-
-                bin_specimens <- tryCatch({
-                  bold_fetch_with_retry(
-                    get_by = "bin_uris",
-                    identifiers = paste(batch, collapse = ",")
-                  )
-                }, error = function(e) {
-                  logger$warn("BIN batch fetch failed", list(
-                    batch = batch_idx,
-                    error = e$message
-                  ))
-                  NULL
-                })
-
-                if (!is.null(bin_specimens) && nrow(bin_specimens) > 0) {
-                  combined_specimens <- merge_specimens(combined_specimens, bin_specimens)
-                }
-              }
-
-              logger$info("BIN expansion complete", list(
-                bins_queried = length(bin_uris),
-                total_specimens = nrow(combined_specimens)
+              state$update_state("processing", list(
+                active  = FALSE,
+                progress = 70,
+                message = sprintf(
+                  "Awaiting confirmation — %s records, %s BINs",
+                  format(n_records, big.mark = ","),
+                  format(n_bins,    big.mark = ",")
+                )
               ))
+
+              if (shared) {
+                showModal(large_dataset_blocked_modal(n_records, n_bins))
+              } else {
+                showModal(large_dataset_confirm_modal(n_records, n_bins, ns))
+              }
+              return()  # Exit the tryCatch body cleanly; modal handles next step
             }
           }
 
-          # --- Phase 5: Processing (90% – 100%) ---
-          if (!is.null(combined_specimens) && nrow(combined_specimens) > 0) {
-            setProgress(0.90, detail = sprintf(
-              "Processing %d specimens...", nrow(combined_specimens)))
-
-            # Validate specimen data
-            validation <- validate_specimen_data(combined_specimens)
-            if (!validation$valid) {
-              logger$error("Specimen validation failed", validation$messages)
-              stop(paste("Invalid specimen data:",
-                         paste(validation$messages, collapse = "; ")))
-            }
-
-            # Process and update state
-            processed_data <- process_specimen_data(combined_specimens)
-            state$update_state("specimen_data", processed_data, validate_specimen_data)
-
-            # Persist the original taxa input groups for gap analysis.
-            # Each group is a character vector: c("valid name", "synonym1", ...).
-            # Falls back to wrapping each name in a list if groups aren't available.
-            if (!is.null(params$taxonomy_groups)) {
-              state$update_state("search_taxa", params$taxonomy_groups)
-            } else {
-              state$update_state("search_taxa", as.list(params$taxonomy))
-            }
-
-            # Clear previous analyses
-            state$update_state("bin_analysis", NULL)
-            state$update_state("bags_grades", NULL)
-            state$update_state("selected_specimens", list())
-
-            # Update completion status
-            setProgress(1.0, detail = sprintf(
-              "Done — %d specimens, %d species, %d BINs",
-              nrow(processed_data),
-              length(unique(processed_data$species[!is.na(processed_data$species)])),
-              length(unique(processed_data$bin_uri[!is.na(processed_data$bin_uri)]))))
-
-            state$update_state("processing", list(
-              active = FALSE,
-              progress = 100,
-              message = sprintf("Retrieved %d specimens successfully",
-                                nrow(processed_data))
-            ))
-
-            logger$info("Search completed successfully", list(
-              total_specimens = nrow(processed_data),
-              unique_species = length(unique(processed_data$species)),
-              unique_bins = length(unique(processed_data$bin_uri))
-            ))
-
-            showNotification(sprintf("Retrieved %d specimens", nrow(processed_data)),
-                             type = "message")
-          } else {
-            logger$warn("No specimens found matching criteria")
-            stop("No specimens found matching search criteria")
-          }
+          # Under the size limit (or no data yet): run Phase 4+5 now.
+          do_expansion_and_processing(combined_specimens, params)
 
         }, error = function(e) {
           # Update error state
@@ -393,6 +332,247 @@ mod_data_import_server <- function(id, state, session_db, logger = NULL) {
         })
       })
     })
+
+    # ── Size-check confirmation handlers ────────────────────────────────────────
+
+    # User confirmed they want to proceed despite the large dataset.
+    observeEvent(input$confirm_large_download, {
+      removeModal()
+
+      specimens     <- pending_specimens()
+      stored_params <- pending_params()
+
+      # Clear pending state immediately so a stale confirm cannot re-trigger
+      pending_specimens(NULL)
+      pending_params(NULL)
+
+      if (is.null(specimens)) {
+        showNotification(
+          "Session data expired. Please run the search again.",
+          type = "error"
+        )
+        state$update_state("processing", list(active = FALSE, progress = 0, message = NULL))
+        return()
+      }
+
+      logger$info("User confirmed large download", list(
+        records = nrow(specimens),
+        bins    = length(unique(specimens$bin_uri[!is.na(specimens$bin_uri)]))
+      ))
+
+      withProgress(message = "Expanding BINs", value = 0.70, {
+        tryCatch({
+          do_expansion_and_processing(specimens, stored_params)
+        }, error = function(e) {
+          logger$error("Expansion failed after confirmation", e$message)
+          state$update_state("error", list(
+            has_error = TRUE,
+            message   = paste("Error during BIN expansion:", e$message),
+            details   = list(timestamp = Sys.time()),
+            source    = "data_import"
+          ))
+          state$update_state("processing", list(active = FALSE, progress = 0, message = NULL))
+          showNotification(paste("Error during BIN expansion:", e$message), type = "error")
+        })
+      })
+    })
+
+    # User cancelled the large-download confirmation modal.
+    observeEvent(input$cancel_large_download, {
+      removeModal()
+      pending_specimens(NULL)
+      pending_params(NULL)
+      state$update_state("processing", list(active = FALSE, progress = 0, message = NULL))
+      logger$info("Large download cancelled by user")
+      showNotification("Download cancelled.", type = "message")
+    })
+
+    # ── Size-check helper functions ──────────────────────────────────────────────
+
+    # Returns TRUE if user_info$bold_api_key matches the shared/fallback key.
+    is_shared_key <- function(user_info) {
+      if (is.null(user_info$bold_api_key)) return(FALSE)
+      fallback <- get_fallback_api_key()
+      if (is.null(fallback)) return(FALSE)
+      identical(user_info$bold_api_key, fallback)
+    }
+
+    # Modal shown to personal-key users: explains the size and lets them confirm.
+    large_dataset_confirm_modal <- function(n_records, n_bins, ns) {
+      modalDialog(
+        title = tags$span(icon("exclamation-triangle"), " Large dataset — confirm to continue"),
+        tags$p(sprintf(
+          "The filtered dataset contains %s records across %s unique BINs.",
+          format(n_records, big.mark = ","),
+          format(n_bins,    big.mark = ",")
+        )),
+        tags$p("BIN expansion fetches all global records for each BIN and may take a very long time with this many BINs."),
+        tags$ul(
+          tags$li(sprintf("Records: %s  (warn threshold: %s)",
+                          format(n_records, big.mark = ","),
+                          format(DOWNLOAD_LIMITS$WARN_RECORDS, big.mark = ","))),
+          tags$li(sprintf("BINs to expand: %s  (warn threshold: %s)",
+                          format(n_bins, big.mark = ","),
+                          format(DOWNLOAD_LIMITS$WARN_BINS, big.mark = ",")))
+        ),
+        tags$p(tags$em("Consider narrowing your search (continent filter, fewer taxa) if this is unexpectedly large.")),
+        footer = tagList(
+          actionButton(ns("cancel_large_download"),  "Cancel",           class = "btn-default"),
+          actionButton(ns("confirm_large_download"), "Continue anyway",  class = "btn-warning")
+        ),
+        easyClose = FALSE
+      )
+    }
+
+    # Modal shown to shared-key users: hard stop, no confirm button.
+    large_dataset_blocked_modal <- function(n_records, n_bins) {
+      modalDialog(
+        title = tags$span(icon("ban"), " Download not permitted with shared key"),
+        tags$p(sprintf(
+          "The filtered dataset contains %s records across %s unique BINs.",
+          format(n_records, big.mark = ","),
+          format(n_bins,    big.mark = ",")
+        )),
+        tags$p(tags$strong(
+          "Large downloads cannot be run using the shared API key."
+        )),
+        tags$p("To proceed, either:"),
+        tags$ul(
+          tags$li("Use your own personal BOLD API key (enter it in the User Info panel), or"),
+          tags$li("Narrow your search — add a continent filter, fewer taxa, or use dataset/project codes.")
+        ),
+        tags$ul(
+          tags$li(sprintf("Records limit: %s",
+                          format(DOWNLOAD_LIMITS$SHARED_MAX_RECORDS, big.mark = ","))),
+          tags$li(sprintf("BINs limit: %s",
+                          format(DOWNLOAD_LIMITS$SHARED_MAX_BINS, big.mark = ",")))
+        ),
+        footer = modalButton("Close"),
+        easyClose = FALSE
+      )
+    }
+
+    # ── Phase 4+5 helper: BIN expansion → processing ────────────────────────────
+    # Called from the submit handler (under-limit path) and from the confirm
+    # handler (over-limit path after user approves).  Must be invoked from
+    # inside an active withProgress() block so setProgress() works correctly.
+
+    do_expansion_and_processing <- function(combined_specimens, params) {
+
+      # --- Phase 4: BIN expansion (70% – 90%) ---
+      if (!is.null(combined_specimens) && nrow(combined_specimens) > 0) {
+        bin_uris <- unique(combined_specimens$bin_uri[
+          !is.na(combined_specimens$bin_uri) & combined_specimens$bin_uri != ""
+        ])
+
+        if (length(bin_uris) > 0) {
+          logger$info("Starting BIN expansion", list(
+            initial_specimens = nrow(combined_specimens),
+            bins_to_expand    = length(bin_uris)
+          ))
+
+          setProgress(0.70, detail = sprintf(
+            "Expanding BIN coverage (%d BINs, %d specimens so far)...",
+            length(bin_uris), nrow(combined_specimens)))
+
+          # Ensure API key is set
+          user_info <- state$get_store()$user_info
+          if (!is.null(user_info) && !is.null(user_info$bold_api_key)) {
+            BOLDconnectR::bold.apikey(user_info$bold_api_key)
+          }
+
+          # Fetch in batches to avoid API limits
+          batch_size  <- 50
+          bin_batches <- split(bin_uris, ceiling(seq_along(bin_uris) / batch_size))
+
+          for (batch_idx in seq_along(bin_batches)) {
+            batch <- bin_batches[[batch_idx]]
+
+            setProgress(
+              0.70 + (batch_idx / length(bin_batches)) * 0.20,
+              detail = sprintf(
+                "Expanding BINs (batch %d/%d, %d specimens so far)...",
+                batch_idx, length(bin_batches), nrow(combined_specimens)))
+
+            bin_specimens <- tryCatch({
+              bold_fetch_with_retry(
+                get_by      = "bin_uris",
+                identifiers = paste(batch, collapse = ",")
+              )
+            }, error = function(e) {
+              logger$warn("BIN batch fetch failed", list(batch = batch_idx, error = e$message))
+              NULL
+            })
+
+            if (!is.null(bin_specimens) && nrow(bin_specimens) > 0) {
+              combined_specimens <- merge_specimens(combined_specimens, bin_specimens)
+            }
+          }
+
+          logger$info("BIN expansion complete", list(
+            bins_queried    = length(bin_uris),
+            total_specimens = nrow(combined_specimens)
+          ))
+        }
+      }
+
+      # --- Phase 5: Processing (90% – 100%) ---
+      if (!is.null(combined_specimens) && nrow(combined_specimens) > 0) {
+        setProgress(0.90, detail = sprintf(
+          "Processing %d specimens...", nrow(combined_specimens)))
+
+        # Validate specimen data
+        validation <- validate_specimen_data(combined_specimens)
+        if (!validation$valid) {
+          logger$error("Specimen validation failed", validation$messages)
+          stop(paste("Invalid specimen data:",
+                     paste(validation$messages, collapse = "; ")))
+        }
+
+        # Process and update state
+        processed_data <- process_specimen_data(combined_specimens)
+        state$update_state("specimen_data", processed_data, validate_specimen_data)
+
+        # Persist the original taxa input groups for gap analysis.
+        if (!is.null(params$taxonomy_groups)) {
+          state$update_state("search_taxa", params$taxonomy_groups)
+        } else {
+          state$update_state("search_taxa", as.list(params$taxonomy))
+        }
+
+        # Clear previous analyses
+        state$update_state("bin_analysis", NULL)
+        state$update_state("bags_grades", NULL)
+        state$update_state("selected_specimens", list())
+
+        # Update completion status
+        setProgress(1.0, detail = sprintf(
+          "Done — %d specimens, %d species, %d BINs",
+          nrow(processed_data),
+          length(unique(processed_data$species[!is.na(processed_data$species)])),
+          length(unique(processed_data$bin_uri[!is.na(processed_data$bin_uri)]))))
+
+        state$update_state("processing", list(
+          active   = FALSE,
+          progress = 100,
+          message  = sprintf("Retrieved %d specimens successfully", nrow(processed_data))
+        ))
+
+        logger$info("Search completed successfully", list(
+          total_specimens = nrow(processed_data),
+          unique_species  = length(unique(processed_data$species)),
+          unique_bins     = length(unique(processed_data$bin_uri))
+        ))
+
+        showNotification(
+          sprintf("Retrieved %d specimens", nrow(processed_data)),
+          type = "message"
+        )
+      } else {
+        logger$warn("No specimens found matching criteria")
+        stop("No specimens found matching search criteria")
+      }
+    }
 
     # Helper function to fetch specimens using BOLDconnectR.
     # Fetches each code individually so one failing code (e.g. private
