@@ -75,12 +75,18 @@ mod_data_import_ui <- function(id) {
                         )
                  ),
                  column(4,
-                        textAreaInput(ns("countries"),
-                                      "Countries (one per line):",
-                                      rows = 4,
-                                      placeholder = "Canada\nUnited States\nMexico"
+                        tags$label("Filter by continent (optional):"),
+                        checkboxGroupInput(
+                          ns("continent_filter"),
+                          label    = NULL,
+                          choices  = names(CONTINENT_COUNTRIES),
+                          selected = NULL
+                        ),
+                        tags$small(
+                          class = "text-muted",
+                          "Applied to downloaded records before BIN expansion. Leave blank to retrieve global records."
                         )
-               ),
+                 ),
 
                  div(
                    id = ns("url_warning"),
@@ -178,7 +184,7 @@ mod_data_import_ui <- function(id) {
             tags$ul(
               tags$li("Enter taxa names, one per line. Include synonyms separated by commas."),
               tags$li("Dataset codes should be in the format DS-XXXX"),
-              tags$li("Enter specific countries (one per line) for geographic filtering"),
+              tags$li("Select one or more continents to filter records geographically (applied after download, before BIN expansion)"),
               tags$li("Search results can be downloaded in CSV format"),
               tags$li("Clear results before starting a new search")
             )
