@@ -82,10 +82,10 @@ validate_data_import_input <- function(taxa_input, dataset_codes, project_codes,
 
 #' Prepare search parameters from input
 #' @param input Shiny input object
-#' @param selected_countries Vector of selected countries
+#' @param continent_countries Character vector of countries derived from selected continents
 #' @return List of search parameters
 #' @keywords internal
-prepare_search_params <- function(input, selected_countries) {
+prepare_search_params <- function(input, continent_countries) {
   params <- list()
 
   # Process taxa input.
@@ -127,9 +127,13 @@ prepare_search_params <- function(input, selected_countries) {
     }
   }
 
-  # Add geographic parameters
-  if (!is.null(selected_countries) && length(selected_countries) > 0) {
-    params$geography <- selected_countries
+  # Store continent-derived country list for post-download filtering.
+  # Continent names are also stored for logging purposes.
+  if (!is.null(continent_countries) && length(continent_countries) > 0) {
+    params$continent_countries <- continent_countries
+    params$continents <- names(CONTINENT_COUNTRIES)[
+      vapply(CONTINENT_COUNTRIES, function(cc) any(cc %in% continent_countries), logical(1))
+    ]
   }
 
   params
@@ -220,6 +224,28 @@ clean_geographic_input <- function(countries) {
   unique(countries)
 }
 
+#' Filter a specimen data frame to records from selected continents
+#'
+#' Retains only rows where `country.ocean` appears in the supplied list of
+#' countries. Records with NA country are excluded when a filter is active.
+#'
+#' @param specimens Data frame with a `country.ocean` column
+#' @param continent_countries Character vector of country names for the target continents
+#' @return Filtered data frame
+#' @keywords internal
+filter_specimens_by_continent <- function(specimens, continent_countries) {
+  if (is.null(continent_countries) || length(continent_countries) == 0) {
+    return(specimens)
+  }
+  if (is.null(specimens) || nrow(specimens) == 0) {
+    return(specimens)
+  }
+  specimens[
+    !is.na(specimens$country.ocean) &
+      specimens$country.ocean %in% continent_countries,
+  ]
+}
+
 #' Format error message
 #' @param message Error message text
 #' @param type Error type (error, warning, info)
@@ -246,9 +272,7 @@ calculate_query_length <- function(params) {
   if (!is.null(params$project_codes)) {
     total_length <- total_length + sum(nchar(params$project_codes))
   }
-  if (!is.null(params$geography)) {
-    total_length <- total_length + sum(nchar(params$geography))
-  }
+  # continent_countries is applied post-download and adds no URL length
 
   total_length
 }
@@ -340,9 +364,8 @@ format_search_params <- function(params) {
     parts <- c(parts, sprintf("Projects: %d",
                               length(params$project_codes)))
   }
-  if (!is.null(params$geography)) {
-    parts <- c(parts, sprintf("Countries: %d",
-                              length(params$geography)))
+  if (!is.null(params$continents)) {
+    parts <- c(parts, sprintf("Continents: %s", paste(params$continents, collapse = ", ")))
   }
 
   paste(parts, collapse = " | ")
