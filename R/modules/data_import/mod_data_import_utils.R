@@ -83,9 +83,10 @@ validate_data_import_input <- function(taxa_input, dataset_codes, project_codes,
 #' Prepare search parameters from input
 #' @param input Shiny input object
 #' @param continent_countries Character vector of countries derived from selected continents
+#' @param country_filter Character vector of explicitly listed countries (from textarea)
 #' @return List of search parameters
 #' @keywords internal
-prepare_search_params <- function(input, continent_countries) {
+prepare_search_params <- function(input, continent_countries, country_filter = NULL) {
   params <- list()
 
   # Process taxa input.
@@ -134,6 +135,11 @@ prepare_search_params <- function(input, continent_countries) {
     params$continents <- names(CONTINENT_COUNTRIES)[
       vapply(CONTINENT_COUNTRIES, function(cc) any(cc %in% continent_countries), logical(1))
     ]
+  }
+
+  # Store explicit country list (from the countries textarea) for post-download filtering.
+  if (!is.null(country_filter) && length(country_filter) > 0) {
+    params$country_filter <- country_filter
   }
 
   params
