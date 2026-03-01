@@ -97,6 +97,14 @@ mod_data_import_server <- function(id, state, session_db, logger = NULL) {
       unique(unlist(CONTINENT_COUNTRIES[continents]))
     })
 
+    # Explicit country list from the countries textarea (one per line)
+    selected_countries <- reactive({
+      raw <- input$countries
+      if (is.null(raw) || nchar(trimws(raw)) == 0) return(NULL)
+      countries <- trimws(unlist(strsplit(raw, "\n")))
+      unique(countries[nchar(countries) > 0])
+    })
+
     # Validate search parameters
     observe({
       total_length <- sum(
@@ -113,7 +121,7 @@ mod_data_import_server <- function(id, state, session_db, logger = NULL) {
         shinyjs::hide(id = "url_warning")
       }
 
-      search_params(prepare_search_params(input, selected_continent_countries()))
+      search_params(prepare_search_params(input, selected_continent_countries(), selected_countries()))
     })
 
     # Form submission handler
@@ -212,48 +220,57 @@ mod_data_import_server <- function(id, state, session_db, logger = NULL) {
             }
           }
 
-          # --- Phase 3.5: Continent filtering (pre-BIN expansion) ---
-          # Filter downloaded records to selected continents before deriving the
-          # BIN set, so BIN expansion only fetches BINs observed in the target region.
-          # BIN expansion itself remains global (needed for concordance analysis).
-          if (!is.null(params$continent_countries) && length(params$continent_countries) > 0) {
+          # --- Phase 3.5: Geographic filtering (pre-BIN expansion) ---
+          # Union of continent-derived countries and explicit country list.
+          # Applied to the downloaded records so BIN expansion only fetches
+          # BINs observed in the target region.
+          geo_filter <- unique(c(params$continent_countries, params$country_filter))
+
+          if (length(geo_filter) > 0) {
             if (!is.null(combined_specimens) && nrow(combined_specimens) > 0) {
               before_count <- nrow(combined_specimens)
 
+              # Build a readable description for the progress bar and error messages
+              filter_parts <- c(
+                if (length(params$continents) > 0)    paste(params$continents, collapse = ", "),
+                if (length(params$country_filter) > 0) sprintf(
+                  "%d specific countr%s",
+                  length(params$country_filter),
+                  if (length(params$country_filter) == 1) "y" else "ies"
+                )
+              )
+              filter_desc <- paste(Filter(Negate(is.null), filter_parts), collapse = " + ")
+
               setProgress(0.70, detail = sprintf(
-                "Filtering %d records to %s...",
-                before_count,
-                paste(params$continents, collapse = ", ")
+                "Filtering %d records to %s...", before_count, filter_desc
               ))
 
               combined_specimens <- filter_specimens_by_continent(
                 combined_specimens,
-                params$continent_countries
+                geo_filter
               )
 
               after_count <- nrow(combined_specimens)
 
-              logger$info("Continent filtering applied", list(
-                continents          = params$continents,
-                countries_in_filter = length(params$continent_countries),
-                records_before      = before_count,
-                records_after       = after_count,
-                records_removed     = before_count - after_count
+              logger$info("Geographic filtering applied", list(
+                continents         = params$continents,
+                specific_countries = length(params$country_filter),
+                total_filter_size  = length(geo_filter),
+                records_before     = before_count,
+                records_after      = after_count,
+                records_removed    = before_count - after_count
               ))
 
               if (nrow(combined_specimens) == 0) {
                 stop(sprintf(
-                  "No specimens found in the selected continent(s) (%s) after filtering. %d records were removed. Try broadening your geographic selection.",
-                  paste(params$continents, collapse = ", "),
-                  before_count
+                  "No specimens found after geographic filtering (%s). %d records were removed. Try broadening your geographic selection.",
+                  filter_desc, before_count
                 ))
               }
 
               showNotification(
-                sprintf(
-                  "Continent filter applied: %d of %d records retained",
-                  after_count, before_count
-                ),
+                sprintf("Geographic filter applied: %d of %d records retained",
+                        after_count, before_count),
                 type = "message"
               )
             }
@@ -760,8 +777,7 @@ mod_data_import_server <- function(id, state, session_db, logger = NULL) {
     # Clear input handler
     observeEvent(input$clear_input, {
       updateTextAreaInput(session, "taxa_input", value = "")
-      updateTextAreaInput(session, "dataset_codes", value = "")
-      updateTextAreaInput(session, "project_codes", value = "")
+      updateTextAreaInput(session, "countries", value = "")
       updateCheckboxGroupInput(session, "continent_filter", selected = character(0))
 
       # Log action
