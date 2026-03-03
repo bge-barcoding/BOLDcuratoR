@@ -41,25 +41,33 @@ SpecimenProcessor <- R6::R6Class(
           return(NULL)
         }
 
-        # Check image availability via BOLD API
-        private$logger$info("Checking image availability...")
-        validated <- tryCatch({
-          image_results <- check_specimen_images(
-            processids = validated$processid,
-            logger = private$logger
-          )
-          # Add has_image column to the data
-          validated$has_image <- image_results[validated$processid]
-          # Specimens not in the result default to FALSE
-          validated$has_image[is.na(validated$has_image)] <- FALSE
-          private$logger$info(sprintf("Image check: %d/%d specimens have images",
-                                      sum(validated$has_image), nrow(validated)))
-          validated
-        }, error = function(e) {
-          private$logger$warn(sprintf("Image check failed, defaulting to FALSE: %s", e$message))
-          validated$has_image <- FALSE
-          validated
-        })
+        # Check image availability via BOLD API (skip if already populated)
+        if ("has_image" %in% names(validated) &&
+            is.logical(validated$has_image) &&
+            !any(is.na(validated$has_image))) {
+          private$logger$info(sprintf(
+            "Image data already present, skipping API check (%d/%d have images)",
+            sum(validated$has_image), nrow(validated)))
+        } else {
+          private$logger$info("Checking image availability...")
+          validated <- tryCatch({
+            image_results <- check_specimen_images(
+              processids = validated$processid,
+              logger = private$logger
+            )
+            # Add has_image column to the data
+            validated$has_image <- image_results[validated$processid]
+            # Specimens not in the result default to FALSE
+            validated$has_image[is.na(validated$has_image)] <- FALSE
+            private$logger$info(sprintf("Image check: %d/%d specimens have images",
+                                        sum(validated$has_image), nrow(validated)))
+            validated
+          }, error = function(e) {
+            private$logger$warn(sprintf("Image check failed, defaulting to FALSE: %s", e$message))
+            validated$has_image <- FALSE
+            validated
+          })
+        }
 
         # Score specimens
         private$logger$info("Scoring specimens...")

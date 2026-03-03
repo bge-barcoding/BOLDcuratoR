@@ -257,4 +257,66 @@ describe("SpecimenProcessor", {
     expect_true(!is.null(metrics$avg_quality_score))
     expect_true(!is.null(metrics$rank_distribution))
   })
+
+  it("skips image API call when has_image column already exists", {
+    logger <- MockLogger$new()
+    validator <- SpecimenValidator$new(logger)
+    scorer <- SpecimenScorer$new(logger)
+    processor <- SpecimenProcessor$new(validator, scorer, logger)
+
+    specimens <- create_test_specimens()
+    specimens$has_image <- c(TRUE, FALSE, FALSE, TRUE)
+
+    result <- processor$process_specimens(specimens)
+
+    # Verify the existing has_image values are preserved
+    expect_equal(result$has_image[result$processid == "P1"], TRUE)
+    expect_equal(result$has_image[result$processid == "P2"], FALSE)
+    expect_equal(result$has_image[result$processid == "P4"], TRUE)
+
+    # Verify the log says "already present", not "Checking image availability"
+    skip_msgs <- Filter(function(m) grepl("already present", m$msg), logger$messages)
+    expect_true(length(skip_msgs) > 0)
+
+    check_msgs <- Filter(function(m) grepl("Checking image availability", m$msg), logger$messages)
+    expect_equal(length(check_msgs), 0)
+  })
+
+  it("runs image check when has_image column is absent", {
+    logger <- MockLogger$new()
+    validator <- SpecimenValidator$new(logger)
+    scorer <- SpecimenScorer$new(logger)
+    processor <- SpecimenProcessor$new(validator, scorer, logger)
+
+    specimens <- create_test_specimens()
+    # No has_image column — should trigger the API check
+
+    result <- processor$process_specimens(specimens)
+
+    # Verify has_image column was added
+    expect_true("has_image" %in% names(result))
+
+    # Verify the log says "Checking image availability"
+    check_msgs <- Filter(function(m) grepl("Checking image availability", m$msg), logger$messages)
+    expect_true(length(check_msgs) > 0)
+  })
+
+  it("runs image check when has_image contains NAs", {
+    logger <- MockLogger$new()
+    validator <- SpecimenValidator$new(logger)
+    scorer <- SpecimenScorer$new(logger)
+    processor <- SpecimenProcessor$new(validator, scorer, logger)
+
+    specimens <- create_test_specimens()
+    specimens$has_image <- c(TRUE, NA, FALSE, NA)
+
+    result <- processor$process_specimens(specimens)
+
+    # NAs indicate incomplete check — should trigger fresh API call
+    check_msgs <- Filter(function(m) grepl("Checking image availability", m$msg), logger$messages)
+    expect_true(length(check_msgs) > 0)
+
+    # After processing, no NAs should remain
+    expect_false(any(is.na(result$has_image)))
+  })
 })

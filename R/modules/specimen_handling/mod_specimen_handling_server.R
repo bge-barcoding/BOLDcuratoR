@@ -59,10 +59,46 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
       logger$info("Specimen table refreshed with updated annotations")
     })
 
-    # Update specimen processing observer to use rv instead of processing_status function
+    # Update specimen processing observer to use rv instead of processing_status function.
+    # Guard: if the main app.R observer already processed the data (quality_score,
+    # rank, criteria_met columns present with non-NA values), skip the full
+    # process_specimens() pipeline and only refresh local metrics.  This prevents
+    # duplicate image-availability API calls and redundant scoring/ranking.
     observe({
       store <- state$get_store()
       req(store$specimen_data)
+
+      # Detect whether the data has already been through the full pipeline
+      already_processed <- all(c("quality_score", "rank", "criteria_met") %in%
+                                 names(store$specimen_data)) &&
+        !all(is.na(store$specimen_data$quality_score))
+
+      if (already_processed) {
+        logger$info("Specimen data already processed, updating metrics only")
+
+        metrics <- processor$get_metrics()
+        if (is.null(metrics)) {
+          # Processor hasn't run yet in this session — compute basic metrics
+          metrics <- list(
+            total_specimens      = nrow(store$specimen_data),
+            avg_quality_score    = mean(store$specimen_data$quality_score, na.rm = TRUE),
+            median_quality_score = median(store$specimen_data$quality_score, na.rm = TRUE),
+            rank_distribution    = as.data.frame(table(store$specimen_data$rank),
+                                                 stringsAsFactors = FALSE),
+            species_count        = length(unique(store$specimen_data$species))
+          )
+        }
+        state$update_state("specimen_metrics", metrics)
+        isolate({
+          rv$metrics <- metrics
+          rv$processing_status <- list(
+            is_processing = FALSE,
+            message = "Processing complete",
+            error = NULL
+          )
+        })
+        return()
+      }
 
       tryCatch({
         # Update processing status through rv
