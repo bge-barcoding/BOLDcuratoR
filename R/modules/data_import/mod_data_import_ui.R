@@ -58,29 +58,34 @@ mod_data_import_ui <- function(id) {
                  column(4,
                         textAreaInput(ns("taxa_input"),
                                       "Enter taxa (one per line, comma-separated for synonyms):",
-                                      rows = 5,
+                                      rows = 8,
                                       placeholder = "Valid name 1, Synonym A, Synonym B\nValid name 2, Synonym C"
                         )
                  ),
                  column(4,
-                        textAreaInput(ns("dataset_codes"),
-                                      "Dataset codes (one per line):",
-                                      rows = 2,
-                                      placeholder = "DS-EXAMPLE1\nDS-EXAMPLE2"
+                        textAreaInput(ns("countries"),
+                                      "Filter by countries (one per line, optional):",
+                                      rows = 5,
+                                      placeholder = "Canada\nUnited States\nMexico"
                         ),
-                        textAreaInput(ns("project_codes"),
-                                      "Project codes (one per line):",
-                                      rows = 2,
-                                      placeholder = "PROJECT1\nPROJECT2"
+                        tags$small(
+                          class = "text-muted",
+                          "Applied to downloaded records before BIN expansion. Leave blank for no country filter."
                         )
                  ),
                  column(4,
-                        textAreaInput(ns("countries"),
-                                      "Countries (one per line):",
-                                      rows = 4,
-                                      placeholder = "Canada\nUnited States\nMexico"
+                        tags$label("Filter by continent (optional):"),
+                        checkboxGroupInput(
+                          ns("continent_filter"),
+                          label    = NULL,
+                          choices  = names(CONTINENT_COUNTRIES),
+                          selected = NULL
+                        ),
+                        tags$small(
+                          class = "text-muted",
+                          "Applied to downloaded records before BIN expansion. Leave blank to retrieve global records."
                         )
-               ),
+                 ),
 
                  div(
                    id = ns("url_warning"),
@@ -88,7 +93,7 @@ mod_data_import_ui <- function(id) {
                    tags$p(
                      class = "text-warning",
                      icon("warning"),
-                     "Warning: Query length approaching limit. Consider reducing selected regions."
+                     "Warning: Query length approaching limit. Consider reducing the number of taxa."
                    )
                  ),
                ),
@@ -177,8 +182,8 @@ mod_data_import_ui <- function(id) {
             class = "modal-body",
             tags$ul(
               tags$li("Enter taxa names, one per line. Include synonyms separated by commas."),
-              tags$li("Dataset codes should be in the format DS-XXXX"),
-              tags$li("Enter specific countries (one per line) for geographic filtering"),
+              tags$li("Optionally enter specific country names (one per line) to restrict records — applied after download, before BIN expansion."),
+              tags$li("Optionally select continents to filter records geographically — applied after download, before BIN expansion. Country and continent filters are combined."),
               tags$li("Search results can be downloaded in CSV format"),
               tags$li("Clear results before starting a new search")
             )

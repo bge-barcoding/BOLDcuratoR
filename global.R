@@ -90,6 +90,7 @@ tryCatch({
 
   # Load configuration
   source("R/config/constants.R")
+  source("R/config/download_limits.R")
 
   # Initialize analysis parameters
   analysis_params <- .initialize_analysis_params()
