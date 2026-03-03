@@ -3,14 +3,13 @@ A shiny app to check and curate data on BOLD based on input taxonomy, geography,
 ### Features
 Process multiple species level taxa with their synonyms
 Process multiple higher level taxa (e.g. families)
-Process multiple BOLD datasets and projects
-Filter based on multiple countries
+Filter based on multiple countries and/or continents
 Fetch all specimens based on search parameters
-Fetch all specimens within each downloaded BIN (e.g if they didn't match the original search terms)
+Fetch all specimens within each downloaded BIN (even if they didn't match the original search terms)
 Analyze BIN content and concordance
-Rank all specimens
+Rank all specimens based on specimen metadata
 Grade all species using BAGS (https://doi.org/10.1111/1755-0998.13262)
-Select representative specimens for curated datasets based on semi-automated workflow
+Select representative specimens for curated datasets based on a semi-automated workflow
 Download all records in spreadsheet and sequences in fasta format
 Download all flagged/annotated records for update at BOLD
 
