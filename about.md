@@ -19,5 +19,5 @@ Enter your BOLD API key, or use the test API key
 Enter your name and email
 Resume a previous session or start a new one
 Input taxa (one per line, synonyms after valid names, separated by commas)
-Include any datasets and/or projects and/or countries
+Include any countries and/or continents you want to filter on
 Click 'Get Data' to start analysis
