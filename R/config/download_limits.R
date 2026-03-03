@@ -11,12 +11,12 @@ DOWNLOAD_LIMITS <- list(
   # ── Personal API key thresholds ─────────────────────────────────────────────
   # Warn when the post-filter record count or BIN count exceeds these values.
   # The user is shown a modal explaining the size and must confirm to proceed.
-  WARN_RECORDS = 100000,
+  WARN_RECORDS = 10000,
   WARN_BINS    = 1000,
 
   # ── Shared API key thresholds ────────────────────────────────────────────────
   # Hard stop — download cannot continue when using the shared/fallback key.
   # Set equal to or lower than the WARN_* values above.
-  SHARED_MAX_RECORDS = 100000,
+  SHARED_MAX_RECORDS = 10000,
   SHARED_MAX_BINS    = 1000
 )

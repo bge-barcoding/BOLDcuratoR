@@ -432,7 +432,7 @@ mod_data_import_server <- function(id, state, session_db, logger = NULL) {
                           format(n_bins, big.mark = ","),
                           format(DOWNLOAD_LIMITS$WARN_BINS, big.mark = ",")))
         ),
-        tags$p(tags$em("Consider narrowing your search (continent filter, fewer taxa) if this is unexpectedly large.")),
+        tags$p(tags$em("Consider narrowing your search (e.g. fewer taxa) if this is unexpectedly large.")),
         footer = tagList(
           actionButton(ns("cancel_large_download"),  "Cancel",           class = "btn-default"),
           actionButton(ns("confirm_large_download"), "Continue anyway",  class = "btn-warning")
@@ -456,7 +456,7 @@ mod_data_import_server <- function(id, state, session_db, logger = NULL) {
         tags$p("To proceed, either:"),
         tags$ul(
           tags$li("Use your own personal BOLD API key (enter it in the User Info panel), or"),
-          tags$li("Narrow your search — add a continent filter, fewer taxa, or use dataset/project codes.")
+          tags$li("Narrow your search — e.g fewer taxa.")
         ),
         tags$ul(
           tags$li(sprintf("Records limit: %s",
