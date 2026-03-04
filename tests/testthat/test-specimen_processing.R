@@ -46,12 +46,22 @@ create_test_specimens <- function() {
     nuc = c("ATCG", "GCTA", "", NA),
     voucher_type = c("holotype", "vouchered", "none", "none"),
     institution = c("Museum A", "Museum B", "", ""),
+    inst = c("Museum A", "Museum B", "", ""),
     identified_by = c("Expert A", "Expert B", "", ""),
     country.ocean = c("Canada", "USA", "", ""),
     coord = c("45.5,-73.5", "", "", ""),
     collectors = c("Coll A", "", "", ""),
     collection_date_start = c("2020-01-01", "", "", ""),
+    collection_date_end = c("2020-01-02", "", "", ""),
     identification_method = c("morphology", "", "", ""),
+    sector = c("Sector A", "", "", ""),
+    region = c("Region A", "", "", ""),
+    museumid = c("MUS001", "", "", ""),
+    site = c("Site A", "", "", ""),
+    taxonomy_notes = c("", "", "", ""),
+    short_note = c("", "", "", ""),
+    collection_notes = c("", "", "", ""),
+    notes = c("", "", "", ""),
     stringsAsFactors = FALSE
   )
 }
@@ -168,18 +178,191 @@ describe("SpecimenScorer", {
       nuc = NA,
       voucher_type = NA,
       institution = NA,
+      inst = NA,
       identified_by = NA,
       country.ocean = NA,
       coord = NA,
       collectors = NA,
       collection_date_start = NA,
+      collection_date_end = NA,
       identification_method = NA,
+      sector = NA,
+      region = NA,
+      museumid = NA,
+      site = NA,
+      taxonomy_notes = NA,
+      short_note = NA,
+      collection_notes = NA,
+      notes = NA,
       stringsAsFactors = FALSE
     )
 
     result <- scorer$score_specimens(specimens)
     expect_equal(nrow(result), 1)
     expect_true(result$quality_score[1] >= 0)
+  })
+})
+
+# ---------------------------------------------------------------------------
+# SpecimenScorer — None/NA string handling
+# ---------------------------------------------------------------------------
+
+describe("SpecimenScorer — None/NA handling", {
+
+  it("treats 'None' as empty for scoring", {
+    logger <- MockLogger$new()
+    scorer <- SpecimenScorer$new(logger)
+    specimens <- data.frame(
+      processid = "NONE_TEST",
+      species = "None",
+      identification_rank = "species",
+      bin_uri = "None",
+      nuc_basecount = 658,
+      nuc = "ATCG",
+      voucher_type = "None",
+      institution = "None",
+      inst = "None",
+      identified_by = "None",
+      country.ocean = "None",
+      coord = "None",
+      collectors = "None",
+      collection_date_start = "None",
+      collection_date_end = "None",
+      identification_method = "None",
+      sector = "None",
+      region = "None",
+      museumid = "None",
+      site = "None",
+      taxonomy_notes = "", short_note = "", collection_notes = "", notes = "",
+      stringsAsFactors = FALSE
+    )
+
+    result <- scorer$score_specimens(specimens)
+    # "None" values should all be treated as empty — score should be 0
+    expect_equal(result$quality_score[1], 0)
+  })
+
+  it("treats 'NA' string as empty for scoring", {
+    logger <- MockLogger$new()
+    scorer <- SpecimenScorer$new(logger)
+    specimens <- data.frame(
+      processid = "NA_TEST",
+      species = "NA",
+      identification_rank = "species",
+      bin_uri = "NA",
+      nuc_basecount = 658,
+      nuc = "ATCG",
+      voucher_type = "NA",
+      institution = "NA",
+      inst = "NA",
+      identified_by = "NA",
+      country.ocean = "NA",
+      coord = "NA",
+      collectors = "NA",
+      collection_date_start = "NA",
+      collection_date_end = "NA",
+      identification_method = "NA",
+      sector = "NA",
+      region = "NA",
+      museumid = "NA",
+      site = "NA",
+      taxonomy_notes = "", short_note = "", collection_notes = "", notes = "",
+      stringsAsFactors = FALSE
+    )
+
+    result <- scorer$score_specimens(specimens)
+    expect_equal(result$quality_score[1], 0)
+  })
+})
+
+# ---------------------------------------------------------------------------
+# SpecimenScorer — ID_METHOD 4-way logic
+# ---------------------------------------------------------------------------
+
+describe("SpecimenScorer — ID_METHOD", {
+
+  it("passes for pure morphological identification", {
+    logger <- MockLogger$new()
+    scorer <- SpecimenScorer$new(logger)
+    specimens <- data.frame(
+      processid = "IDM1",
+      species = "Homo sapiens",
+      identification_rank = "species",
+      bin_uri = "BOLD:AAA0001", nuc_basecount = 658, nuc = "ATCG",
+      voucher_type = "museum", institution = "Museum", inst = "Museum",
+      identified_by = "Expert", country.ocean = "Canada", coord = "45,-73",
+      collectors = "Coll", collection_date_start = "2020-01-01",
+      collection_date_end = "2020-01-02",
+      identification_method = "morphology",
+      sector = "A", region = "B", museumid = "M1", site = "S1",
+      taxonomy_notes = "", short_note = "", collection_notes = "", notes = "",
+      stringsAsFactors = FALSE
+    )
+    result <- scorer$score_specimens(specimens)
+    expect_true(grepl("ID_METHOD", result$criteria_met[1]))
+  })
+
+  it("fails for molecular-only identification", {
+    logger <- MockLogger$new()
+    scorer <- SpecimenScorer$new(logger)
+    specimens <- data.frame(
+      processid = "IDM2",
+      species = "Homo sapiens",
+      identification_rank = "species",
+      bin_uri = "BOLD:AAA0001", nuc_basecount = 658, nuc = "ATCG",
+      voucher_type = "museum", institution = "Museum", inst = "Museum",
+      identified_by = "Expert", country.ocean = "Canada", coord = "45,-73",
+      collectors = "Coll", collection_date_start = "2020-01-01",
+      collection_date_end = "2020-01-02",
+      identification_method = "DNA barcoding",
+      sector = "A", region = "B", museumid = "M1", site = "S1",
+      taxonomy_notes = "", short_note = "", collection_notes = "", notes = "",
+      stringsAsFactors = FALSE
+    )
+    result <- scorer$score_specimens(specimens)
+    expect_false(grepl("ID_METHOD", result$criteria_met[1]))
+  })
+
+  it("fails for mixed identification (morphology AND DNA)", {
+    logger <- MockLogger$new()
+    scorer <- SpecimenScorer$new(logger)
+    specimens <- data.frame(
+      processid = "IDM3",
+      species = "Homo sapiens",
+      identification_rank = "species",
+      bin_uri = "BOLD:AAA0001", nuc_basecount = 658, nuc = "ATCG",
+      voucher_type = "museum", institution = "Museum", inst = "Museum",
+      identified_by = "Expert", country.ocean = "Canada", coord = "45,-73",
+      collectors = "Coll", collection_date_start = "2020-01-01",
+      collection_date_end = "2020-01-02",
+      identification_method = "morphology and DNA barcode",
+      sector = "A", region = "B", museumid = "M1", site = "S1",
+      taxonomy_notes = "", short_note = "", collection_notes = "", notes = "",
+      stringsAsFactors = FALSE
+    )
+    result <- scorer$score_specimens(specimens)
+    expect_false(grepl("ID_METHOD", result$criteria_met[1]))
+  })
+
+  it("passes for unknown method (no negative match)", {
+    logger <- MockLogger$new()
+    scorer <- SpecimenScorer$new(logger)
+    specimens <- data.frame(
+      processid = "IDM4",
+      species = "Homo sapiens",
+      identification_rank = "species",
+      bin_uri = "BOLD:AAA0001", nuc_basecount = 658, nuc = "ATCG",
+      voucher_type = "museum", institution = "Museum", inst = "Museum",
+      identified_by = "Expert", country.ocean = "Canada", coord = "45,-73",
+      collectors = "Coll", collection_date_start = "2020-01-01",
+      collection_date_end = "2020-01-02",
+      identification_method = "some unknown method",
+      sector = "A", region = "B", museumid = "M1", site = "S1",
+      taxonomy_notes = "", short_note = "", collection_notes = "", notes = "",
+      stringsAsFactors = FALSE
+    )
+    result <- scorer$score_specimens(specimens)
+    expect_true(grepl("ID_METHOD", result$criteria_met[1]))
   })
 })
 
