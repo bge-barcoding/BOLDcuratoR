@@ -195,15 +195,20 @@ SpecimenProcessor <- R6::R6Class(
         }
 
         # Apply ranking based on criteria met
+        # Each rank definition is a list where scalar strings are AND requirements
+        # and character vectors (length > 1) are OR groups (at least one must be met)
         scored_specimens$rank <- sapply(scored_specimens$criteria_met, function(criteria) {
           if (is.na(criteria) || criteria == "") return(7L)
           criteria_list <- strsplit(criteria, "; ")[[1]]
 
           for (rank in 1:6) {
             rank_key <- paste0("RANK_", rank)
-            if (!is.null(rank_criteria[[rank_key]]) &&
-                all(rank_criteria[[rank_key]] %in% criteria_list)) {
-              return(as.integer(rank))
+            rank_def <- rank_criteria[[rank_key]]
+            if (!is.null(rank_def) && length(rank_def) > 0) {
+              all_met <- all(sapply(rank_def, function(element) {
+                any(element %in% criteria_list)
+              }))
+              if (all_met) return(as.integer(rank))
             }
           }
           return(7L)
