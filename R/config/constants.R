@@ -79,7 +79,6 @@ SPECIMEN_SCORING_CRITERIA <- list(
 
   ID_METHOD = list(
     fields = c("identification_method"),
-    positive_pattern = "descr|det|diss|exam|expert|genit|identifier|key|label|literature|micros|mor|taxonomic|type|vou|guide|flora|specimen|traditional|visual|wing|logical|knowledge|photo|verified",
     negative_pattern = "barco|BOLD|mBRAVE|SINTAX|CO1|COI|COX|DNA|mole|phylo|sequ|tree|image|bin|silva|ncbi|ncbl|engine|blast|genbank|genetic|unspecified|its|^None$|^NA$|^$"
   ),
 
