@@ -1,0 +1,740 @@
+package BCDM::Criteria::COLLECTION_DATE;
+use strict;
+use warnings;
+use base 'BCDM::Criteria';
+
+# this so that we know the criterionid for
+# updates in the intersection table
+sub _criterion { $BCDM::Criteria::COLLECTION_DATE }
+
+# this tests the criterion and returns
+# boolean 0/1 depending on fail/pass. In
+# addition, optional notes may be returned.
+sub _assess {
+    my $package = shift;
+    my $record = shift;
+    my $has_date = 0;
+    
+    my $start_date = $record->collection_date_start;
+    my $end_date = $record->collection_date_end;
+    
+    # Check if we have valid dates (not undef, empty, or "None")
+    if ( ($start_date && $start_date ne "None") or ($end_date && $end_date ne "None") ) {
+        $has_date = 1;
+    }
+    return $has_date, "Determined from collection_date column";
+}
+
+1;
+package BCDM::Criteria::COLLECTORS;
+use strict;
+use warnings;
+use base 'BCDM::Criteria';
+
+# this so that we know the criterionid for
+# updates in the intersection table
+sub _criterion { $BCDM::Criteria::COLLECTORS }
+
+# this tests the criterion and returns
+# boolean 0/1 depending on fail/pass. In
+# addition, optional notes may be returned.
+sub _assess {
+    my $package = shift;
+    my $record = shift;
+    my $collectors = $record->collectors;
+    return ($collectors eq '' || lc($collectors) eq 'none') ? 0 : 1, "Determined from collectors column";
+}
+
+1;
+package BCDM::Criteria::COORD;
+use strict;
+use warnings;
+use base 'BCDM::Criteria';
+
+# this so that we know the criterionid for
+# updates in the intersection table
+sub _criterion { $BCDM::Criteria::COORD }
+
+# this tests the criterion and returns
+# boolean 0/1 depending on fail/pass. In
+# addition, optional notes may be returned.
+sub _assess {
+    my $package = shift;
+    my $record = shift;
+    my $coord = $record->coord;
+    return ($coord eq '' || lc($coord) eq 'none') ? 0 : 1, "Determined from coord column";
+}
+
+1;
+package BCDM::Criteria::COUNTRY;
+use strict;
+use warnings;
+use base 'BCDM::Criteria';
+
+# this so that we know the criterionid for
+# updates in the intersection table
+sub _criterion { $BCDM::Criteria::COUNTRY }
+
+# this tests the criterion and returns
+# boolean 0/1 depending on fail/pass. In
+# addition, optional notes may be returned.
+sub _assess {
+    my $package = shift;
+    my $record = shift;
+    my $country = $record->country_ocean;
+    return ($country eq '' || $country eq 'None') ? 0 : 1, "Determined from country column";
+}
+
+1;
+package BCDM::Criteria::HAS_IMAGE;
+use strict;
+use warnings;
+use JSON;
+use LWP::UserAgent;
+use Time::HiRes 'usleep';
+use base 'BCDM::Criteria';
+
+# number of microsends to sleep before requests. Can be adjusted from outside the module via something like 500:
+# $BCDM::Criteria::HAS_IMAGE::SLEEP = 500;
+our $SLEEP = 500;
+
+# endpoints to the CAOS object store. I wonder if the port number is fixed.
+my $base_url  = 'https://caos.boldsystems.org:31488/api/images?processids=';
+my $image_url = 'https://caos.boldsystems.org:31488/api/objects/';
+
+# http://boldsystems.org/index.php/API_Public/specimen?format=json&ids=ABINP144-21
+
+# this so that we know the criterionid for
+# updates in the intersection table
+sub _criterion { $BCDM::Criteria::HAS_IMAGE }
+
+# this tests the criterion and returns
+# boolean 0/1 depending on fail/pass. In
+# addition, optional notes may be returned.
+# Here, the criterion to assess is:
+# 'Specimen is photographed'
+# For this particular case, the BCDM does 
+# not list whether there is an image. The
+# way to find out is to hit the API as follows:
+# http://boldsystems.org/index.php/API_Public/specimen?ids=${processid}&format=json
+# and then traversing the returned JSON to look for an image. Probably an 
+# expensive operation!
+sub _assess {
+    usleep($SLEEP);
+    my $package  = shift;
+    my @record   = @_;
+    my $logger   = $package->_get_logger(__PACKAGE__);
+    my $process  = join ',', map { $_->processid } @record;
+    my $wspoint  = $base_url . $process;
+    my $uagent   = LWP::UserAgent->new;
+    my @return; # return value to populate
+
+    # going to attempt request
+    $logger->debug("Attempting $wspoint");
+    my $response = $uagent->get($wspoint);
+
+    # inspect HTTP::Response
+    if ( $response->is_success) {
+
+        # fetch content
+        my $json = $response->decoded_content;
+
+        # attempt to parse JSON
+        eval {
+            my $array_ref = decode_json $json;
+
+            # successfully parsed JSON list, which is not empty
+            if ( scalar @$array_ref ) {
+
+                # example: https://caos.boldsystems.org:31488/api/images?processids=BBF341-13
+                my $i = 0;
+                my %map = map { $_->processid => { i => ++$i, retval => [ 0, 'no images' ] } } @record;
+                for my $res ( @$array_ref) {
+                    my $pid = $res->{processid};
+                    my $oid = $res->{objectid};
+                    $map{$pid}->{retval} = [ 1, $image_url . $oid ];
+                    $logger->info("Image for $pid: ${image_url}${oid}");
+                }
+
+                # push into return array, sorted
+                @return = map { @{ $_->{retval} } } sort { $a->{i} <=> $b->{i} } values %map;
+            }
+            else {
+
+                # we will most likely never reach this. de-referencing the path in the JSON will simply error
+                my $note = "empty list: no images at $wspoint";
+                $logger->info($note);
+                push @return, ( 0, $note ) for @record;
+            }
+        };
+        if ( $@ ) {
+
+            # unless $loc exists in the JSON, we will end up here
+            $logger->error($@);
+            push @return, ( 0, $@ ) for @record;
+        }
+    }
+    else {
+        $logger->error($response->status_line);
+    }
+
+    #
+    return @return;
+}
+
+sub _batch_size { 100 }
+
+1;
+package BCDM::Criteria::IDENTIFIER;
+use strict;
+use warnings;
+use base 'BCDM::Criteria';
+
+# values we assessed are not taxonomic experts
+# Using word boundaries (\b) to avoid matching parts of legitimate names
+my @cbg_patterns = (
+    qr/\bKate\s+Perez\b/i,      # Exact name match - CBG employee
+    qr/\bAngela\s+Telfer\b/i,   # Exact name match - CBG employee  
+    qr/\bBOLD\b/i,              # Word boundary - won't match names containing "bold" like "Theobold"
+    qr/\bBLAST\b/i,             # Word boundary - won't match names containing "blast" like "Blaster" ... names these days!
+    qr/\bBIN\b/i,               # Word boundary - won't match names containing "bin" like "Sabine"
+    qr/\bNone\b/i,              # Word boundary - won't match names containing "none" like "Nonel"
+);
+
+# this so that we know the criterionid for
+# updates in the intersection table
+sub _criterion { $BCDM::Criteria::IDENTIFIER }
+
+# this tests the criterion and returns
+# boolean 0/1 depending on fail/pass. In
+# addition, optional notes may be returned.
+# Here, the criterion to assess is:
+# 'Specimen was identified by a named person'
+sub _assess {
+    my $package = shift;
+    my $record = shift;
+    my $identifier = $record->identified_by;
+
+    # no identifier given
+    if ( not $identifier ) {
+        return 0, "no identifier named";
+    }
+
+    # check if identifier matches any of the non-expert patterns
+    for my $pattern (@cbg_patterns) {
+        if ( $identifier =~ /$pattern/ ) {
+            return 0, "identified_by: '$identifier' (matches exclusion pattern)";
+        }
+    }
+
+    # everything else - assumed to be a taxonomic expert
+    return 1, "identified_by: '$identifier'";
+}
+
+1;
+package BCDM::Criteria::ID_METHOD;
+use strict;
+use warnings;
+use base 'BCDM::Criteria';
+
+# this so that we know the criterionid for
+# updates in the intersection table
+sub _criterion { $BCDM::Criteria::ID_METHOD }
+
+my @pos = qw(
+    descr
+    det
+    diss
+    exam
+    expert
+    genit
+    identifier
+    key
+    label
+    literature
+    micros
+    mor
+    taxonomic
+    type
+    vou
+    guide
+    flora
+    specimen
+    traditional
+    visual
+    wing
+    logical
+    knowledge
+    photo
+    verified
+    key
+);
+
+my @neg = qw(
+    barco
+    BOLD
+    mBRAVE
+    SINTAX
+    CO1
+    COI
+    COX
+    DNA
+    mole
+    phylo
+    sequ
+    tree
+    image
+    bin
+    silva
+    ncbi
+    ncbl
+    engine
+    blast
+    genbank
+    genetic
+    unspecified
+    its
+);
+
+my $log = __PACKAGE__->_get_logger(__PACKAGE__, 'DEBUG');
+
+# this tests the criterion and returns
+# boolean 0/1 depending on fail/pass. In
+# addition, optional notes may be returned.
+# Here, the criterion to assess is:
+# 'Specimen was identified by morphology'
+# This will involve substring matching against
+# identification_method. It looks like there
+# are many that start with '^BIN' or with
+# '^BOLD'. Those are certainly reverse
+# taxonomy.
+sub _assess {
+    my $package = shift;
+    my $record = shift;
+    my $method = $record->identification_method;
+    my $id = $record->recordid;
+
+
+    # Initialize flags for pattern matching
+    my $has_positive = 0;
+    my $has_negative = 0;
+    
+    # Check for positive matches (morphological identification indicators)
+    for my $pattern ( @pos ) {
+         if ( $method =~ /$pattern/i ) {
+            $has_positive = 1;
+            $log->info("Positive match for $id: $pattern");
+            last; # Found at least one positive, no need to continue
+        }
+    }
+    
+    # Check for negative matches (molecular/automated identification indicators)
+    for my $pattern ( @neg ) {
+         if ( $method =~ /$pattern/i ) {
+            $has_negative = 1;
+            $log->info("Negative match for $id: $pattern");
+            last; # Found at least one negative, no need to continue
+        }
+    }
+    
+    # Determine score based on pattern combinations:
+    # Database constraint requires status IN (0, 1), so we use boolean logic:
+    # 0 = fail (any case that isn't pure morphological identification)
+    # 1 = pass (only pure morphological identification indicators found)
+    my $retval;
+    my $notes;
+    
+    if (!$has_positive && !$has_negative) {
+        # No matches found at all - pass
+        $retval = 1;
+        $notes = "No negative identification method indicators found";
+    } elsif (!$has_positive && $has_negative) {
+        # Negative matches only - molecular/automated identification - fail
+        $retval = 0;
+        $notes = "Molecular/automated identification indicators only";
+    } elsif ($has_positive && $has_negative) {
+        # Both positive and negative matches - mixed methods - fail
+        $retval = 0;
+        $notes = "Mixed identification methods detected (both morphological and molecular indicators)";
+    } else {
+        # Positive matches only - pure morphological identification - pass
+        $retval = 1;
+        $notes = "Pure morphological identification indicators found";
+    }
+    
+    $log->info("Final score for $id: $retval ($notes)");
+    
+    # Return result
+    return $retval, $notes;
+}
+
+1;
+package BCDM::Criteria::INSTITUTION;
+use strict;
+use warnings;
+use base 'BCDM::Criteria';
+
+# this so that we know the criterionid for
+# updates in the intersection table
+sub _criterion { $BCDM::Criteria::INSTITUTION }
+
+my @neg = (
+    'genbank',
+    'no voucher',
+    'none',
+    'personal',
+    'private',
+    'research collection of',
+    'unknown',
+    'unvouchered'
+);
+
+my $log = __PACKAGE__->_get_logger(__PACKAGE__, 'DEBUG');
+
+# this tests the criterion and returns
+# boolean 0/1 depending on fail/pass. In
+# addition, optional notes may be returned.
+# Here, the criterion to assess is:
+# 'Specimen is vouchered in an institution'
+# This will involve substring matching in
+# the inst column. There are many
+# distinct values but there is some
+# regularity to them.
+sub _assess {
+    my $package = shift;
+    my $record = shift;
+    my $method = $record->inst;
+    my $id = $record->recordid;
+
+    # Check negative matches
+    my @mn;
+    for my $pattern ( @neg ) {
+         if ( $method =~ /$pattern/i ) {
+            push @mn, $pattern;
+            $log->info("Negative match for $id: $pattern")
+        }
+    }
+
+    # assume it passed
+    my $result = 1;
+
+    # failure if list of matches is non-empty
+    if ( @mn ) {
+        $result = 0;
+    }
+
+    # failure if field is empty
+    elsif ( not $method ) {
+        $result = 0;
+    }
+
+    # Return result
+    return $result, "Based on whether it has a negative (@mn) or no matches (null)";
+    
+}
+
+1;
+package BCDM::Criteria::MUSEUM_ID;
+use strict;
+use warnings;
+use base 'BCDM::Criteria';
+
+# this so that we know the criterionid for
+# updates in the intersection table
+sub _criterion { $BCDM::Criteria::MUSEUM_ID }
+
+# this tests the criterion and returns
+# boolean 0/1 depending on fail/pass. In
+# addition, optional notes may be returned.
+sub _assess {
+    my $package = shift;
+    my $record = shift;
+    my $museumid = $record->museumid;
+    return ($museumid eq '' || lc($museumid) eq 'none') ? 0 : 1, "Determined from museumid column";
+}
+
+1;
+package BCDM::Criteria::PUBLIC_VOUCHER;
+use strict;
+use warnings;
+use base 'BCDM::Criteria';
+
+# this so that we know the criterionid for
+# updates in the intersection table
+sub _criterion { $BCDM::Criteria::PUBLIC_VOUCHER }
+
+my @neg = (
+    'DNA',
+    'e-vouch',
+    'privat',
+    'no voucher',
+    'unvouchered',
+    'destr',
+    'lost',
+    'missing',
+    'no specimen',
+    'none',
+    'not vouchered',
+    'person',
+    'Photo Voucher Only',
+    'not registered',
+);
+
+my @pos = qw(
+    herb
+    museum
+    registered
+    type
+    national
+    CBG
+    INHS
+    deposit
+    harbarium
+    hebarium
+    holot
+);
+
+my $log = __PACKAGE__->_get_logger(__PACKAGE__, 'DEBUG');
+
+# this tests the criterion and returns
+# boolean 0/1 depending on fail/pass. In
+# addition, optional notes may be returned.
+# Here, the criterion to assess is:
+# 'Specimen is vouchered in a public collection'
+# This will involve substring matching in
+# the voucher_type column. There are many
+# distinct values but there is some
+# regularity to them.
+sub _assess {
+    my $package = shift;
+    my $record = shift;
+    my $method = $record->voucher_type;
+    my $id = $record->recordid;
+
+    # Check positive matches
+    my @mp;
+    for my $pattern ( @pos ) {
+         if ( $method =~ /.*$pattern.*/i ) {
+            push @mp, $pattern;
+            $log->info("Positive match for $id: $pattern")
+        }
+    }
+
+    # Check negative matches
+    my @mn;
+    for my $pattern ( @neg ) {
+         if ( $method =~ /.*$pattern.*/i ) {
+            push @mn, $pattern;
+            $log->info("Negative match for $id: $pattern")
+        }
+    }
+
+    # Return result
+    my $result = 0;
+    if ( @mp ) {
+        $result = 1;
+    }
+    elsif ( @mn ) {
+        $result = 0;
+    }
+    return $result, "Based on whether has positive (@mp)/1, negative (@mn)/0, or no matches (null)";
+}
+
+1;
+package BCDM::Criteria::REGION;
+use strict;
+use warnings;
+use base 'BCDM::Criteria';
+
+# this so that we know the criterionid for
+# updates in the intersection table
+sub _criterion { $BCDM::Criteria::REGION }
+
+# this tests the criterion and returns
+# boolean 0/1 depending on fail/pass. In
+# addition, optional notes may be returned.
+sub _assess {
+    my $package = shift;
+    my $record = shift;
+    my $region = $record->region;
+    return ($region eq '' || lc($region) eq 'none') ? 0 : 1, "Determined from region column";
+}
+
+1;
+package BCDM::Criteria::SECTOR;
+use strict;
+use warnings;
+use base 'BCDM::Criteria';
+
+# this so that we know the criterionid for
+# updates in the intersection table
+sub _criterion { $BCDM::Criteria::SECTOR }
+
+# this tests the criterion and returns
+# boolean 0/1 depending on fail/pass. In
+# addition, optional notes may be returned.
+sub _assess {
+    my $package = shift;
+    my $record = shift;
+    my $sector = $record->sector;
+    return ($sector eq '' || lc($sector) eq 'none') ? 0 : 1, "Determined from sector column";
+}
+
+1;
+package BCDM::Criteria::SEQ_QUALITY;
+use strict;
+use warnings;
+use base 'BCDM::Criteria';
+
+# this so that we know the criterionid for
+# updates in the intersection table
+sub _criterion { $BCDM::Criteria::SEQ_QUALITY }
+
+# this tests the criterion and returns
+# boolean 0/1 depending on fail/pass. In
+# addition, optional notes may be returned.
+# Here, the criterion to assess is:
+# 'Sequence is long, with few ambiguities'
+# This will involve aligning each sequence
+# against an HMM (such as the one from
+# FinPROTAX), trimming the ends outside the
+# 658 bp range, then trimming the gap chars
+# and ambiguities, and reporting the 
+# remainder (notes?) and summarizing that
+# as pass/fail.
+sub _assess {
+    my $package = shift;
+    my $record  = shift;
+    my $logger  = $package->_get_logger(__PACKAGE__, 'INFO');
+    my $bin_uri = $record->bin_uri;
+    my $nucraw  = $record->nuc;
+
+    # remove leading and trailing non-ACGT characters
+    $logger->debug('Removing leading/trailing non-ACGT characters');
+    $nucraw =~ s/^[^ACGTacgt]*//;
+    $nucraw =~ s/[^ACGTacgt]*$//;
+
+    # count the number of unambiguous characters here
+    my $count = ($nucraw =~ tr/ACGTacgt//);
+
+    # TODO have minlength managed by config.yml
+    if ( $bin_uri ne '' and $count >= 500 ) {
+        return 1, 'Has BIN assignment and length >= 500bp';
+    }
+    else {
+        return 0, 'No BIN assignment and/or length < 500bp';
+    }
+}
+
+1;
+package BCDM::Criteria::SITE;
+use strict;
+use warnings;
+use base 'BCDM::Criteria';
+
+# this so that we know the criterionid for
+# updates in the intersection table
+sub _criterion { $BCDM::Criteria::SITE }
+
+# this tests the criterion and returns
+# boolean 0/1 depending on fail/pass. In
+# addition, optional notes may be returned.
+sub _assess {
+    my $package = shift;
+    my $record = shift;
+    my $site = $record->site;
+    return ($site eq '' || $site eq 'None') ? 0 : 1, "Determined from site column";
+}
+
+1;
+package BCDM::Criteria::SPECIES_ID;
+use strict;
+use warnings;
+use base 'BCDM::Criteria';
+
+# this so that we know the criterionid for
+# updates in the intersection table
+sub _criterion { $BCDM::Criteria::SPECIES_ID }
+
+# this tests the criterion and returns
+# boolean 0/1 depending on fail/pass. In
+# addition, optional notes may be returned.
+# Here, the criterion to assess is:
+# 'Specimen was identified to species rank'
+sub _assess {
+    my $package = shift;
+    my $record = shift;
+    
+# Check if the species field contains excluded patterns, is empty, or is "None"
+    if ($record->species =~ /^\s*$/ || 
+        $record->species =~ /\s+cf\s+/ || 
+        $record->species =~ /\s+nr\s+/ || 
+        $record->species =~ /\s+aff\s+/ || 
+        $record->species =~ /\d+/ || 
+        $record->species =~ /\./ || 
+        $record->species =~ /^\s*None\s*$/i) {
+        return 0, "Species column is empty, contains excluded patterns ( cf , nr , aff , numbers, or periods), or is 'None'";
+    }
+
+# If species field is not empty and doesn't contain excluded patterns or 'None', the criterion passes
+    return 1, "Determined from species column";
+}
+    
+1;
+package BCDM::Criteria::TYPE_SPECIMEN;
+use strict;
+use warnings;
+use Carp;
+use base 'BCDM::Criteria';
+
+# this so that we know the criterionid for
+# updates in the intersection table
+sub _criterion { $BCDM::Criteria::TYPE_SPECIMEN }
+
+my $log = __PACKAGE__->_get_logger(__PACKAGE__, 'DEBUG');
+
+# We will match against these
+my @types = qw(
+    holotype
+    lectotype
+    isotype
+    syntype
+    paratype
+    neotype
+    allotype
+    paralectotype
+    hapantotype
+    cotype
+);
+
+# This method is called statically, i.e. it is invoked on the package name with the arrow
+# operator. As such, the package name is the first argument in the @_ stack.
+sub _assess {
+    my ( $class, $record ) = @_;
+    my $matches = 0;
+
+    # The assumpion here is merely that calling column names with the arrow somehow returns
+    # the value in that cell for the focal $record. This can either come out of the database
+    # or as an object created by BCDM::IO. For example, a blessed hash reference created by
+    # Text::CSV from a line in a text table.
+    my $rid = $record->recordid;
+    for my $field ( qw(taxonomy_notes short_note collection_notes voucher_type notes) ) {
+        for my $type ( @types ) {
+            if ( $record->$field =~ /$type/i ) {
+                $matches++;
+                $log->info("Matched $field for /$type/i in $rid");
+            }
+        }
+    }
+
+    if ( $record->voucher_type =~ /type/i ) {
+        $matches++;
+        $log->info("Matched voucher_type for /type/i in $rid");
+    }
+
+    # The return value consists of two parts, here separated by commas. The first part is the
+    # outcome of the ternary operator, either 0 or 1. The second part is the quoted message.
+    return $matches > 0 ? 1 : 0, "By matching '@types' against taxonomy_notes, short_note, collection_notes, voucher_type, notes OR voucher_type against /type/i";
+}
+
+1;
