@@ -73,6 +73,13 @@ SpecimenScorer <- R6::R6Class(
     error_boundary = NULL,
     scoring_criteria = NULL,
 
+    #' @description Check if a value is semantically empty (NA, "", "None", "NA" string)
+    is_empty_value = function(value) {
+      is.na(value) ||
+        trimws(as.character(value)) == "" ||
+        toupper(trimws(as.character(value))) %in% c("NONE", "NA")
+    },
+
     #' @description Load scoring criteria from global environment
     load_scoring_criteria = function() {
       tryCatch({
@@ -129,7 +136,7 @@ SpecimenScorer <- R6::R6Class(
       })
       names(field_values) <- criterion_rules$fields
 
-      if (all(is.na(field_values))) return(FALSE)
+      if (all(sapply(field_values, private$is_empty_value))) return(FALSE)
 
       # Apply criterion-specific checks
       switch(criterion_name,
@@ -138,57 +145,64 @@ SpecimenScorer <- R6::R6Class(
              "SEQ_QUALITY" = private$check_sequence_quality(field_values, criterion_rules),
              "PUBLIC_VOUCHER" = private$check_public_voucher(field_values, criterion_rules),
              "HAS_IMAGE" = private$check_has_image(field_values, criterion_rules),
+             "ID_METHOD" = private$check_id_method(field_values, criterion_rules),
              private$check_general_criterion(field_values, criterion_rules))
     },
 
     #' @description Check species ID criterion
     check_species_id = function(values, rules) {
-      if (all(is.na(values))) return(FALSE)
-
       species_name <- values[1]
-      !is.na(species_name) &&
-        nchar(trimws(species_name)) > 0 &&
-        !grepl(rules$negative_pattern, species_name, ignore.case = TRUE)
+      if (private$is_empty_value(species_name)) return(FALSE)
+
+      !grepl(rules$negative_pattern, species_name, ignore.case = TRUE)
     },
 
     #' @description Check type specimen criterion
     check_type_specimen = function(values, rules) {
-      if (all(is.na(values))) return(FALSE)
+      if (all(sapply(values, private$is_empty_value))) return(FALSE)
 
       # Special check for "type" in voucher_type field
-      if (!is.na(values["voucher_type"]) &&
-          grepl("type", tolower(values["voucher_type"]), ignore.case = TRUE)) {
+      if (!private$is_empty_value(values["voucher_type"]) &&
+          grepl("type", values["voucher_type"], ignore.case = TRUE)) {
         return(TRUE)
       }
 
       # Check for type terms in all fields
       any(sapply(values, function(value) {
-        !is.na(value) && value != "" &&
-          grepl(rules$positive_pattern, tolower(value), ignore.case = TRUE)
+        !private$is_empty_value(value) &&
+          grepl(rules$positive_pattern, value, ignore.case = TRUE)
       }))
     },
 
     #' @description Check sequence quality criterion
     check_sequence_quality = function(values, rules) {
-      if (all(is.na(values))) return(FALSE)
+      if (all(sapply(values, private$is_empty_value))) return(FALSE)
 
       # Check BIN existence and sequence length
-      has_bin <- !is.na(values["bin_uri"]) && values["bin_uri"] != ""
-      has_length <- !is.na(values["nuc_basecount"]) &&
+      has_bin <- !private$is_empty_value(values["bin_uri"])
+      has_length <- !private$is_empty_value(values["nuc_basecount"]) &&
         suppressWarnings(as.numeric(values["nuc_basecount"])) >= rules$min_length
 
       has_bin && has_length
     },
 
     #' @description Check public voucher criterion
+    #' Positive match wins regardless of negative (aligned with Perl logic)
     check_public_voucher = function(values, rules) {
-      if (all(is.na(values))) return(FALSE)
+      if (all(sapply(values, private$is_empty_value))) return(FALSE)
 
-      voucher_value <- tolower(trimws(values[1]))
-      !is.na(voucher_value) && voucher_value != "" &&
-        !grepl(rules$negative_pattern, voucher_value, ignore.case = TRUE) &&
-        (is.null(rules$positive_pattern) ||
-           grepl(rules$positive_pattern, voucher_value, ignore.case = TRUE))
+      voucher_value <- trimws(as.character(values[1]))
+      if (private$is_empty_value(voucher_value)) return(FALSE)
+
+      # Positive match always wins
+      has_positive <- !is.null(rules$positive_pattern) &&
+        grepl(rules$positive_pattern, voucher_value, ignore.case = TRUE)
+      if (has_positive) return(TRUE)
+
+      # No positive: fail if negative match
+      has_negative <- !is.null(rules$negative_pattern) &&
+        grepl(rules$negative_pattern, voucher_value, ignore.case = TRUE)
+      !has_negative
     },
 
     #' @description Check if specimen has an image (based on API lookup)
@@ -199,12 +213,27 @@ SpecimenScorer <- R6::R6Class(
       isTRUE(as.logical(val))
     },
 
+    #' @description Check ID method criterion (Perl 4-way logic)
+    #' FAIL if any negative match found, regardless of positive matches.
+    #' PASS if no negative match (even if no positive match either).
+    check_id_method = function(values, rules) {
+      any(sapply(values, function(value) {
+        if (private$is_empty_value(value)) return(FALSE)
+
+        has_negative <- !is.null(rules$negative_pattern) &&
+          grepl(rules$negative_pattern, value, ignore.case = TRUE)
+
+        # Fail if any negative indicator present (even if positive also present)
+        !has_negative
+      }))
+    },
+
     #' @description Check general criterion
     check_general_criterion = function(values, rules) {
-      if (all(is.na(values))) return(FALSE)
+      if (all(sapply(values, private$is_empty_value))) return(FALSE)
 
       any(sapply(values, function(value) {
-        if (is.na(value) || value == "") return(FALSE)
+        if (private$is_empty_value(value)) return(FALSE)
 
         # Check negative pattern if it exists
         if (!is.null(rules$negative_pattern) &&

@@ -49,7 +49,7 @@ CONTINENT_COUNTRIES <- list(
 SPECIMEN_SCORING_CRITERIA <- list(
   SPECIES_ID = list(
     fields = c("species"),
-    negative_pattern = "sp\\.|spp\\.|[0-9]|^sp$|aff\\.|cf\\."
+    negative_pattern = "sp\\.|spp\\.|[0-9]|^sp$|aff\\.|cf\\.| nr "
   ),
 
   TYPE_SPECIMEN = list(
@@ -74,12 +74,12 @@ SPECIMEN_SCORING_CRITERIA <- list(
 
   IDENTIFIER = list(
     fields = c("identified_by"),
-    negative_pattern = "Kate Perez|Angela Telfer|BOLD"
+    negative_pattern = "\\bKate Perez\\b|\\bAngela Telfer\\b|\\bBOLD\\b|\\bBLAST\\b|\\bBIN\\b|\\bNone\\b"
   ),
 
   ID_METHOD = list(
     fields = c("identification_method"),
-    positive_pattern = "descr|det|diss|exam|expert|genit|identifier|key|label|literature|micros|mor|taxonomic|type|vou|guide|flora|specimen|traditional|visual|wing|logical|knowledge|photo|verified"
+    negative_pattern = "barco|BOLD|mBRAVE|SINTAX|CO1|COI|COX|DNA|mole|phylo|sequ|tree|image|bin|silva|ncbi|ncbl|engine|blast|genbank|genetic|unspecified|its|^None$|^NA$|^$"
   ),
 
   COLLECTORS = list(
@@ -87,7 +87,7 @@ SPECIMEN_SCORING_CRITERIA <- list(
   ),
 
   COLLECTION_DATE = list(
-    fields = c("collection_date_start")
+    fields = c("collection_date_start", "collection_date_end")
   ),
 
   COUNTRY = list(
@@ -96,6 +96,14 @@ SPECIMEN_SCORING_CRITERIA <- list(
 
   SITE = list(
     fields = c("site")
+  ),
+
+  SECTOR = list(
+    fields = c("sector")
+  ),
+
+  REGION = list(
+    fields = c("region")
   ),
 
   COORD = list(
@@ -139,22 +147,28 @@ ANALYSIS_CONSTANTS <- list(
 
   QUALITY = list(
     MINIMUM_SEQUENCE_LENGTH = 500,
-    MAXIMUM_QUALITY_SCORE = 14,
-    PASSING_QUALITY_SCORE = 7
+    MAXIMUM_QUALITY_SCORE = 16,
+    PASSING_QUALITY_SCORE = 8
   )
 )
 
 # Specimen ranking constants
+# Each rank is a list of requirements. Scalar strings are AND conditions.
+# Character vectors with length > 1 are OR groups (at least one must be met).
 SPECIMEN_RANK_CRITERIA <- list(
-  RANK_1 = c("SPECIES_ID", "TYPE_SPECIMEN"),
-  RANK_2 = c("SPECIES_ID", "SEQ_QUALITY", "HAS_IMAGE", "PUBLIC_VOUCHER",
-             "IDENTIFIER", "SITE", "COLLECTION_DATE", "COUNTRY", "COORD", "COLLECTORS"),
-  RANK_3 = c("SPECIES_ID", "SEQ_QUALITY", "HAS_IMAGE", "PUBLIC_VOUCHER",
-             "IDENTIFIER", "COUNTRY"),
-  RANK_4 = c("SPECIES_ID", "SEQ_QUALITY", "HAS_IMAGE", "COUNTRY"),
-  RANK_5 = c("SPECIES_ID", "SEQ_QUALITY", "HAS_IMAGE"),
-  RANK_6 = c("SPECIES_ID", "SEQ_QUALITY"),
-  RANK_7 = c()  # Default rank if no other criteria met
+  RANK_1 = list("SPECIES_ID", "TYPE_SPECIMEN"),
+  RANK_2 = list("SPECIES_ID", "SEQ_QUALITY", "HAS_IMAGE", "COLLECTORS",
+                "COLLECTION_DATE", "COUNTRY",
+                c("SITE", "SECTOR", "REGION", "COORD"),
+                "IDENTIFIER", "ID_METHOD",
+                c("INSTITUTION", "PUBLIC_VOUCHER", "MUSEUM_ID")),
+  RANK_3 = list("SPECIES_ID", "SEQ_QUALITY", "COUNTRY",
+                "IDENTIFIER", "ID_METHOD",
+                c("INSTITUTION", "PUBLIC_VOUCHER", "MUSEUM_ID")),
+  RANK_4 = list("SPECIES_ID", "SEQ_QUALITY", "COUNTRY"),
+  RANK_5 = list("SPECIES_ID", "SEQ_QUALITY"),
+  RANK_6 = list("SPECIES_ID"),
+  RANK_7 = list()  # Default rank if no other criteria met
 )
 
 # BAGS grading constants
@@ -171,7 +185,7 @@ VALIDATION_CONSTANTS <- list(
   REQUIRED_FIELDS = c("processid", "bin_uri"),
   MAX_MISSING = 0.1,
   MIN_QUALITY_SCORE = 0,
-  MAX_QUALITY_SCORE = 14,
+  MAX_QUALITY_SCORE = 16,
   VALID_RANKS = 1:7
 )
 
