@@ -58,7 +58,7 @@ mod_data_import_ui <- function(id) {
                  column(4,
                         textAreaInput(ns("taxa_input"),
                                       "Enter taxa (one per line, comma-separated for synonyms):",
-                                      rows = 8,
+                                      rows = 5,
                                       placeholder = "Valid name 1, Synonym A, Synonym B\nValid name 2, Synonym C"
                         )
                  ),
@@ -75,11 +75,14 @@ mod_data_import_ui <- function(id) {
                  ),
                  column(4,
                         tags$label("Filter by continent (optional):"),
-                        checkboxGroupInput(
-                          ns("continent_filter"),
-                          label    = NULL,
-                          choices  = names(CONTINENT_COUNTRIES),
-                          selected = NULL
+                        div(
+                          class = "continent-checkboxes",
+                          checkboxGroupInput(
+                            ns("continent_filter"),
+                            label    = NULL,
+                            choices  = names(CONTINENT_COUNTRIES),
+                            selected = NULL
+                          )
                         ),
                         tags$small(
                           class = "text-muted",
@@ -149,19 +152,6 @@ mod_data_import_ui <- function(id) {
           valueBoxOutput(ns("unique_bins_box"), width = 3),
           valueBoxOutput(ns("countries_box"), width = 3)
         )
-      )
-    ),
-
-    # About Section (integrated from About page)
-    fluidRow(
-      box(
-        title = "About BOLDcuratoR",
-        status = "info",
-        width = 12,
-        solidHeader = TRUE,
-        collapsible = TRUE,
-        collapsed = TRUE,
-        includeMarkdown("about.md")
       )
     ),
 

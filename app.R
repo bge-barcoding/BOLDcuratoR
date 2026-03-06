@@ -58,6 +58,7 @@ ui <- dashboardPage(
   dashboardSidebar(
     useShinyjs(),
     sidebarMenu(
+      menuItem("About", tabName = "about", icon = icon("info-circle"), selected = TRUE),
       menuItem("Data Input", tabName = "input", icon = icon("table")),
       menuItem("Species Analysis", tabName = "species_analysis", icon = icon("list-check")),
       menuItem("BIN Analysis", tabName = "bins", icon = icon("dna")),
@@ -230,6 +231,202 @@ ui <- dashboardPage(
           padding-right: 5px !important;
         }
 
+        /* ── Professional Slate/Navy Theme Overrides ── */
+
+        /* Header */
+        .skin-blue .main-header .logo {
+          background-color: #1a252f !important;
+          color: #ecf0f1 !important;
+          font-weight: 600 !important;
+        }
+        .skin-blue .main-header .logo:hover {
+          background-color: #1a252f !important;
+        }
+        .skin-blue .main-header .navbar {
+          background-color: #2c3e50 !important;
+        }
+        .skin-blue .main-header .navbar .sidebar-toggle:hover {
+          background-color: #1a252f !important;
+        }
+
+        /* Sidebar */
+        .skin-blue .main-sidebar,
+        .skin-blue .left-side {
+          background-color: #34495e !important;
+        }
+        .skin-blue .sidebar-menu > li > a {
+          color: #bdc3c7 !important;
+          border-left: 3px solid transparent;
+        }
+        .skin-blue .sidebar-menu > li > a:hover {
+          background-color: #2c3e50 !important;
+          color: #ecf0f1 !important;
+          border-left-color: #2980b9 !important;
+        }
+        .skin-blue .sidebar-menu > li.active > a {
+          background-color: #2c3e50 !important;
+          color: #ffffff !important;
+          border-left-color: #2980b9 !important;
+        }
+        .skin-blue .sidebar a {
+          color: #bdc3c7 !important;
+        }
+        .skin-blue .sidebar-menu > li > .treeview-menu {
+          background-color: #2c3e50 !important;
+        }
+
+        /* Box headers */
+        .box.box-primary {
+          border-top-color: #2c3e50 !important;
+        }
+        .box.box-primary > .box-header {
+          background-color: #2c3e50 !important;
+          color: #ffffff !important;
+        }
+        .box.box-primary > .box-header .box-title {
+          color: #ffffff !important;
+        }
+        .box.box-info {
+          border-top-color: #2980b9 !important;
+        }
+        .box.box-info > .box-header {
+          background-color: #2980b9 !important;
+          color: #ffffff !important;
+        }
+        .box.box-info > .box-header .box-title {
+          color: #ffffff !important;
+        }
+        .box.box-success {
+          border-top-color: #27ae60 !important;
+        }
+        .box.box-success > .box-header {
+          background-color: #27ae60 !important;
+          color: #ffffff !important;
+        }
+        .box.box-success > .box-header .box-title {
+          color: #ffffff !important;
+        }
+        .box.box-warning {
+          border-top-color: #f39c12 !important;
+        }
+        .box.box-warning > .box-header {
+          background-color: #f39c12 !important;
+          color: #ffffff !important;
+        }
+        .box.box-warning > .box-header .box-title {
+          color: #ffffff !important;
+        }
+        .box.box-danger {
+          border-top-color: #e74c3c !important;
+        }
+        .box.box-danger > .box-header {
+          background-color: #e74c3c !important;
+          color: #ffffff !important;
+        }
+        .box.box-danger > .box-header .box-title {
+          color: #ffffff !important;
+        }
+
+        /* Buttons */
+        .btn-primary {
+          background-color: #2c3e50 !important;
+          border-color: #233140 !important;
+        }
+        .btn-primary:hover, .btn-primary:focus {
+          background-color: #1a252f !important;
+          border-color: #151e27 !important;
+        }
+        .btn-success {
+          background-color: #27ae60 !important;
+          border-color: #219a52 !important;
+        }
+        .btn-success:hover, .btn-success:focus {
+          background-color: #219a52 !important;
+        }
+        .btn-info {
+          background-color: #2980b9 !important;
+          border-color: #2472a4 !important;
+        }
+        .btn-info:hover, .btn-info:focus {
+          background-color: #2472a4 !important;
+        }
+        .btn-warning {
+          background-color: #f39c12 !important;
+          border-color: #e08e0b !important;
+          color: #ffffff !important;
+        }
+        .btn-warning:hover, .btn-warning:focus {
+          background-color: #e08e0b !important;
+          color: #ffffff !important;
+        }
+        .btn-danger {
+          background-color: #e74c3c !important;
+          border-color: #d43f31 !important;
+        }
+
+        /* Value boxes */
+        .bg-aqua {
+          background-color: #2980b9 !important;
+        }
+        .bg-green {
+          background-color: #27ae60 !important;
+        }
+        .bg-yellow {
+          background-color: #f39c12 !important;
+        }
+        .bg-red {
+          background-color: #e74c3c !important;
+        }
+        .bg-blue {
+          background-color: #2c3e50 !important;
+        }
+        .bg-light-blue {
+          background-color: #2980b9 !important;
+        }
+        .bg-navy {
+          background-color: #2c3e50 !important;
+        }
+
+        /* Continent checkboxes two-column layout */
+        .continent-checkboxes .shiny-options-group {
+          column-count: 2;
+          column-gap: 10px;
+        }
+        .continent-checkboxes .checkbox {
+          margin-top: 0 !important;
+          margin-bottom: 2px !important;
+          break-inside: avoid;
+        }
+
+        /* FASTA download buttons distinct styling */
+        .btn-fasta {
+          background-color: #8e44ad !important;
+          border-color: #7d3c98 !important;
+          color: #ffffff !important;
+        }
+        .btn-fasta:hover, .btn-fasta:focus {
+          background-color: #7d3c98 !important;
+          color: #ffffff !important;
+        }
+
+        /* Download button groups */
+        .download-controls {
+          display: flex;
+          gap: 5px;
+          align-items: center;
+          flex-wrap: wrap;
+          margin-bottom: 10px;
+        }
+        .download-group {
+          display: flex;
+          gap: 4px;
+        }
+        .download-separator {
+          border-left: 2px solid #bdc3c7;
+          height: 30px;
+          margin: 0 8px;
+        }
+
 ",
         get_table_css()
       ))),
@@ -239,6 +436,17 @@ ui <- dashboardPage(
     mod_user_info_ui("user_info"),
 
     tabItems(
+      tabItem(tabName = "about",
+              fluidRow(
+                box(
+                  title = "About BOLDcuratoR",
+                  status = "primary",
+                  width = 12,
+                  solidHeader = TRUE,
+                  includeMarkdown("about.md")
+                )
+              )),
+
       tabItem(tabName = "input",
               mod_data_import_ui("data_import")),
 

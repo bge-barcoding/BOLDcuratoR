@@ -125,6 +125,28 @@ mod_data_import_server <- function(id, state, session_db, logger = NULL) {
     })
 
     # Form submission handler
+    #
+    # ── FUTURE IMPROVEMENT: Mid-Download Abort ───────────────────────
+    # Currently, once bold.fetch() starts there is no way to cancel it
+    # from the Shiny UI. The BOLDconnectR developer confirms bold.fetch()
+    # has no built-in cancellation; in R/RStudio you would use Esc/Ctrl+C.
+    #
+    # Recommended approach: Shiny ExtendedTask (available since Shiny 1.8.1).
+    # - Runs the search via callr::r_bg() in a background R process
+    # - Supports task$cancel() which kills the background process
+    # - Native Shiny integration with automatic reactive updates
+    # - UI change: "Get Data" button becomes "Cancel" during active search
+    #
+    # Alternative: raw callr::r_bg() with manual process management,
+    # but ExtendedTask is simpler — no manual lifecycle handling needed.
+    #
+    # Implementation sketch:
+    #   search_task <- ExtendedTask$new(function(params) {
+    #     callr::r_bg(function(p) { ... search logic ... }, args = list(params))
+    #   })
+    #   observeEvent(input$submit, { search_task$invoke(search_params) })
+    #   observeEvent(input$cancel, { search_task$cancel() })
+    # ─────────────────────────────────────────────────────────────────
     observeEvent(input$submit, {
       # Validate API key from user info
       user_info <- state$get_store()$user_info
@@ -688,6 +710,21 @@ mod_data_import_server <- function(id, state, session_db, logger = NULL) {
 
         # Search each taxon independently, collecting process IDs.
         # Progress: 40% – 60% for the public search, 60% – 70% for full fetch.
+        #
+        # ── FUTURE IMPROVEMENT: Parallelized Search ──────────────────────
+        # The current sequential lapply works but is slow for many taxa.
+        # Recommended upgrade: replace lapply with future.apply::future_lapply()
+        # using plan(multisession, workers = 3).
+        #
+        # Packages future, future.apply, parallelly are already in renv.
+        # For 100 taxa: use max 3 workers to avoid overwhelming BOLD API.
+        # Add Sys.sleep(0.5) rate-limiting between batch launches.
+        # Expected speedup: ~3x (e.g. 50s sequential → ~17s parallel).
+        #
+        # Caveat: BOLD API has no published rate limit; use conservative
+        # concurrency. For progress reporting with futures, use the
+        # progressr package (future-compatible progress updates).
+        # ─────────────────────────────────────────────────────────────────
         n_taxa <- length(taxonomy)
         all_search_results <- lapply(seq_along(taxonomy), function(idx) {
           taxon <- taxonomy[idx]

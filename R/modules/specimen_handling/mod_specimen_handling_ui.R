@@ -22,37 +22,42 @@ mod_specimen_handling_ui <- function(id) {
         width = 12,
         solidHeader = TRUE,
 
-        # Download Controls
-        fluidRow(
-          column(12,
-                 div(
-                   class = "download-controls",
-                   style = "float: right; margin-bottom: 10px;",
-                   downloadButton(ns("download_all"),
-                                  "Download All",
-                                  class = "btn-success"
-                   ),
-                   downloadButton(ns("download_selected"),
-                                  "Download Selected",
-                                  class = "btn-info"
-                   ),
-                   downloadButton(ns("download_annotated"),
-                                  "Download Annotated Records",
-                                  class = "btn-warning"
-                   ),
-                   downloadButton(ns("download_curation_report"),
-                                  "Download BOLD Curation Report",
-                                  class = "btn-primary"
-                   ),
-                   downloadButton(ns("download_fasta"),
-                                  "Download FASTA",
-                                  class = "btn-success"
-                   ),
-                   downloadButton(ns("download_selected_fasta"),
-                                  "Download Selected FASTA",
-                                  class = "btn-info"
-                   )
-                 )
+        # Download Controls — data downloads and FASTA downloads visually separated
+        div(
+          class = "download-controls",
+          # Data downloads group
+          div(
+            class = "download-group",
+            downloadButton(ns("download_all"),
+                           "Download All",
+                           class = "btn-success"
+            ),
+            downloadButton(ns("download_selected"),
+                           "Download Selected",
+                           class = "btn-info"
+            ),
+            downloadButton(ns("download_annotated"),
+                           "Download Annotated Records",
+                           class = "btn-warning"
+            ),
+            downloadButton(ns("download_curation_report"),
+                           "Download Curation Report",
+                           class = "btn-primary"
+            )
+          ),
+          # Visual separator
+          span(class = "download-separator"),
+          # FASTA downloads group (distinct purple styling)
+          div(
+            class = "download-group",
+            downloadButton(ns("download_fasta"),
+                           "FASTA (All)",
+                           class = "btn-fasta"
+            ),
+            downloadButton(ns("download_selected_fasta"),
+                           "FASTA (Selected)",
+                           class = "btn-fasta"
+            )
           )
         ),
 
