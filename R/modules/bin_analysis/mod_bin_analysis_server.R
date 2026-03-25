@@ -124,14 +124,14 @@ mod_bin_analysis_server <- function(id, state, processor, logger) {
     output$bin_content_table <- renderDT({
       req(!is.null(analysis_results()))
       results <- analysis_results()
+      # Guard: req() here prevents DataTables receiving an empty/null Ajax
+      # response (which triggers TN/7) when content isn't ready yet.
+      req(!is.null(results$content))
 
       # Ensure required columns exist
       required_cols <- c("bin_uri", "total_records", "unique_species", "species_list", "countries", "concordance")
-
-      if(!is.null(results$content)) {
-        content_data <- results$content[, intersect(names(results$content), required_cols)]
-        format_bin_content_table(content_data)
-      }
+      content_data <- results$content[, intersect(names(results$content), required_cols)]
+      format_bin_content_table(content_data)
     })
 
     # Summary box outputs with enhanced metrics

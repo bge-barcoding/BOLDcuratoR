@@ -25,21 +25,25 @@ mod_specimen_handling_server <- function(id, state, processor, logger) {
     # Proxy for updating specimen table in-place when annotations change
     specimen_proxy <- DT::dataTableProxy("specimen_table")
 
-    # Watch for annotation changes AND data changes, then refresh the
-    # specimen table via replaceData().  rv$filtered_data is reactive
-    # (not isolated) so this fires on both annotation edits AND
-    # filter/tab-switch changes — fixing the stale-data-on-tab-switch bug.
+    # Watch for annotation changes, then refresh the specimen table via
+    # replaceData().  rv$filtered_data is read with isolate() so this observer
+    # only fires when annotations change — NOT when the underlying data
+    # changes.  Data changes are handled exclusively by renderDT below,
+    # which avoids a race condition where replaceData() and renderDT both
+    # fire simultaneously on the same reactive invalidation, causing
+    # DataTables to receive an Ajax error (TN/7) mid-initialization.
     observe({
       store <- state$get_store()
 
-      # Reactive dependencies: annotation keys
+      # Reactive dependencies: annotation keys only
       current_selections <- store$selected_specimens
       current_flags      <- store$specimen_flags
       current_notes      <- store$specimen_curator_notes
       current_uids       <- store$specimen_updated_ids
 
-      # Reactive dependency: filtered data (NOT isolated)
-      data <- rv$filtered_data
+      # Read filtered data WITHOUT creating a reactive dependency; renderDT
+      # handles the re-render when rv$filtered_data itself changes.
+      data <- isolate(rv$filtered_data)
       if (is.null(data) || nrow(data) == 0) return()
 
       prepared <- prepare_module_data(
