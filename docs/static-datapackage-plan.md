@@ -603,3 +603,87 @@ rollback by repointing `current.json` works.
 column is `inst`. The `intersect()` at lines 34/107 silently drops it, so the
 institution column is missing from every Excel and TSV export today. One-word fix,
 worth taking with this work.
+
+---
+
+## Appendix: per-user distribution instead of a server
+
+Considered as an alternative to Phase 4: users install the app locally and it pulls
+the snapshot from Zenodo on first run. This removes the concurrency problem
+entirely, removes the NHM IT dependency, costs nothing to host, and works offline.
+
+**Everything in Phases 1–3 is unchanged and shared.** Only the pointer resolution
+differs: instead of `/srv/bold-snapshots/current.json` maintained by a cron job, the
+app resolves a per-user cache directory and downloads the snapshot itself if absent
+or superseded.
+
+### The download is the binding constraint, not the packaging
+
+8 GB per user from Zenodo. Twenty students on the same campus network at 09:00 is
+the realistic failure mode. Mitigations, all enabled by the `specimen`/`sequence`
+table split in Phase 1.1:
+
+- Ship the **metadata-only build (~2 GB)** as the desktop default; fetch sequences
+  from the BOLD API for selected specimens only, at export time.
+- Accept a local file path / pre-seeded cache so snapshots can be handed out on USB
+  or from a network share, bypassing the download entirely.
+- Verify by checksum and resume partial downloads; never leave a half-written file
+  where the app will try to open it.
+
+### Option A — R package with one-line install (recommended first step)
+
+`pak::pak("bge-barcoding/BOLDcuratoR")` then `BOLDcuratoR::run_app()`.
+
+- Cross-platform at no cost: CRAN supplies macOS and Windows binaries for every
+  dependency including `duckdb`. No Electron, no code signing, no notarization.
+- Snapshot cached in `tools::R_user_dir("BOLDcuratoR", "data")`.
+- The repo already has `DESCRIPTION` and `renv.lock`; converting `app.R` +
+  `R/modules/*` into a package with an exported `run_app()` is the bulk of the work.
+- Requires R to be installed — acceptable for a barcoding course, not for a general
+  public release.
+- **Roughly a week on top of Phases 1–3**, and it de-risks the NHM hosting unknown:
+  if IT cannot provide disk or shell, the course still runs.
+
+### Option B — Python rewrite with native installers
+
+Shiny for Python, packaged with Briefcase or Tauri + PyInstaller, built for both
+platforms on GitHub Actions runners. `duckdb` wheels exist for macOS (arm64 + x86)
+and Windows.
+
+- Signing: Apple Developer Program ($99/yr, notarization is mandatory for
+  distribution outside the App Store) and Microsoft Artifact Signing (~$10/mo).
+  Note EV certificates no longer bypass SmartScreen — reputation accrues over time,
+  so early users still see warnings.
+- Real cost is the rewrite: ~9,000 lines of R across R6 classes, DT tables, BAGS
+  grading, BIN concordance and 17 scoring criteria. That is re-validating scientific
+  logic, not porting UI. Months.
+- Only justified if desktop distribution is a long-term goal rather than a fix for
+  one course.
+
+### Option C — shinylive, no install at all
+
+Shiny for Python compiled to WebAssembly, hosted as static files (GitHub Pages).
+DuckDB's Python client is compiled to WASM and available in Pyodide's package
+repository, so the app could query hive-partitioned Parquet on R2 or Zenodo via HTTP
+range requests entirely client-side.
+
+- Concurrency stops being a concept — 20 students is 20 browsers.
+- Same rewrite cost as Option B, plus WASM memory ceilings on large result sets and
+  probable CORS obstacles for the live-API fallback.
+- **The R route (webR) is riskier**: `duckdb` availability in the webR binary
+  repository (`repo.r-wasm.org`) is unconfirmed and is a hard blocker if absent.
+  Verify before considering it.
+
+### R Shiny as a packaged desktop binary — not recommended
+
+`electricShine` builds Windows only, and documents why macOS is hard: R
+installations hard-code paths, so the bundle is not relocatable. The cross-platform
+R + Electron templates are experimental and single-maintainer. Choosing this means
+maintaining packaging infrastructure rather than curation features.
+
+### Recommendation
+
+Build **Option A alongside** the server plan, not instead of it — they share the
+whole data layer, so the marginal cost is small and it removes the single largest
+unknown (NHM IT). Defer the Option B/C rewrite decision until after the course has
+been run once and there is evidence about how students actually use the tool.
