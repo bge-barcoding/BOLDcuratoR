@@ -170,19 +170,34 @@ Measured on Windows 11, Chrome, R 4.5.1 in webR, DuckDB 1.5.2.
 
 | Measure | Pass | 49 MB | 180 MB | 441 MB |
 |---|---|---|---|---|
-| Mount time | — | 5 s | | |
-| **wasm memory after mount, before any query** | **≈ unchanged** | not isolated¹ | | |
-| Cold load (first visit, app + fixture) | < 60 s | ok | | |
-| Taxon resolve | < 1 s | 0.035 s | | |
-| Family query, ~5,000 rows | < 5 s | 0.116 s | | |
-| Peak tab memory (Chrome Task Manager) | < 3 GB | 750 MB | | |
-| 20 consecutive queries | no crash, memory stable | median 0.085 s, R heap delta 0 | | |
+| Mount time | — | 5 s | 12 s | |
+| **tab memory added by mount, before any query** | **≈ 0** | not isolated¹ | **+150 MB** (0.83× image) | |
+| — of which wasm linear memory | **≈ 0** | not read² | not read² | |
+| Cold load (first visit, app + fixture) | < 60 s | ok | ok | |
+| Taxon resolve | < 1 s | 0.035 s | 0.083 s | |
+| Family query, ~5,000 rows | < 5 s | 0.116 s | 0.177 s | |
+| Peak tab memory (Chrome Task Manager) | < 3 GB | 750 MB | 500 MB | |
+| 20 consecutive queries | no crash, memory stable | median 0.085 s, R heap delta 0 | median 0.138 s, R heap delta 0 | |
 
 ¹ Tab memory went 500 MB → 750 MB across page load *and* mount together, so the
-250 MB is not attributable to the 49 MB image on its own. Take the reading
-immediately before and immediately after pressing Mount to separate them. At
-49 MB the distinction is within noise anyway — 180 MB and 441 MB are what decide
-this row.
+250 MB is not attributable to the 49 MB image on its own.
+
+² **The open question.** At 180 MB the mount cost ~0.83× the image size, which
+reads as "WORKERFS is not lazy for this workload". But Chrome's Task Manager
+reports the whole tab, and it matters a great deal *where* those bytes went:
+
+- into **wasm linear memory** → the hard 4 GB ceiling applies, and the snapshot
+  budget is roughly "4 GB minus R minus DuckDB's buffers". 4B is capped well
+  below a useful BOLD snapshot.
+- into the **JS heap or the Blob store, outside wasm** → the 4 GB wasm ceiling is
+  not the binding constraint at all. The limit becomes ordinary browser memory,
+  which is far more forgiving, and 4B stays open.
+
+The app's "Browser memory" panel reports `wasm linear memory` separately from
+`JS heap used` for exactly this reason. Read it before and after Mount.
+
+Query performance is not in doubt either way: sub-200 ms at 180 MB, stable over
+20 consecutive queries with no R heap growth.
 
 The bolded row is the one that decides it. If wasm memory jumps by roughly the
 fixture size on mount, WORKERFS is not lazy for this workload and 4B is capped —
