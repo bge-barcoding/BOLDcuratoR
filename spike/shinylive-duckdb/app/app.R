@@ -127,7 +127,10 @@ server <- function(input, output, session) {
         if (!mounted) stop("webr::mount failed, all variants:\n", paste(errs, collapse = "\n"))
       }
       library(DBI); library(duckdb)
-      path <- if (in_webr()) FIXTURE_DB else Sys.getenv("SPIKE_LOCAL_DB", "fixtures/bold_spike_01.duckdb")
+      # shiny::runApp("app") sets the working directory to app/, so a path relative
+      # to the project root does NOT resolve here -- hence the "../". Pass an
+      # absolute path in SPIKE_LOCAL_DB, or one relative to app/.
+      path <- if (in_webr()) FIXTURE_DB else Sys.getenv("SPIKE_LOCAL_DB", "../fixtures/bold_spike_01.duckdb")
       con  <- dbConnect(duckdb::duckdb(), dbdir = path, read_only = TRUE)
       meta <- dbGetQuery(con, "SELECT key, value FROM _meta")
       nrec <- dbGetQuery(con, "SELECT count(*) n FROM specimen")$n

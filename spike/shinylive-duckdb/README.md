@@ -42,7 +42,7 @@ onwards — emsdk on PATH and Chrome to test in.
 ### On Windows
 
 Use **PowerShell**, not `cmd` — `cmd` mishandles the `'single quotes'` below.
-Everything works natively; WSL is not needed. Five differences:
+Everything works natively; WSL is not needed. Six differences:
 
 0. **Install the packages as binaries**, or the install fails:
 
@@ -68,13 +68,20 @@ Everything works natively; WSL is not needed. Five differences:
    with `file.path(R.home("bin"), "Rscript.exe")` in the RStudio console, then add
    it under Start → "Edit environment variables for your account" → `Path` → New.
    No admin rights needed. Reopen PowerShell afterwards.
-2. **Environment variables** are set separately, not inline:
-   `$env:SPIKE_LOCAL_DB = "fixtures/bold_spike_01.duckdb"`
-3. **emsdk** uses `.\emsdk.bat install latest`, `.\emsdk.bat activate latest`,
+2. **Allow scripts in this terminal, first thing.** Both `emsdk_env.ps1` and
+   `package_fixture.ps1` are blocked by the default execution policy. This
+   affects the current terminal only and needs no admin rights:
+
+   ```powershell
+   Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+   ```
+
+3. **Environment variables** are set separately, not inline, and
+   `SPIKE_LOCAL_DB` is read after `runApp` has moved into `app/`:
+   `$env:SPIKE_LOCAL_DB = "../fixtures/bold_spike_01.duckdb"`
+4. **emsdk** uses `.\emsdk.bat install latest`, `.\emsdk.bat activate latest`,
    `.\emsdk_env.ps1`.
-4. **Use `package_fixture.ps1`**, not the `.sh`. Same arguments, same outputs. If
-   PowerShell refuses to run it, allow scripts for that terminal only:
-   `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`
+5. **Use `package_fixture.ps1`**, not the `.sh`. Same argument, same outputs.
 
 `package_fixture.ps1` has been exercised against a stub packager on PowerShell
 7.4, not against a real emsdk on Windows. If it fails, the message it prints is
@@ -89,8 +96,12 @@ after a 15-minute build.
 
 ```bash
 Rscript build_fixture.R --synthetic --rows 200000
-SPIKE_LOCAL_DB=fixtures/bold_spike_01.duckdb Rscript -e 'shiny::runApp("app", port = 8080)'
+Rscript -e 'shiny::runApp("app", port = 8080)'
 ```
+
+`runApp` moves the working directory into `app/`, so the default this falls back
+to is `../fixtures/bold_spike_01.duckdb`. Override it with `SPIKE_LOCAL_DB` only
+as an absolute path, or one written relative to `app/`.
 
 ### 1. Fixtures at three sizes
 
