@@ -88,6 +88,24 @@ ui <- fluidPage(
   )
 )
 
+# webr::mount() in a browser takes a URL, not a path: a relative source is only
+# supported under Node. Inside webR the fetch happens in a web worker, so a bare
+# "fixtures/x.data" resolves against the worker script's location, not the page,
+# and 404s as "Can't download Emscripten filesystem image metadata".
+#
+# session$clientData carries the page's own URL, so the absolute URL can be built
+# at runtime and works unchanged on localhost and on GitHub Pages (where the app
+# is served from a /repo/ subpath).
+absolute_url <- function(session, path) {
+  if (grepl("^https?://", path)) return(path)
+  cd   <- session$clientData
+  host <- cd$url_hostname %||% "localhost"
+  port <- cd$url_port %||% ""
+  if (nzchar(port)) host <- paste0(host, ":", port)
+  dir  <- sub("[^/]*$", "", cd$url_pathname %||% "/")   # page path minus the filename
+  paste0(cd$url_protocol %||% "http:", "//", host, dir, sub("^/+", "", path))
+}
+
 server <- function(input, output, session) {
   rv <- reactiveValues(con = NULL, status = "Not mounted.", timing = "", bench = NULL)
 
@@ -102,26 +120,34 @@ server <- function(input, output, session) {
 
   observeEvent(input$mount, {
     rv$status <- "Mounting..."
-    mount_variant <- NA_integer_
+    # An environment rather than a local plus a superassignment: the try() body
+    # below evaluates in a frame that `<<-` would step straight past, silently
+    # leaving the local unchanged. Mutating an environment works from any frame.
+    st <- new.env(parent = emptyenv())
+    st$variant <- NA_integer_
+    # Resolved out here, not inside try(), so the failure message can name it.
+    image_url <- if (in_webr()) absolute_url(session, FIXTURE_IMAGE) else FIXTURE_IMAGE
     t0 <- Sys.time()
     res <- try({
       if (in_webr()) {
         # WORKERFS is the whole question: does it stream from the Blob, or does
         # it pull the file into linear memory? Watch the wasm number above.
         dir.create(MOUNTPOINT, showWarnings = FALSE, recursive = TRUE)
+        # webR fetches image_url and the sibling <stem>.js.metadata beside it, so
+        # both files must be served and must differ only in extension.
         # webr::mount()'s argument names have moved between webR versions. Try the
         # documented shapes rather than betting the spike on one of them; whichever
         # succeeds is recorded in the status box.
         # Check against https://docs.r-wasm.org/webr/latest/mounting.html
         variants <- list(
-          function() webr::mount(mountpoint = MOUNTPOINT, source = FIXTURE_IMAGE, type = "WORKERFS"),
-          function() webr::mount(mountpoint = MOUNTPOINT, source = FIXTURE_IMAGE),
-          function() webr::mount(MOUNTPOINT, FIXTURE_IMAGE, "WORKERFS")
+          function() webr::mount(mountpoint = MOUNTPOINT, source = image_url, type = "WORKERFS"),
+          function() webr::mount(mountpoint = MOUNTPOINT, source = image_url),
+          function() webr::mount(MOUNTPOINT, image_url, "WORKERFS")
         )
         mounted <- FALSE; errs <- character()
         for (k in seq_along(variants)) {
           ok <- try(variants[[k]](), silent = TRUE)
-          if (!inherits(ok, "try-error")) { mounted <- TRUE; mount_variant <<- k; break }
+          if (!inherits(ok, "try-error")) { mounted <- TRUE; st$variant <- k; break }
           errs <- c(errs, paste0("  [", k, "] ", conditionMessage(attr(ok, "condition"))))
         }
         if (!mounted) stop("webr::mount failed, all variants:\n", paste(errs, collapse = "\n"))
@@ -141,14 +167,18 @@ server <- function(input, output, session) {
     if (inherits(res, "try-error")) {
       # A failure here IS a result. Record the exact message; if WORKERFS is the
       # blocker this is the sentence that decides 4B vs 4C.
-      rv$status <- paste0("FAILED after ", round(el, 1), "s\n", as.character(res))
+      rv$status <- paste0("FAILED after ", round(el, 1), "s\n",
+                          "image url: ", image_url, "\n",
+                          "(check the Network tab for a 404 on that URL or its .js.metadata sibling)\n",
+                          as.character(res))
       return(invisible())
     }
     rv$con <- res$con
     rv$status <- paste0(
       "Mounted in ", round(el, 1), "s\n",
       "path     : ", res$path, "\n",
-      "mount    : ", if (is.na(mount_variant)) "n/a (local)" else paste("webr::mount variant", mount_variant), "\n",
+      "image    : ", image_url, "\n",
+      "mount    : ", if (is.na(st$variant)) "n/a (local)" else paste("webr::mount variant", st$variant), "\n",
       "specimens: ", format(res$nrec, big.mark = ","), "\n",
       paste(sprintf("%-12s: %s", res$meta$key, res$meta$value), collapse = "\n"))
   })
