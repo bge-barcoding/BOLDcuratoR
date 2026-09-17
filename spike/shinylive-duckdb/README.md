@@ -42,7 +42,27 @@ onwards — emsdk on PATH and Chrome to test in.
 ### On Windows
 
 Use **PowerShell**, not `cmd` — `cmd` mishandles the `'single quotes'` below.
-Everything works natively; WSL is not needed. Four differences:
+Everything works natively; WSL is not needed. Five differences:
+
+0. **Install the packages as binaries**, or the install fails:
+
+   ```powershell
+   Rscript -e "install.packages(c('DBI','duckdb','shiny','shinylive','httpuv'), repos='https://cloud.r-project.org', type='binary')"
+   ```
+
+   CRAN's source versions of `duckdb`, `archive` and `shinylive` are ahead of its
+   Windows binaries, and `Rscript` — unlike RStudio, which asks — silently
+   compiles from source. That needs a working Rtools, and Rtools' cygwin fork
+   (`cygheap read copy failed`, `exit code 0xC0000142`, typically antivirus
+   interference) is a fight worth skipping: nothing here needs a newer version.
+   `type='binary'` uses no compiler at all. It also means a slightly older DuckDB
+   than the one the sizes below were calibrated on, so trust the sizes
+   `build_fixture.R` prints over the ones in this file.
+
+   **Note the quote style throughout**: double quotes outside, single quotes
+   inside. Windows PowerShell 5.1 mangles embedded double quotes when passing
+   arguments to a program, and `Rscript -e '...("app")...'` fails as a confusing
+   R syntax error.
 
 1. **`Rscript` is not on PATH** if you installed R via RStudio. Get the folder
    with `file.path(R.home("bin"), "Rscript.exe")` in the RStudio console, then add
