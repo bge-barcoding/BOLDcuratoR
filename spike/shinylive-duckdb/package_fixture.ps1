@@ -186,9 +186,8 @@ foreach ($f in @($dataFile, $metaFile)) {
 # Paths are quoted in the hint because a Windows home directory routinely contains
 # a space, and an unquoted path is the copy-paste that fails.
 Write-Host ""
-Write-Host "Now copy the pair beside the app and point app\app.R at it:"
-Write-Host "  New-Item -ItemType Directory -Force app\fixtures | Out-Null"
-Write-Host "  Copy-Item `"$dataFile`", `"$metaFile`" app\fixtures\"
+Write-Host "Now point app\app.R at it -- do NOT copy it into app\, which shinylive would"
+Write-Host "bundle into the app payload. export.R copies it into site\ for you."
 Write-Host ""
 Write-Host "  FIXTURE_IMAGE <- Sys.getenv(`"SPIKE_FIXTURE_IMAGE`", `"fixtures/$stem.data`")"
 Write-Host "  FIXTURE_DB    <- Sys.getenv(`"SPIKE_FIXTURE_DB`",    `"/bold/$base`")"

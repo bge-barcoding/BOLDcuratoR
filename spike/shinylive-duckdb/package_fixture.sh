@@ -47,8 +47,8 @@ echo
 echo "Wrote:"
 ls -lh "$DIR/$STEM.data" "$DIR/$STEM.js.metadata" 2>/dev/null || true
 echo
-echo "Now copy the pair beside the app and point app/app.R at it:"
-echo "  mkdir -p app/fixtures && cp $DIR/$STEM.{data,js.metadata} app/fixtures/"
+echo "Now point app/app.R at it -- do NOT copy it into app/, which shinylive would"
+echo "bundle into the app payload. export.R copies it into site/ for you."
 echo
 echo "  FIXTURE_IMAGE <- Sys.getenv(\"SPIKE_FIXTURE_IMAGE\", \"fixtures/$STEM.data\")"
 echo "  FIXTURE_DB    <- Sys.getenv(\"SPIKE_FIXTURE_DB\",    \"/bold/$BASE\")"

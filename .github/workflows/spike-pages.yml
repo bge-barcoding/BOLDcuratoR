@@ -55,24 +55,24 @@ jobs:
       - name: Set up Emscripten (file_packager)
         uses: mymindstorm/setup-emsdk@v14
 
+      # The image is NOT staged into app/: shinylive bundles everything under the
+      # app directory into its payload, which breaks the app outright above
+      # ~100 MB. export.R copies it into site/ beside the app instead.
       - name: Package fixture as WORKERFS image
-        run: |
-          ./package_fixture.sh fixtures/bold_spike_01.duckdb
-          mkdir -p app/fixtures
-          cp fixtures/*.data fixtures/*.js.metadata app/fixtures/
+        run: ./package_fixture.sh fixtures/bold_spike_01.duckdb
+
+      - name: Export shinylive site
+        run: Rscript export.R --no-serve
 
       - name: Fail if any asset exceeds GitHub's 100 MB file limit
         run: |
-          big=$(find app/fixtures -type f -size +100M -print)
+          big=$(find site -type f -size +100M -print)
           if [ -n "$big" ]; then
             echo "These exceed 100 MB and cannot be served from Pages:"
             echo "$big"
             echo "Measure the larger fixtures over localhost instead (see README)."
             exit 1
           fi
-
-      - name: Export shinylive site
-        run: Rscript export.R --no-serve
 
       - uses: actions/upload-pages-artifact@v3
         with:

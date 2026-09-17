@@ -126,12 +126,16 @@ git clone https://github.com/emscripten-core/emsdk && (cd emsdk && \
 
 ```bash
 ./package_fixture.sh fixtures/bold_spike_01.duckdb
-mkdir -p app/fixtures && cp fixtures/bold_spike_01.{data,js.metadata} app/fixtures/
 ```
 
-One fixture at a time: all three together are ~670 MB, and `export.R` copies
-whatever is in `app/fixtures/` into `site/` on every run. Repeat steps 2–4 for
-`_02` and `_03`.
+**Never stage a fixture inside `app/`.** `shinylive::export()` bundles everything
+under the app directory into its payload, and that payload is built as a single
+JavaScript array: a ~180 MB fixture there kills the app outright with
+`Error starting app! Invalid array length`, before any of this app's code runs.
+`export.R` refuses to export if `app/fixtures/` exists, and copies the one
+fixture `app.R` names from `fixtures/` into `site/` itself.
+
+Repeat steps 2–4 for `_02` and `_03`.
 
 ### 3. Point the app at that fixture
 
@@ -162,15 +166,23 @@ deploy only the small fixture there, to measure the real cold-load path.
 
 Run each fixture through: **Mount → Run query → Run benchmark**.
 
+Measured on Windows 11, Chrome, R 4.5.1 in webR, DuckDB 1.5.2.
+
 | Measure | Pass | 49 MB | 180 MB | 441 MB |
 |---|---|---|---|---|
-| Mount time | — | | | |
-| **wasm memory after mount, before any query** | **≈ unchanged** | | | |
-| Cold load (first visit, app + fixture) | < 60 s | | | |
-| Taxon resolve | < 1 s | | | |
-| Family query, ~5,000 rows | < 5 s | | | |
-| Peak tab memory (Chrome Task Manager) | < 3 GB | | | |
-| 20 consecutive queries | no crash, memory stable | | | |
+| Mount time | — | 5 s | | |
+| **wasm memory after mount, before any query** | **≈ unchanged** | not isolated¹ | | |
+| Cold load (first visit, app + fixture) | < 60 s | ok | | |
+| Taxon resolve | < 1 s | 0.035 s | | |
+| Family query, ~5,000 rows | < 5 s | 0.116 s | | |
+| Peak tab memory (Chrome Task Manager) | < 3 GB | 750 MB | | |
+| 20 consecutive queries | no crash, memory stable | median 0.085 s, R heap delta 0 | | |
+
+¹ Tab memory went 500 MB → 750 MB across page load *and* mount together, so the
+250 MB is not attributable to the 49 MB image on its own. Take the reading
+immediately before and immediately after pressing Mount to separate them. At
+49 MB the distinction is within noise anyway — 180 MB and 441 MB are what decide
+this row.
 
 The bolded row is the one that decides it. If wasm memory jumps by roughly the
 fixture size on mount, WORKERFS is not lazy for this workload and 4B is capped —
