@@ -36,20 +36,67 @@ supporting evidence.
 
 ## Run it
 
+Needs `DBI`, `duckdb`, `shiny`, `shinylive`, `httpuv` in R, and — from step 2
+onwards — emsdk on PATH and Chrome to test in.
+
+### 0. Sanity check without a browser
+
+Outside webR the app opens the fixture straight off disk (`SPIKE_LOCAL_DB`), so
+this exercises the fixture and the queries with no emsdk and no wasm. It proves
+nothing about memory, but it catches a broken fixture in seconds rather than
+after a 15-minute build.
+
 ```bash
-# 1. Fixtures at three sizes -- to find WHERE it breaks, not just whether it works.
-#    --synthetic needs no BOLD data, so this runs today without the login-gated
-#    download. Use --tsv <path> once you have the real package.
-Rscript build_fixture.R --synthetic
-Rscript build_fixture.R --tsv /path/to/BOLD_Public.tsv.gz
+Rscript build_fixture.R --synthetic --rows 200000
+SPIKE_LOCAL_DB=fixtures/bold_spike_01.duckdb Rscript -e 'shiny::runApp("app", port = 8080)'
+```
 
-# 2. Wrap each fixture as a WORKERFS image (needs emsdk on PATH).
+### 1. Fixtures at three sizes
+
+Three sizes, to find WHERE it breaks rather than just whether it works at one
+size. `--synthetic` needs no BOLD data, so it runs today without the login-gated
+download; the two commands are **alternatives**, and the `--out` differs because
+both write `bold_spike_01/02/03.duckdb` and would otherwise overwrite each other.
+
+```bash
+Rscript build_fixture.R --synthetic                       # ~49 / 180 / 441 MB
+Rscript build_fixture.R --tsv /path/to/BOLD_Public.tsv.gz --out fixtures-real
+```
+
+### 2. Wrap each fixture as a WORKERFS image
+
+Needs emsdk, for Emscripten's `file_packager.py`:
+
+```bash
+git clone https://github.com/emscripten-core/emsdk && (cd emsdk && \
+  ./emsdk install latest && ./emsdk activate latest) && . emsdk/emsdk_env.sh
+```
+
+```bash
 ./package_fixture.sh fixtures/bold_spike_01.duckdb
-./package_fixture.sh fixtures/bold_spike_02.duckdb
-./package_fixture.sh fixtures/bold_spike_03.duckdb
-mkdir -p app/fixtures && cp fixtures/*.data fixtures/*.js.metadata app/fixtures/
+mkdir -p app/fixtures && cp fixtures/bold_spike_01.{data,js.metadata} app/fixtures/
+```
 
-# 3. Export and serve locally.
+One fixture at a time: all three together are ~670 MB, and `export.R` copies
+whatever is in `app/fixtures/` into `site/` on every run. Repeat steps 2–4 for
+`_02` and `_03`.
+
+### 3. Point the app at that fixture
+
+Edit the two defaults at the top of `app/app.R`:
+
+```r
+FIXTURE_IMAGE <- Sys.getenv("SPIKE_FIXTURE_IMAGE", "fixtures/bold_spike_01.data")
+FIXTURE_DB    <- Sys.getenv("SPIKE_FIXTURE_DB",    "/bold/bold_spike_01.duckdb")
+```
+
+The environment variables only work for step 0. `app.R` runs inside webR in the
+browser, where your shell environment does not exist, so the exported app always
+uses the defaults baked into the file — edit them and re-export.
+
+### 4. Export and serve locally
+
+```bash
 Rscript export.R
 ```
 
@@ -58,9 +105,6 @@ Open <http://localhost:8080> **in Chrome**, with Task Manager (Shift+Esc) visibl
 Test locally before deploying. Localhost removes network variability, and GitHub
 Pages has a 100 MB per-file limit that the 200 MB and 400 MB fixtures breach —
 deploy only the small fixture there, to measure the real cold-load path.
-
-Point the app at a different fixture by editing `FIXTURE_IMAGE` / `FIXTURE_DB` at
-the top of `app/app.R`.
 
 ## What to measure
 

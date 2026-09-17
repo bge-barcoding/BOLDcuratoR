@@ -47,6 +47,12 @@ echo
 echo "Wrote:"
 ls -lh "$DIR/$STEM.data" "$DIR/$STEM.js.metadata" 2>/dev/null || true
 echo
-echo "In app.R set:"
-echo "  SPIKE_FIXTURE_IMAGE=fixtures/$STEM.data"
-echo "  SPIKE_FIXTURE_DB=/bold/$BASE"
+echo "Now copy the pair beside the app and point app/app.R at it:"
+echo "  mkdir -p app/fixtures && cp $DIR/$STEM.{data,js.metadata} app/fixtures/"
+echo
+echo "  FIXTURE_IMAGE <- Sys.getenv(\"SPIKE_FIXTURE_IMAGE\", \"fixtures/$STEM.data\")"
+echo "  FIXTURE_DB    <- Sys.getenv(\"SPIKE_FIXTURE_DB\",    \"/bold/$BASE\")"
+echo
+echo "Edit those DEFAULTS -- do not rely on the environment variables. app.R runs"
+echo "inside webR in the browser, where your shell environment does not exist, so"
+echo "only the values baked into the exported file take effect. Then: Rscript export.R"

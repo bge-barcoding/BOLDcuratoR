@@ -32,7 +32,7 @@ if (dir.exists(fx_src)) {
 } else {
   message("NOTE: no ", fx_src, " directory. Build fixtures first:\n",
           "  Rscript build_fixture.R --synthetic\n",
-          "  ./package_fixture.sh fixtures/bold_spike_02.duckdb\n",
+          "  ./package_fixture.sh fixtures/bold_spike_01.duckdb\n",
           "then copy the .data/.js.metadata pair into ", fx_src)
 }
 

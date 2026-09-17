@@ -13,8 +13,8 @@ library(shiny)
 # --- configuration ------------------------------------------------------------
 # Fixture is served as a sibling of the app, or from an absolute URL. WORKERFS
 # wants a filesystem image (.data + .js.metadata) built by package_fixture.sh.
-FIXTURE_IMAGE <- Sys.getenv("SPIKE_FIXTURE_IMAGE", "fixtures/bold_spike_02.data")
-FIXTURE_DB    <- Sys.getenv("SPIKE_FIXTURE_DB",    "/bold/bold_spike_02.duckdb")
+FIXTURE_IMAGE <- Sys.getenv("SPIKE_FIXTURE_IMAGE", "fixtures/bold_spike_01.data")
+FIXTURE_DB    <- Sys.getenv("SPIKE_FIXTURE_DB",    "/bold/bold_spike_01.duckdb")
 MOUNTPOINT    <- "/bold"
 
 in_webr <- function() isTRUE(requireNamespace("webr", quietly = TRUE)) &&
@@ -127,7 +127,7 @@ server <- function(input, output, session) {
         if (!mounted) stop("webr::mount failed, all variants:\n", paste(errs, collapse = "\n"))
       }
       library(DBI); library(duckdb)
-      path <- if (in_webr()) FIXTURE_DB else Sys.getenv("SPIKE_LOCAL_DB", "fixtures/bold_spike_02.duckdb")
+      path <- if (in_webr()) FIXTURE_DB else Sys.getenv("SPIKE_LOCAL_DB", "fixtures/bold_spike_01.duckdb")
       con  <- dbConnect(duckdb::duckdb(), dbdir = path, read_only = TRUE)
       meta <- dbGetQuery(con, "SELECT key, value FROM _meta")
       nrec <- dbGetQuery(con, "SELECT count(*) n FROM specimen")$n
