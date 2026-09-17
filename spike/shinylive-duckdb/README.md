@@ -39,6 +39,27 @@ supporting evidence.
 Needs `DBI`, `duckdb`, `shiny`, `shinylive`, `httpuv` in R, and — from step 2
 onwards — emsdk on PATH and Chrome to test in.
 
+### On Windows
+
+Use **PowerShell**, not `cmd` — `cmd` mishandles the `'single quotes'` below.
+Everything works natively; WSL is not needed. Four differences:
+
+1. **`Rscript` is not on PATH** if you installed R via RStudio. Get the folder
+   with `file.path(R.home("bin"), "Rscript.exe")` in the RStudio console, then add
+   it under Start → "Edit environment variables for your account" → `Path` → New.
+   No admin rights needed. Reopen PowerShell afterwards.
+2. **Environment variables** are set separately, not inline:
+   `$env:SPIKE_LOCAL_DB = "fixtures/bold_spike_01.duckdb"`
+3. **emsdk** uses `.\emsdk.bat install latest`, `.\emsdk.bat activate latest`,
+   `.\emsdk_env.ps1`.
+4. **Use `package_fixture.ps1`**, not the `.sh`. Same arguments, same outputs. If
+   PowerShell refuses to run it, allow scripts for that terminal only:
+   `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`
+
+`package_fixture.ps1` has been exercised against a stub packager on PowerShell
+7.4, not against a real emsdk on Windows. If it fails, the message it prints is
+the useful part.
+
 ### 0. Sanity check without a browser
 
 Outside webR the app opens the fixture straight off disk (`SPIKE_LOCAL_DB`), so
