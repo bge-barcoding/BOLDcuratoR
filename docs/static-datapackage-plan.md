@@ -59,55 +59,100 @@ design considerably and supersede parts of Phase 3:
 
 ---
 
-## IMMEDIATE NEXT STEP — the 4B spike
+## RESOLVED — the 4B spike answered it: 4B is viable
 
-`duckdb` is confirmed available as a webR binary, so the local option is live and the
-spike decides between 4B (shinylive, cheap) and 4C (Python rewrite, expensive).
+**The question was:** can shinylive + webR + duckdb query a few-hundred-MB
+snapshot fast enough to be usable, inside the 4 GB wasm ceiling?
 
-**The one question the spike answers:** can shinylive + webR + duckdb query a
-few-hundred-MB snapshot fast enough to be usable, inside the 4 GB wasm ceiling?
+**The answer is yes, and the ceiling turned out not to be the constraint.**
+Measured on Windows 11 / Chrome / webR R 4.5.1 / DuckDB 1.5.2, full numbers and
+method in `spike/shinylive-duckdb/README.md`:
 
-**Status: scaffold built and committed** in `spike/shinylive-duckdb/` — throwaway
-code, kept separate from `R/`, not wired into the app. The SQL and the synthetic
-generator are verified (DuckDB 1.5.5); all R files parse. What remains is to *run*
-it in a browser and fill in the results table in `spike/shinylive-duckdb/README.md`.
+| | 180 MB image | 441 MB image |
+|---|---|---|
+| wasm linear memory added by the mount | **0 MB** | **0 MB** |
+| wasm added by opening the DB + count(\*) | 53 MB | 51 MB |
+| 5,000-row taxon query | 0.177 s | 0.170 s |
+| 20 consecutive queries | median 0.138 s, no heap growth | median 0.120 s, no heap growth |
+| steady tab memory after mount | 500 MB | 500 MB |
+| transient tab peak during mount | not observed | **1.3 GB** |
+| mount time (localhost) | 12–20 s | 42 s |
 
-| File | Purpose |
-|---|---|
-| `build_fixture.R` | Build small DuckDB fixtures from a BOLD TSV sample using the Phase 1 schema (`specimen` + `taxon`, taxonomically sorted). Emit **three** sizes — measured at 49 / 180 / 441 MB — to find where it breaks, not just whether it works. |
-| `package_fixture.sh` | Wrap each fixture as an Emscripten WORKERFS filesystem image via `file_packager`. |
-| `app.R` | Minimal Shiny app: taxon text input → resolve against `taxon` → query `specimen` → render results table. Displays per-query elapsed time and `gc()` memory alongside every result. |
-| `export.R` | `shinylive::export()`, previewed with `httpuv::runStaticServer()`. |
-| `.github/workflows/spike-pages.yml` | Deploy the export to GitHub Pages (shinylive cannot run from `file://`). |
-| `README.md` | What to measure, and the pass/fail thresholds below. |
+WORKERFS streams rather than copying the image into linear memory, so the
+snapshot does not consume the wasm budget. Nothing except the download scales
+with file size: DuckDB pays for the pages a query touches, which is what the
+taxonomic sort order and the `taxon` lookup exist to keep small.
 
-**Probe these explicitly — they are the actual unknowns:**
+**The constraint moved rather than disappeared.** Two things now govern how big a
+shipped snapshot can be, and neither is the 4 GB ceiling:
 
-1. Does `dbConnect(duckdb::duckdb(), dbdir = <mounted path>, read_only = TRUE)` work
-   at all against a WORKERFS mount?
-2. **Is WORKERFS genuinely lazy for DuckDB's access pattern**, or does the file get
-   pulled into wasm linear memory? This is the single most important measurement —
-   if it is not lazy, the ceiling is roughly the snapshot size and 4B is capped very
-   low. Compare tab memory with the 49 MB and 441 MB fixtures.
-3. Does IDBFS persist the fixture across reloads so it downloads once?
-4. Does memory grow across repeated queries, or is it stable?
+1. **The transient peak while mounting** — ~3× the image size (1.3 GB for a
+   441 MB file), for a few seconds, before settling back. A 1.5 GB snapshot
+   implies a ~4 GB spike, which is not safe on an 8 GB laptop. This is now the
+   binding number and it has only been measured on one well-provisioned machine.
+2. **The download, repeated per visit** — 42 s for 441 MB over *localhost*.
+   IDBFS persistence is what makes this a one-time cost, and it is still
+   **untested**. Without it the offline story in §4B is considerably weaker than
+   written.
 
-**Pass/fail thresholds — decide against these, not against impressions:**
+**Recommended snapshot budget: ≤ ~500 MB**, until the transient peak is measured
+on a low-memory machine. Note this cuts against §8's ~2 GB figure for 4A/4C — see
+the open question there about whether one snapshot serves all targets.
 
-| Measure | Pass |
-|---|---|
-| Cold load (app + 441 MB fixture, first visit) | < 60 s |
-| Taxon resolve (`taxon` lookup) | < 1 s |
-| Family-level query, ~5,000 rows returned | < 5 s |
-| Peak tab memory, 441 MB fixture | < 3 GB (headroom under the 4 GB cap) |
-| 20 consecutive queries | no crash, memory stable |
+**Caveat on sizing.** The fixtures are synthetic, calibrated for cardinality and
+skew rather than real free text, and came in at 45–54 bytes/row against the ~75
+bytes/row Phase 1 assumes. A real snapshot of the same row count will be *larger*,
+and file size drives both constraints above. Re-measure with `--tsv` on the real
+public package before committing to a size.
 
-**Fallback to record if WORKERFS fails:** fetch the fixture into MEMFS instead and
-measure the largest size that survives. That number is 4B's real budget, and if it
-lands below a useful snapshot size, 4C is proven rather than assumed — at a cost of
-one day.
+### Consequences for the decision
 
-Timebox: one day. 4A proceeds in R in parallel and is not blocked by the outcome.
+- **4B proceeds.** A zero-install local option is viable at a fraction of 4C's
+  cost, and the risk that justified 4C as a fallback has been retired by
+  measurement rather than assumption.
+- **4C is no longer the presumed destination for the local option.** The
+  consolidation argument in §4C stands on its own merits and is unaffected by
+  this result; what has gone is the "4B might not work at all" premise beneath it.
+- **4A is unaffected** and proceeds in R as planned.
+
+### Follow-ups this opens
+
+1. Test IDBFS persistence across reloads. This is the difference between
+   "download once" and "download every visit" and is the largest remaining
+   unknown in 4B.
+2. Re-run the spike with `--tsv` against the real package to get true
+   bytes/row and a real snapshot size.
+3. Measure the mount transient on an 8 GB machine, which sets the real budget.
+
+### How it was measured
+
+The spike lives in `spike/shinylive-duckdb/` — throwaway code, kept separate from
+`R/`, not wired into the app. `build_fixture.R` builds synthetic DuckDB fixtures
+at three sizes (49 / 180 / 441 MB) using the Phase 1 schema, `package_fixture.sh`
+(or `.ps1` on Windows) wraps each as an Emscripten WORKERFS image, and `export.R`
+produces the static site. The app reports wasm linear memory, read from inside the
+webR worker via `webr::eval_js()`, at three points around the mount — Chrome's
+Task Manager cannot distinguish wasm from Blob memory, and `performance.memory`
+only sees the main thread, which never touches the file.
+
+The four unknowns it was built to probe, and how they came out:
+
+1. **Does `dbConnect(..., read_only = TRUE)` work against a WORKERFS mount?**
+   Yes, at all three sizes.
+2. **Is WORKERFS genuinely lazy for DuckDB's access pattern?** Yes — 0 MB of wasm
+   linear memory added by the mount at both 180 MB and 441 MB. This was the
+   measurement the whole spike existed for.
+3. **Does IDBFS persist the fixture across reloads?** **Still untested** — the
+   largest remaining unknown in 4B.
+4. **Does memory grow across repeated queries?** No. 20 consecutive queries at
+   both sizes, zero R heap growth.
+
+Every pass/fail threshold set in advance was met, except that the peak-memory
+threshold needs restating: it was written as "< 3 GB, headroom under the 4 GB
+cap", on the assumption that the image would land in wasm. It does not, so the
+number to watch is the ~3× transient tab peak during mount, on the machine with
+the least RAM — not headroom under a ceiling that turned out to be irrelevant.
+
 
 ---
 
@@ -670,16 +715,17 @@ first, not last; it turns translation correctness into a test rather than a judg
   4C has one scary dialog unless you pay. This cuts against the "easy to install" goal.
 - *Delivery risk.* The R app works today. A rewrite that stalls at 80% leaves nothing.
 
-### Decision gate — run this before choosing between 4B and 4C
+### Decision gate — RUN, and passed
 
-The webR `duckdb` test (90 seconds) collapses the decision:
+`duckdb` is available in webR, the spike was run, and 4B performed: 0 MB of wasm
+linear memory for the mount at both 180 MB and 441 MB, sub-200 ms queries, stable
+memory across repeated runs. See the resolved section at the top of this document
+for the numbers and for the two constraints that replaced the 4 GB ceiling (the
+~3× transient peak during mount, and per-visit download pending IDBFS).
 
-- **`duckdb` unavailable in webR** → 4B is dead; the choice is 4C or no local option.
-- **`duckdb` available** → run the 4B spike. If it performs, a zero-install local
-  option costs a fraction of 4C. If it does not, the case for 4C is proven rather
-  than assumed, at a cost of one day.
-
-4A proceeds in R in parallel either way and is not blocked by the answer.
+The local option is **4B**. 4C's case now rests on the consolidation argument
+alone, not on 4B being unworkable. 4A proceeds in R in parallel and was never
+blocked by this.
 
 ---
 

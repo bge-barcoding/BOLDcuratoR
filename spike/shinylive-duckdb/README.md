@@ -170,51 +170,70 @@ Measured on Windows 11, Chrome, R 4.5.1 in webR, DuckDB 1.5.2.
 
 | Measure | Pass | 49 MB | 180 MB | 441 MB |
 |---|---|---|---|---|
-| Mount time | — | 5 s | 12–20 s | |
-| **wasm linear memory added by mount alone** | **≈ 0** | not measured³ | **0 MB** | |
-| wasm added by open + count(\*) | — | not measured³ | 53 MB (115→168) | |
-| Tab memory added by mount (Task Manager) | — | not isolated¹ | +150 MB | |
-| Cold load (first visit, app + fixture) | < 60 s | ok | ok | |
-| Taxon resolve | < 1 s | 0.035 s | 0.083 s | |
-| Family query, ~5,000 rows | < 5 s | 0.116 s | 0.177 s | |
-| Peak tab memory (Chrome Task Manager) | < 3 GB | 750 MB | 500 MB | |
-| 20 consecutive queries | no crash, memory stable | median 0.085 s, R heap delta 0 | median 0.138 s, R heap delta 0 | |
+| Mount time | — | 5 s | 12–20 s | 42 s |
+| **wasm linear memory added by mount alone** | **≈ 0** | not measured³ | **0 MB** | **0 MB** |
+| wasm added by open + count(\*) | — | not measured³ | 53 MB (115→168) | 51 MB (115→166) |
+| Steady tab memory after mount | — | not isolated¹ | 500 MB | 500 MB |
+| **Transient tab peak during mount** | < 3 GB | not observed | not observed | **1.3 GB** |
+| Taxon resolve | < 1 s | 0.035 s | 0.083 s | 0.075 s |
+| Family query, ~5,000 rows | < 5 s | 0.116 s | 0.177 s | 0.170 s |
+| 20 consecutive queries | no crash, memory stable | median 0.085 s, R heap delta 0 | median 0.138 s, R heap delta 0 | median 0.120 s, R heap delta 0 |
 
 ¹ The 49 MB tab reading spans page load *and* mount together, so it does not
 isolate the image.
 
-² *(footnote retired — see the wasm rows above, which measure this directly.)*
+² *(retired — the wasm rows measure this directly.)*
 
-³ The wasm probe was added after the 49 MB run. Re-run fixture 01 if the
-mid-point is wanted; the 180 MB result is the one that decides the row.
+³ The wasm probe was added after the 49 MB run. The 180 and 441 MB results
+decide the row; re-run fixture 01 only if the mid-point is wanted.
 
-### Interim verdict, pending 441 MB
+## Verdict
 
-**WORKERFS is lazy.** Mounting a 180.5 MB image added **0 MB** of wasm linear
-memory. The 4 GB wasm ceiling is therefore not the binding constraint on
-snapshot size, which was the open question the spike existed to answer.
+**WORKERFS is lazy. Target 4B is viable.** Mounting cost **0 MB** of wasm linear
+memory at both 180 MB and 441 MB, so the 4 GB wasm ceiling — the thing that would
+have killed 4B outright — is not the binding constraint.
 
-What the bytes actually cost, and where:
+Three findings, in order of how much they matter:
 
-- **wasm linear memory** grows only with what a query *touches* — 53 MB to open
-  the database and count 4.2 M rows, then flat across 20 consecutive queries.
-  This is DuckDB's buffer pool, not the file.
-- **Browser (non-wasm) memory** holds the downloaded image as a Blob, roughly
-  1:1 with file size: +150 MB of tab memory for a 180 MB image. This is ordinary
-  renderer memory, far more forgiving than the 4 GB wasm cap, but it is still
-  real and it still scales with the snapshot.
+**1. Nothing scales with file size except the download.** Opening the database
+and counting rows cost 51–53 MB of wasm at both sizes. Queries cost the same at
+8.5 M rows as at 4.2 M: ~0.17 s for 5,000 rows, median 0.12 s over 20
+consecutive runs, zero R heap growth. Steady tab memory settled at 500 MB for
+both the 180 MB and the 441 MB image. DuckDB reads what a query touches, which
+is what the taxonomic sort order and the `taxon` lookup were designed to make
+small.
 
-So the ceiling that matters for 4B is the user's available RAM for a Blob, not
-wasm's 4 GB. A ~1.5 GB real snapshot would need ~1.5 GB of browser memory on top
-of R and DuckDB — heavy but not structurally impossible, and quite different
-from "capped far below a useful dataset".
+**2. The real constraint is the transient peak during mount, not steady state.**
+The 441 MB image spiked the tab to **1.3 GB** for a few seconds before settling
+back to 500 MB — roughly 3× the file, consistent with the image existing as both
+a download buffer and a Blob at once. This is the number that would break a
+low-memory machine, and it is invisible at 180 MB. **It is also the number that
+governs how large a real snapshot can be**: a 1.5 GB snapshot implies a ~4 GB
+transient, which is not safe on an 8 GB laptop.
 
-Query performance is not a concern at any size tested: sub-200 ms for 5,000 rows
-out of 4.2 M, stable over 20 consecutive runs, no R heap growth.
+**3. Mount time is a download, and it is paid on every visit.** 42 s for 441 MB
+over localhost, with no network in the way. Over the internet it is worse, and
+IDBFS persistence (untested — see below) is what turns it into a one-time cost
+rather than a per-visit one.
 
-**Still to confirm at 441 MB:** that the wasm delta stays at 0 (lazy mount does
-not degrade with size), and that ~440 MB of Blob plus R plus DuckDB stays inside
-a normal browser tab.
+### What this does not yet establish
+
+- **IDBFS persistence.** Untested. Without it the snapshot re-downloads on every
+  visit, which makes the offline story much weaker than the plan assumes.
+- **Real BOLD data.** These fixtures are synthetic and calibrated for *cardinality
+  and skew*, not real free text. The Phase 1 estimate implies ~75 bytes/row
+  against the ~45–54 measured here, so a real snapshot of the same row count will
+  be larger — and file size is what drives both the transient peak and the
+  download. **Re-measure with `--tsv` before committing to a snapshot size.**
+- **Low-memory machines.** Everything here was measured on one Windows 11 laptop
+  with headroom for a 1.3 GB spike. An 8 GB machine is the case to check.
+
+### Recommended snapshot budget
+
+Keep the shipped snapshot **at or below ~500 MB** until the transient peak is
+measured on a low-memory machine. That is comfortable on the evidence here
+(441 MB worked with a 1.3 GB spike) and leaves the 4 GB wasm ceiling irrelevant,
+which is the position the spike was run to reach.
 
 The in-app memory readout uses `performance.memory`, which is Chrome-only and does
 not reliably account for wasm linear memory. **Chrome's Task Manager is ground
