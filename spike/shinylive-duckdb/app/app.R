@@ -94,8 +94,18 @@ ui <- fluidPage(
 # and 404s as "Can't download Emscripten filesystem image metadata".
 #
 # session$clientData carries the page's own URL, so the absolute URL can be built
-# at runtime and works unchanged on localhost and on GitHub Pages (where the app
-# is served from a /repo/ subpath).
+# at runtime and works unchanged on localhost and on GitHub Pages (where the site
+# sits under a /repo/ subpath).
+#
+# The catch: shinylive does NOT serve the app from the site root. It runs it at a
+# virtual /app_<id>/ path intercepted by a service worker, and clientData reports
+# that path. The fixtures are not in that virtual filesystem -- they are ordinary
+# static files beside index.html -- so a URL built under /app_<id>/ is handed to
+# the service worker, which cannot resolve it and never settles the fetch. The
+# symptom is a mount that HANGS rather than failing. Dropping the app_ segment
+# gets back to the directory the web server actually serves from.
+#
+# Setting SPIKE_FIXTURE_IMAGE to a full http(s) URL bypasses all of this.
 absolute_url <- function(session, path) {
   if (grepl("^https?://", path)) return(path)
   cd   <- session$clientData
@@ -103,6 +113,8 @@ absolute_url <- function(session, path) {
   port <- cd$url_port %||% ""
   if (nzchar(port)) host <- paste0(host, ":", port)
   dir  <- sub("[^/]*$", "", cd$url_pathname %||% "/")   # page path minus the filename
+  dir  <- sub("app_[^/]*/$", "", dir)                   # ... minus shinylive's virtual app segment
+  if (!nzchar(dir)) dir <- "/"
   paste0(cd$url_protocol %||% "http:", "//", host, dir, sub("^/+", "", path))
 }
 
@@ -127,6 +139,9 @@ server <- function(input, output, session) {
     st$variant <- NA_integer_
     # Resolved out here, not inside try(), so the failure message can name it.
     image_url <- if (in_webr()) absolute_url(session, FIXTURE_IMAGE) else FIXTURE_IMAGE
+    # Published before the attempt, not after: a mount that hangs never reaches
+    # the success or failure branch, and the URL is the whole diagnosis.
+    rv$status <- paste0("Mounting...\nimage url: ", image_url)
     t0 <- Sys.time()
     res <- try({
       if (in_webr()) {
