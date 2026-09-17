@@ -218,8 +218,9 @@ rather than a per-visit one.
 
 ### What this does not yet establish
 
-- **IDBFS persistence.** Untested. Without it the snapshot re-downloads on every
-  visit, which makes the offline story much weaker than the plan assumes.
+- **IDBFS persistence.** Probe built (`4. Persistence (IDBFS)` in the app), not
+  yet run. See below — the expected answer is that IDBFS is the *wrong* cache
+  for the snapshot, and the measurement is there to confirm or refute that.
 - **Real BOLD data.** These fixtures are synthetic and calibrated for *cardinality
   and skew*, not real free text. The Phase 1 estimate implies ~75 bytes/row
   against the ~45–54 measured here, so a real snapshot of the same row count will
@@ -227,6 +228,43 @@ rather than a per-visit one.
   download. **Re-measure with `--tsv` before committing to a snapshot size.**
 - **Low-memory machines.** Everything here was measured on one Windows 11 laptop
   with headroom for a 1.3 GB spike. An 8 GB machine is the case to check.
+
+### Caching the snapshot: IDBFS is probably the wrong layer
+
+`docs/static-datapackage-plan.md` §4B assumes "a service worker plus IDBFS caches
+the app and the database". For the *app* that is right. For the *database* it
+looks wrong, and for the same reason the spike succeeded.
+
+Emscripten's IDBFS is not a storage backend in its own right: it syncs between
+**MEMFS and IndexedDB**, so its contents live in wasm linear memory, and
+Emscripten has a known out-of-memory failure loading large files into it.
+Caching the snapshot there would therefore trade a re-download for the 4 GB
+ceiling — spending exactly the resource WORKERFS was found to preserve.
+
+**How to run the probe:**
+
+1. Point `app.R` at `bold_spike_01` (49 MB) and re-export. The probe refuses
+   above 200 MB: copying 441 MB into MEMFS is the documented way to kill the tab,
+   and 49 MB is enough to show whether the cost scales 1:1.
+2. Mount the fixture as usual, then press **Probe IDBFS**. It mounts IDBFS,
+   populates from IndexedDB, copies the database in, persists it, and reports the
+   wasm delta at each step.
+3. **Reload the page, mount, and press Probe IDBFS again.** The second run
+   reports whether the file survived and what restoring it costs.
+
+**What the numbers mean:**
+
+- *Copy delta ≈ 49 MB* → IDBFS holds the snapshot in linear memory. Confirmed
+  wrong layer; the cache has to be HTTP-level instead.
+- *Copy delta ≈ 0* → IDBFS is doing something smarter than the docs suggest, and
+  the plan's assumption survives.
+- *Second visit finds the file* → persistence works at all, whatever it costs.
+
+**The likely correct answer, if the probe confirms the concern:** cache the
+`.data` image at the **HTTP layer** — service worker Cache API, or plain
+cache headers — so `webr::mount()` fetches it from disk cache instead of the
+network. That keeps WORKERFS lazy *and* removes the re-download, rather than
+trading one for the other. Untested; it is the obvious next step if IDBFS fails.
 
 ### Recommended snapshot budget
 

@@ -16,6 +16,12 @@ library(shiny)
 FIXTURE_IMAGE <- Sys.getenv("SPIKE_FIXTURE_IMAGE", "fixtures/bold_spike_01.data")
 FIXTURE_DB    <- Sys.getenv("SPIKE_FIXTURE_DB",    "/bold/bold_spike_01.duckdb")
 MOUNTPOINT    <- "/bold"
+IDB_DIR       <- "/idb"
+# Copying into IDBFS means copying into MEMFS, i.e. into wasm linear memory.
+# Emscripten has a known out-of-memory failure doing this with large files, so
+# the probe refuses above this size. The 49 MB fixture is enough to establish
+# whether the cost scales 1:1; risking a dead tab at 441 MB proves nothing more.
+IDB_MAX_MB    <- 200
 
 in_webr <- function() isTRUE(requireNamespace("webr", quietly = TRUE)) &&
                       identical(R.version$os, "emscripten")
@@ -72,6 +78,11 @@ ui <- fluidPage(
       h4("3. Stability"),
       numericInput("n_rep", "Consecutive queries", value = 20, min = 2, max = 200),
       actionButton("bench", "Run benchmark"),
+      tags$hr(),
+      h4("4. Persistence (IDBFS)"),
+      actionButton("idb", "Probe IDBFS"),
+      tags$small(tags$br(), "Run AFTER mounting. Run again after a reload."),
+      verbatimTextOutput("idb_status"),
       tags$hr(),
       h4("Browser memory"),
       verbatimTextOutput("mem"),
@@ -141,7 +152,8 @@ absolute_url <- function(session, path) {
 }
 
 server <- function(input, output, session) {
-  rv <- reactiveValues(con = NULL, status = "Not mounted.", timing = "", bench = NULL)
+  rv <- reactiveValues(con = NULL, status = "Not mounted.", timing = "", bench = NULL,
+                       idb = "Not run. Mount a fixture first, then press Probe IDBFS.")
 
   output$mem <- renderText({
     m <- input$browser_mem
@@ -279,6 +291,93 @@ server <- function(input, output, session) {
       "wasm    : ", fmt_mb(wasm_mb()))
     rv$resolved <- out$resolved
     rv$results  <- if (is.null(out$rows)) NULL else utils::head(out$rows, 50)
+  })
+
+  # --- IDBFS probe ------------------------------------------------------------
+  # The plan assumes IDBFS can cache the snapshot so it downloads once. But
+  # Emscripten's IDBFS syncs between MEMFS and IndexedDB, so its contents live in
+  # wasm LINEAR MEMORY -- the very thing WORKERFS avoids. If that holds, caching
+  # the snapshot this way trades a re-download for the 4 GB ceiling, which is a
+  # bad trade and would mean the caching layer has to be HTTP-level instead.
+  #
+  # Measured on the 49 MB fixture deliberately: enough to establish whether the
+  # cost is ~1:1 with file size, without risking an out-of-memory tab at 441 MB.
+  output$idb_status <- renderText(rv$idb)
+
+  observeEvent(input$idb, {
+    lines <- character()
+    say <- function(...) lines <<- c(lines, paste0(...))
+
+    res <- try({
+      if (!in_webr()) stop("IDBFS only exists under webR; this is the local R fallback.")
+      w0 <- wasm_mb()
+
+      dir.create(IDB_DIR, showWarnings = FALSE, recursive = TRUE)
+      t0 <- Sys.time()
+      webr::mount(mountpoint = IDB_DIR, type = "IDBFS")
+      # populate = TRUE pulls anything already in IndexedDB into the filesystem.
+      # This is what a second visit would pay.
+      webr::syncfs(TRUE)
+      t_pop <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+      w1 <- wasm_mb()
+
+      target <- file.path(IDB_DIR, basename(FIXTURE_DB))
+      say("mount + syncfs(populate): ", sprintf("%.1f s", t_pop))
+      say("wasm: ", fmt_mb(w0), " -> ", fmt_mb(w1),
+          "  (delta ", if (is.na(w1) || is.na(w0)) "n/a" else paste0(round(w1 - w0), " MB"), ")")
+
+      if (file.exists(target)) {
+        say("")
+        say("CACHED ALREADY: ", target)
+        say("size: ", sprintf("%.1f MB", file.size(target) / 1024^2))
+        say("")
+        say("=> The snapshot survived the reload. The wasm delta above is what")
+        say("   restoring it costs in LINEAR MEMORY on every visit.")
+      } else {
+        say("")
+        say("Not cached yet. Copying the mounted database into IDBFS...")
+        src <- FIXTURE_DB
+        if (!file.exists(src)) stop("Mount a fixture first -- ", src, " is not there.")
+        sz <- file.size(src) / 1024^2
+        if (sz > IDB_MAX_MB) {
+          stop(sprintf(paste0(
+            "Refusing to copy %.0f MB into IDBFS (limit %d MB).\n",
+            "IDBFS is MEMFS plus persistence, so this copies the image into wasm\n",
+            "linear memory, which is the documented way to kill the tab at this\n",
+            "size. Point app.R at bold_spike_01 and re-export: 49 MB establishes\n",
+            "whether the cost scales 1:1, which is all this probe needs to show."),
+            sz, IDB_MAX_MB))
+        }
+        t1 <- Sys.time()
+        ok <- file.copy(src, target, overwrite = TRUE)
+        t_copy <- as.numeric(difftime(Sys.time(), t1, units = "secs"))
+        w2 <- wasm_mb()
+        if (!ok) stop("file.copy into IDBFS failed")
+
+        t2 <- Sys.time()
+        webr::syncfs(FALSE)   # persist to IndexedDB
+        t_sync <- as.numeric(difftime(Sys.time(), t2, units = "secs"))
+        w3 <- wasm_mb()
+
+        say("copied ", sprintf("%.1f MB", sz), " in ", sprintf("%.1f s", t_copy))
+        say("syncfs(persist): ", sprintf("%.1f s", t_sync))
+        say("wasm: ", fmt_mb(w1), " -> ", fmt_mb(w2), " after copy -> ", fmt_mb(w3), " after sync")
+        say("wasm delta from the copy alone: ",
+            if (is.na(w2) || is.na(w1)) "n/a" else paste0(round(w2 - w1), " MB"),
+            "   (image is ", sprintf("%.0f MB", sz), ")")
+        say("")
+        say("=> If that delta is ~the image size, IDBFS holds the snapshot in")
+        say("   linear memory and is the WRONG cache for it. Reload and press")
+        say("   Probe IDBFS again to see what a second visit costs.")
+      }
+      TRUE
+    }, silent = TRUE)
+
+    if (inherits(res, "try-error")) {
+      rv$idb <- paste0("FAILED\n", paste(lines, collapse = "\n"), "\n", as.character(res))
+    } else {
+      rv$idb <- paste(lines, collapse = "\n")
+    }
   })
 
   # Does memory grow across repeated queries, or is it stable? A slow leak is the
