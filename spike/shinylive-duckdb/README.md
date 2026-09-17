@@ -170,38 +170,51 @@ Measured on Windows 11, Chrome, R 4.5.1 in webR, DuckDB 1.5.2.
 
 | Measure | Pass | 49 MB | 180 MB | 441 MB |
 |---|---|---|---|---|
-| Mount time | — | 5 s | 12 s | |
-| **tab memory added by mount, before any query** | **≈ 0** | not isolated¹ | **+150 MB** (0.83× image) | |
-| — of which wasm linear memory | **≈ 0** | not read² | not read² | |
+| Mount time | — | 5 s | 12–20 s | |
+| **wasm linear memory added by mount alone** | **≈ 0** | not measured³ | **0 MB** | |
+| wasm added by open + count(\*) | — | not measured³ | 53 MB (115→168) | |
+| Tab memory added by mount (Task Manager) | — | not isolated¹ | +150 MB | |
 | Cold load (first visit, app + fixture) | < 60 s | ok | ok | |
 | Taxon resolve | < 1 s | 0.035 s | 0.083 s | |
 | Family query, ~5,000 rows | < 5 s | 0.116 s | 0.177 s | |
 | Peak tab memory (Chrome Task Manager) | < 3 GB | 750 MB | 500 MB | |
 | 20 consecutive queries | no crash, memory stable | median 0.085 s, R heap delta 0 | median 0.138 s, R heap delta 0 | |
 
-¹ Tab memory went 500 MB → 750 MB across page load *and* mount together, so the
-250 MB is not attributable to the 49 MB image on its own.
+¹ The 49 MB tab reading spans page load *and* mount together, so it does not
+isolate the image.
 
-² **The open question.** At 180 MB the mount cost ~0.83× the image size, which
-reads as "WORKERFS is not lazy for this workload". But Chrome's Task Manager
-reports the whole tab, and it matters a great deal *where* those bytes went:
+² *(footnote retired — see the wasm rows above, which measure this directly.)*
 
-- into **wasm linear memory** → the hard 4 GB ceiling applies, and the snapshot
-  budget is roughly "4 GB minus R minus DuckDB's buffers". 4B is capped well
-  below a useful BOLD snapshot.
-- into the **JS heap or the Blob store, outside wasm** → the 4 GB wasm ceiling is
-  not the binding constraint at all. The limit becomes ordinary browser memory,
-  which is far more forgiving, and 4B stays open.
+³ The wasm probe was added after the 49 MB run. Re-run fixture 01 if the
+mid-point is wanted; the 180 MB result is the one that decides the row.
 
-The app's "Browser memory" panel reports `wasm linear memory` separately from
-`JS heap used` for exactly this reason. Read it before and after Mount.
+### Interim verdict, pending 441 MB
 
-Query performance is not in doubt either way: sub-200 ms at 180 MB, stable over
-20 consecutive queries with no R heap growth.
+**WORKERFS is lazy.** Mounting a 180.5 MB image added **0 MB** of wasm linear
+memory. The 4 GB wasm ceiling is therefore not the binding constraint on
+snapshot size, which was the open question the spike existed to answer.
 
-The bolded row is the one that decides it. If wasm memory jumps by roughly the
-fixture size on mount, WORKERFS is not lazy for this workload and 4B is capped —
-record the number and stop; the remaining rows are then academic.
+What the bytes actually cost, and where:
+
+- **wasm linear memory** grows only with what a query *touches* — 53 MB to open
+  the database and count 4.2 M rows, then flat across 20 consecutive queries.
+  This is DuckDB's buffer pool, not the file.
+- **Browser (non-wasm) memory** holds the downloaded image as a Blob, roughly
+  1:1 with file size: +150 MB of tab memory for a 180 MB image. This is ordinary
+  renderer memory, far more forgiving than the 4 GB wasm cap, but it is still
+  real and it still scales with the snapshot.
+
+So the ceiling that matters for 4B is the user's available RAM for a Blob, not
+wasm's 4 GB. A ~1.5 GB real snapshot would need ~1.5 GB of browser memory on top
+of R and DuckDB — heavy but not structurally impossible, and quite different
+from "capped far below a useful dataset".
+
+Query performance is not a concern at any size tested: sub-200 ms for 5,000 rows
+out of 4.2 M, stable over 20 consecutive runs, no R heap growth.
+
+**Still to confirm at 441 MB:** that the wasm delta stays at 0 (lazy mount does
+not degrade with size), and that ~440 MB of Blob plus R plus DuckDB stays inside
+a normal browser tab.
 
 The in-app memory readout uses `performance.memory`, which is Chrome-only and does
 not reliably account for wasm linear memory. **Chrome's Task Manager is ground
