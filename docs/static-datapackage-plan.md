@@ -630,7 +630,10 @@ table split in Phase 1.1:
 - Verify by checksum and resume partial downloads; never leave a half-written file
   where the app will try to open it.
 
-### Option A — R package with one-line install (recommended first step)
+### Option A — R package with one-line install (rejected)
+
+**Rejected:** the focal users are non-technical. Requiring them to install R and then a
+package is too much. Retained here only to record why.
 
 `pak::pak("bge-barcoding/BOLDcuratoR")` then `BOLDcuratoR::run_app()`.
 
@@ -641,8 +644,8 @@ table split in Phase 1.1:
   `R/modules/*` into a package with an exported `run_app()` is the bulk of the work.
 - Requires R to be installed — acceptable for a barcoding course, not for a general
   public release.
-- **Roughly a week on top of Phases 1–3**, and it de-risks the NHM hosting unknown:
-  if IT cannot provide disk or shell, the course still runs.
+- Roughly a week on top of Phases 1–3, and it would have de-risked the NHM hosting
+  unknown — but that does not outweigh the install burden on the target users.
 
 ### Option B — Python rewrite with native installers
 
@@ -662,17 +665,43 @@ and Windows.
 
 ### Option C — shinylive, no install at all
 
-Shiny for Python compiled to WebAssembly, hosted as static files (GitHub Pages).
-DuckDB's Python client is compiled to WASM and available in Pyodide's package
-repository, so the app could query hive-partitioned Parquet on R2 or Zenodo via HTTP
-range requests entirely client-side.
+Shiny compiled to WebAssembly, hosted as static files (GitHub Pages), querying
+hive-partitioned Parquet on R2 or Zenodo via HTTP range requests entirely
+client-side. Concurrency stops being a concept — 20 users is 20 browsers.
 
-- Concurrency stops being a concept — 20 students is 20 browsers.
-- Same rewrite cost as Option B, plus WASM memory ceilings on large result sets and
-  probable CORS obstacles for the live-API fallback.
-- **The R route (webR) is riskier**: `duckdb` availability in the webR binary
-  repository (`repo.r-wasm.org`) is unconfirmed and is a hard blocker if absent.
-  Verify before considering it.
+**Python route.** DuckDB's Python client is compiled to WASM and available in
+Pyodide's package repository, so the data layer is known to work. Costs the full
+Option B rewrite.
+
+**R route (no rewrite) — plausible, unverified, several independent blockers.**
+Note that DuckDB-Wasm is the *JavaScript* build; shinylive-for-R runs under webR and
+needs the **R `duckdb` package as a webR binary**, which is a different artifact.
+Evidence suggests it exists (R-universe builds wasm binaries for all CRAN packages,
+and `duckdb/duckdb-r` issue #66 is from someone running duckdb under webR far enough
+to hit an extension-loading problem), but this was not confirmed.
+
+Verify in this order, cheapest first — each can kill the route on its own:
+
+1. **`duckdb` under webR.** Open <https://webr.r-wasm.org/latest/> and run
+   `webr::install("duckdb"); library(duckdb)`. Minutes.
+2. **CORS.** The BOLD API and `caos.boldsystems.org/api/images` probably do not send
+   `Access-Control-Allow-Origin`. In a browser that kills both the live-API fallback
+   *and* the image check — and since `HAS_IMAGE` is a ranking criterion, ranks would
+   shift relative to the server version. Test with `fetch()` from any browser
+   console. Minutes.
+3. **`httpfs` extension under webR** — needed to read remote Parquet, and the subject
+   of the open issue above.
+4. **`BOLDconnectR` has no wasm binary** (GitHub-only), so it must be built with
+   `rwasm` and rebuilt on every upstream change.
+5. **wasm32 caps a tab at ~4 GB** of address space, shared between the R heap, the
+   DuckDB buffer pool and result frames. The Phase 3.4 memory analysis is
+   per-server-process; here it is per-tab against a hard ceiling.
+6. **`RSQLite` session persistence** must be replaced with browser storage
+   (IndexedDB/OPFS) or dropped.
+
+If 1 and 2 both pass, spend **one day on a spike** — smallest possible slice (taxon
+search → results table, over remote Parquet) — before committing anything larger.
+Do not port the app to find out.
 
 ### R Shiny as a packaged desktop binary — not recommended
 
@@ -683,7 +712,16 @@ maintaining packaging infrastructure rather than curation features.
 
 ### Recommendation
 
-Build **Option A alongside** the server plan, not instead of it — they share the
-whole data layer, so the marginal cost is small and it removes the single largest
-unknown (NHM IT). Defer the Option B/C rewrite decision until after the course has
-been run once and there is evidence about how students actually use the tool.
+**"No install for the user" is already satisfied by a hosted web app** — that is the
+current deployment and what Phases 1–4 preserve. Users get a URL and install
+nothing. Shinylive removes *the server*, not the user's install step; it is not a
+substitute for hosting, it is a substitute for running a box.
+
+So:
+
+- Keep the hosted model. Option A is rejected on install burden (above).
+- If the goal is also "no server to operate", the low-risk form is already in the
+  plan — **Phase 4.5, managed host + Parquet on Cloudflare R2**. Near-zero ops, all
+  existing R code keeps working, no WASM risk.
+- Treat Option C (R route) as a time-boxed experiment gated on the two cheap tests,
+  not as a plan. Option B stays deferred until after the course.
