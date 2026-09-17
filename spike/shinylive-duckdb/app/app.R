@@ -106,6 +106,28 @@ ui <- fluidPage(
 # gets back to the directory the web server actually serves from.
 #
 # Setting SPIKE_FIXTURE_IMAGE to a full http(s) URL bypasses all of this.
+# The decisive measurement, read from inside the worker rather than guessed from
+# the outside. Chrome's Task Manager gives the whole tab, and performance.memory
+# is per-thread, so neither can say whether a mounted image lands in wasm linear
+# memory (hard 4 GB ceiling) or outside it.
+#
+# webr::eval_js() evaluates in the webR worker context by default, which is where
+# Emscripten's Module lives. It goes through emscripten_run_script_int and so
+# returns an int -- hence dividing to MB inside the JS rather than in R.
+# eval_js() is marked experimental upstream, so every failure degrades to NA
+# rather than taking the mount down with it.
+wasm_mb <- function() {
+  if (!in_webr()) return(NA_real_)
+  v <- try(webr::eval_js(
+    "(typeof Module !== 'undefined' && Module.HEAPU8) ? (Module.HEAPU8.buffer.byteLength / 1048576) | 0 : -1"
+  ), silent = TRUE)
+  if (inherits(v, "try-error")) return(NA_real_)
+  v <- suppressWarnings(as.numeric(v)[1])
+  if (is.na(v) || v < 0) NA_real_ else v
+}
+
+fmt_mb <- function(x) if (is.na(x)) "n/a" else paste0(round(x), " MB")
+
 absolute_url <- function(session, path) {
   if (grepl("^https?://", path)) return(path)
   cd   <- session$clientData
@@ -125,9 +147,10 @@ server <- function(input, output, session) {
     m <- input$browser_mem
     if (is.null(m)) return("waiting for probe...")
     paste0(
-      "wasm linear memory : ", m$wasmMB    %||% "n/a", " MB\n",
-      "JS heap used       : ", m$jsHeapMB  %||% "n/a", " MB\n",
-      "JS heap limit      : ", m$jsLimitMB %||% "n/a", " MB")
+      "MAIN THREAD ONLY -- webR runs in a worker this cannot see.\n",
+      "For wasm memory read the mount status box.\n",
+      "page JS heap used  : ", m$jsHeapMB  %||% "n/a", " MB\n",
+      "page JS heap limit : ", m$jsLimitMB %||% "n/a", " MB")
   })
 
   observeEvent(input$mount, {
@@ -137,11 +160,15 @@ server <- function(input, output, session) {
     # leaving the local unchanged. Mutating an environment works from any frame.
     st <- new.env(parent = emptyenv())
     st$variant <- NA_integer_
+    # Initialised, not left unset: the local (non-webR) path never assigns these,
+    # and is.na(NULL) is logical(0), which makes `if` an error rather than FALSE.
+    st$wasm_before <- st$wasm_mounted <- st$wasm_opened <- NA_real_
     # Resolved out here, not inside try(), so the failure message can name it.
     image_url <- if (in_webr()) absolute_url(session, FIXTURE_IMAGE) else FIXTURE_IMAGE
     # Published before the attempt, not after: a mount that hangs never reaches
     # the success or failure branch, and the URL is the whole diagnosis.
     rv$status <- paste0("Mounting...\nimage url: ", image_url)
+    st$wasm_before <- wasm_mb()
     t0 <- Sys.time()
     res <- try({
       if (in_webr()) {
@@ -166,6 +193,9 @@ server <- function(input, output, session) {
           errs <- c(errs, paste0("  [", k, "] ", conditionMessage(attr(ok, "condition"))))
         }
         if (!mounted) stop("webr::mount failed, all variants:\n", paste(errs, collapse = "\n"))
+        # Sampled here, before dbConnect: this is "after mount, before any query",
+        # the row the whole spike turns on.
+        st$wasm_mounted <- wasm_mb()
       }
       library(DBI); library(duckdb)
       # shiny::runApp("app") sets the working directory to app/, so a path relative
@@ -175,6 +205,9 @@ server <- function(input, output, session) {
       con  <- dbConnect(duckdb::duckdb(), dbdir = path, read_only = TRUE)
       meta <- dbGetQuery(con, "SELECT key, value FROM _meta")
       nrec <- dbGetQuery(con, "SELECT count(*) n FROM specimen")$n
+      # Opening the database and counting rows is already real work, so this is
+      # separated from the mount-only figure above.
+      st$wasm_opened <- wasm_mb()
       list(con = con, meta = meta, nrec = nrec, path = path)
     }, silent = TRUE)
 
@@ -195,6 +228,11 @@ server <- function(input, output, session) {
       "image    : ", image_url, "\n",
       "mount    : ", if (is.na(st$variant)) "n/a (local)" else paste("webr::mount variant", st$variant), "\n",
       "specimens: ", format(res$nrec, big.mark = ","), "\n",
+      "wasm     : ", fmt_mb(st$wasm_before), " before -> ", fmt_mb(st$wasm_mounted),
+                     " mounted -> ", fmt_mb(st$wasm_opened), " opened\n",
+      "wasm delta from mount alone: ",
+        if (is.na(st$wasm_mounted) || is.na(st$wasm_before)) "n/a"
+        else paste0(round(st$wasm_mounted - st$wasm_before), " MB"), "\n",
       paste(sprintf("%-12s: %s", res$meta$key, res$meta$value), collapse = "\n"))
   })
 
@@ -237,7 +275,8 @@ server <- function(input, output, session) {
       "query   : ", if (is.na(out$t_query)) "not run (taxon not found)"
                     else sprintf("%.3f s", out$t_query), "\n",
       "rows    : ", if (is.null(out$rows)) 0 else nrow(out$rows), "\n",
-      "R memory: ", round(sum(g[, 2]), 1), " MB")
+      "R memory: ", round(sum(g[, 2]), 1), " MB\n",
+      "wasm    : ", fmt_mb(wasm_mb()))
     rv$resolved <- out$resolved
     rv$results  <- if (is.null(out$rows)) NULL else utils::head(out$rows, 50)
   })
