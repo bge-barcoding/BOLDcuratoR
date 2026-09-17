@@ -1,9 +1,5 @@
 # BOLDcuratoR: static data package backend + multi-user hosting
 
-Status: planning, not yet implemented. Supersedes `docs/offline-implementation-plan.md`,
-whose backend-abstraction shape is kept but which contains five production-breaking
-errors corrected below.
-
 ## Context
 
 BOLDcuratoR is a Shiny app (`app.R` + `R/modules/*`, R6 classes, renv) that curates
@@ -23,9 +19,10 @@ CC-BY-SA 4.0, released weekly). Building that into a queryable local snapshot tu
 BIN expansion into a single sub-second query, removes the API key requirement for
 students, and makes results reproducible against a named snapshot.
 
-Intended outcome: the snapshot is the default data source; the live API stays
-available as an opt-in fallback for users with their own key who need the newest
-records or their own private datasets. New snapshots import with one command.
+Intended outcome: the snapshot is the *only* data source. BOLDconnectR, the BOLD
+API and the image checks are dropped entirely (see **Decisions** below), which
+removes API keys, rate limits and the shared-key ceiling from the app. New
+snapshots import with one command.
 
 There is already a design doc at `docs/offline-implementation-plan.md` (merged,
 unimplemented). Keep its backend-abstraction shape; this plan corrects five things
@@ -33,13 +30,84 @@ in it that would fail in production (see **Corrections** below).
 
 ### Decisions taken with the user
 
+Revised after IT confirmed Docker/Kubernetes, and after narrowing scope.
+
 | Decision | Choice |
 |---|---|
-| Data source default | Snapshot default, live API as opt-in fallback |
-| Sequences (`nuc`) | Included, in a separate table joined on demand |
-| Build location | Build once on a builder machine, publish to versioned Zenodo record |
+| Data source | **Snapshot only.** Drop BOLDconnectR, the BOLD API and the image checks. |
+| Sequences (`nuc`) | **Excluded** from the shipped snapshot (separate table, built but not shipped) |
+| Build location | Build once on a builder machine, publish to versioned Zenodo record, monthly |
 | Refresh | Automated check + pull, plus a manual-upload path |
-| Hosting | Spec the NHM Shiny server for both software cases; also cost commercial options |
+| Targets | **Two, explored in parallel:** (1) Docker image on NHM Kubernetes, (2) local/offline shinylive — with a Python rewrite (4C) as the fallback for (2) |
+| Local-app meaning | Hosted URL, cached to run offline after first visit. True air-gapped use is out of scope. |
+
+**Consequences of dropping the API and image checks** — these simplify the earlier
+design considerably and supersede parts of Phase 3:
+
+- **`HAS_IMAGE` is removed**, not stubbed. Delete it from `SPECIMEN_SCORING_CRITERIA`
+  (`R/config/constants.R:72-74`) and drop the image requirement from `RANK_2` so ranks
+  stay internally consistent. Maximum quality score falls by 1. Scores are therefore
+  **not comparable with the current app's output** — say so in `about.md` and in the
+  export header, and update any documentation quoting score ranges.
+- `R/utils/image_utils.R` and the image-cache design (former Phase 3.5) are dropped.
+- No API key, so `mod_user_info_*` loses the key field and the shared-key limits in
+  `R/config/download_limits.R` become purely memory guards.
+- Private/unpublished records are simply out of scope. Confirm this is acceptable
+  for the course before building (former Phase 0.2).
+- No `backend_api.R` — the backend abstraction collapses to one implementation, so
+  build it as a plain module rather than an R6 interface with one subclass.
+
+---
+
+## IMMEDIATE NEXT STEP — the 4B spike
+
+`duckdb` is confirmed available as a webR binary, so the local option is live and the
+spike decides between 4B (shinylive, cheap) and 4C (Python rewrite, expensive).
+
+**The one question the spike answers:** can shinylive + webR + duckdb query a
+few-hundred-MB snapshot fast enough to be usable, inside the 4 GB wasm ceiling?
+
+**Status: scaffold built and committed** in `spike/shinylive-duckdb/` — throwaway
+code, kept separate from `R/`, not wired into the app. The SQL and the synthetic
+generator are verified (DuckDB 1.5.5); all R files parse. What remains is to *run*
+it in a browser and fill in the results table in `spike/shinylive-duckdb/README.md`.
+
+| File | Purpose |
+|---|---|
+| `build_fixture.R` | Build small DuckDB fixtures from a BOLD TSV sample using the Phase 1 schema (`specimen` + `taxon`, taxonomically sorted). Emit **three** sizes — measured at 49 / 180 / 441 MB — to find where it breaks, not just whether it works. |
+| `package_fixture.sh` | Wrap each fixture as an Emscripten WORKERFS filesystem image via `file_packager`. |
+| `app.R` | Minimal Shiny app: taxon text input → resolve against `taxon` → query `specimen` → render results table. Displays per-query elapsed time and `gc()` memory alongside every result. |
+| `export.R` | `shinylive::export()`, previewed with `httpuv::runStaticServer()`. |
+| `.github/workflows/spike-pages.yml` | Deploy the export to GitHub Pages (shinylive cannot run from `file://`). |
+| `README.md` | What to measure, and the pass/fail thresholds below. |
+
+**Probe these explicitly — they are the actual unknowns:**
+
+1. Does `dbConnect(duckdb::duckdb(), dbdir = <mounted path>, read_only = TRUE)` work
+   at all against a WORKERFS mount?
+2. **Is WORKERFS genuinely lazy for DuckDB's access pattern**, or does the file get
+   pulled into wasm linear memory? This is the single most important measurement —
+   if it is not lazy, the ceiling is roughly the snapshot size and 4B is capped very
+   low. Compare tab memory with the 49 MB and 441 MB fixtures.
+3. Does IDBFS persist the fixture across reloads so it downloads once?
+4. Does memory grow across repeated queries, or is it stable?
+
+**Pass/fail thresholds — decide against these, not against impressions:**
+
+| Measure | Pass |
+|---|---|
+| Cold load (app + 441 MB fixture, first visit) | < 60 s |
+| Taxon resolve (`taxon` lookup) | < 1 s |
+| Family-level query, ~5,000 rows returned | < 5 s |
+| Peak tab memory, 441 MB fixture | < 3 GB (headroom under the 4 GB cap) |
+| 20 consecutive queries | no crash, memory stable |
+
+**Fallback to record if WORKERFS fails:** fetch the fixture into MEMFS instead and
+measure the largest size that survives. That number is 4B's real budget, and if it
+lands below a useful snapshot size, 4C is proven rather than assumed — at a cost of
+one day.
+
+Timebox: one day. 4A proceeds in R in parallel and is not blocked by the outcome.
 
 ---
 
@@ -90,9 +158,11 @@ Apply these when updating that doc; they are not stylistic.
    holds the fd. Replacing the symlink leaves live workers reading the old inode
    indefinitely — no crash, just silently stale data. Use a versioned filename plus
    a pointer file (Phase 2.3).
-5. **§4 mode-aware `HAS_IMAGE` is unnecessary.** `caos.boldsystems.org/api/images`
-   is unauthenticated and independent of BOLDconnectR. Keep calling it offline and
-   add a cache table. No scoring-logic change, and offline/API ranks stay comparable.
+5. **§4 mode-aware `HAS_IMAGE` is moot.** Superseded by the scope decision above:
+   image checks are dropped entirely and the criterion is removed from scoring, so
+   there is no mode to be aware of. (For the record, the doc's premise was also
+   wrong — `caos.boldsystems.org/api/images` is unauthenticated, so images *could*
+   have been kept offline had we wanted them.)
 
 ---
 
@@ -412,7 +482,13 @@ Also worth doing while in there: `auto_select_best_specimens` (`app.R:424-466`) 
 over unique `(bin_uri, country)` combos re-filtering the whole frame each time —
 O(n × combos). A single grouped `dplyr::slice_max` is a ~5-line replacement.
 
-### 3.5 Images — keep them, cache them
+### 3.5 Images — SUPERSEDED, images are dropped
+
+> Retained only to record what was considered. The scope decision removes image
+> checks and the `HAS_IMAGE` criterion outright; none of the below applies.
+
+<details><summary>Original text</summary>
+
 
 `caos.boldsystems.org/api/images` needs no key. Keep `check_specimen_images()` in
 snapshot mode and add `image_cache(processid TEXT PRIMARY KEY, has_image INTEGER,
@@ -422,6 +498,8 @@ requests × 0.5 s sleep, blocking) collapses on repeats. No scoring change; offl
 and API ranks stay comparable. Only if the image service is unreachable does
 `has_image` become `NA`, and then ranks are marked provisional rather than silently
 recomputed.
+
+</details>
 
 ### 3.6 UI and provenance
 
@@ -440,7 +518,172 @@ recomputed.
 
 ---
 
-## Phase 4 — Hosting
+## Phase 4 — Two delivery targets
+
+Both consume the same snapshot from Phase 1 and the same query layer from Phase 3.
+They differ only in how the file reaches the query engine, and in how tight the size
+budget is.
+
+| | Target A: Docker/K8s | Target B: local shinylive |
+|---|---|---|
+| Size budget | ~2 GB comfortable | **a few hundred MB** (hard) |
+| Runs | NHM Kubernetes | user's browser, wasm32 |
+| Install for user | none (URL) | none (URL), offline after first load |
+| Main risk | none technical | R `duckdb` under webR; DuckDB I/O through Emscripten FS |
+
+### 4A — Docker image on NHM Kubernetes
+
+IT confirmed Docker + Kubernetes, which removes the concurrency problem entirely
+(replicas, not one R process). They raised two objections, both addressed by baking
+the snapshot into the image rather than mounting a volume:
+
+- *"Wouldn't be tracked the same way."* The image **is** their tracked, versioned,
+  immutable artifact. `boldcurator:2026-09-01` is the snapshot version; rollback is
+  deploying the previous tag. No PVC, no volume lifecycle, no backup question, and
+  no shared-file concurrency concern since each replica has its own copy.
+- *"Getting into the realms of a website."* No new infrastructure primitive is
+  introduced — it stays an image and a Deployment.
+
+**The GitLab file-size limit is a symptom; the real constraint is that the snapshot
+must never enter git.** Splitting the TSV per Phylum/Class/Order does not fix this —
+30 × 70 MB is still 2 GB in the repo, and git retains every monthly version forever,
+so the repo reaches ~24 GB within a year and becomes unclonable. Worse than the
+single-file problem.
+
+Instead the repo holds a URL and a checksum, and the build fetches:
+
+```dockerfile
+FROM rocker/shiny:4.4.1
+RUN install2.r --error duckdb DBI dplyr ...        # expensive layer, stays cached
+COPY R/ /srv/shiny-server/R/
+COPY app.R global.R /srv/shiny-server/
+ADD --checksum=sha256:<sha> \
+    https://zenodo.org/records/<id>/files/bold_snapshot_<date>.duckdb \
+    /opt/bold/snapshot.duckdb                       # data layer LAST
+```
+
+`ADD --checksum` needs BuildKit; otherwise `RUN curl -fsSL … && sha256sum -c`.
+Refresh = edit two lines, commit, CI rebuilds and tags. Fully tracked in GitLab with
+nothing large in git.
+
+If IT prefers the blob to stay inside NHM, **GitLab Package Registry (generic
+packages)** is artifact storage rather than git and is designed for exactly this —
+the Dockerfile pulls from there instead of Zenodo. Same shape, same checksum.
+
+Keep the data `COPY`/`ADD` last so the R-package layer stays cached across refreshes.
+Budget roughly 2 GB of image, pulled once per node then cached.
+
+**Taxonomic splitting is still worth doing — for scoping, not file size.** Shipping
+only the clades the course needs is the largest size lever after dropping sequences.
+Note Phylum is a poor split for BOLD (Arthropoda dominates), so Class or Order gives
+a more even distribution. Once the build fetches at image-build time, a single
+DuckDB file is simpler and faster than many Parquet files.
+
+**Fallback if the image gets too large:** S3-compatible object storage (MinIO/Ceph
+internally, or R2/S3) holding hive-partitioned Parquet, queried via DuckDB `httpfs`
+with the prefix in a ConfigMap. Pods stay stateless, refresh is an upload plus a
+ConfigMap edit with the old prefix kept for rollback, at the cost of ~1–4 s per query
+instead of ~100 ms. Install the `httpfs` extension at image build time, never at
+runtime, or every pod phones `extensions.duckdb.org` on startup.
+
+### 4B — Local / offline shinylive
+
+Dropping BOLDconnectR, the API and image checks removes three of the blockers
+identified earlier (CORS, building a `BOLDconnectR` wasm binary, and rank divergence
+from missing images). Two hard constraints remain.
+
+**1. A shinylive export cannot be opened from `file://`** — it requires an HTTP
+server. "Unzip and double-click index.html" does not work. The workable shape is:
+host the export on GitHub Pages, the user visits a URL, and a service worker plus
+IDBFS caches the app and the database on first visit so it runs offline afterwards.
+That is install-free and offline *after* first run, but not a file handed out on a
+USB stick. **Confirmed acceptable** — true air-gapped use is out of scope. Two
+consequences to handle: first visit needs internet (and downloads the whole
+snapshot), and clearing site data forces a re-download, so surface both in the UI.
+
+**2. wasm32 caps a browser tab at 4 GB of linear memory**, shared between R's heap,
+DuckDB's buffers and result frames. The practical snapshot budget is therefore a few
+hundred megabytes, not 2 GB — an order of magnitude tighter than 4A. Trimming fields
+and scoping records is not an optimisation here; it determines viability.
+
+Mitigation to test rather than assume: webR can mount a filesystem image with
+**WORKERFS**, which avoids copying contents into memory until actually read, and
+**IDBFS** persists it across page loads so it downloads once. Whether DuckDB's
+random-access read pattern performs acceptably through Emscripten's filesystem is
+the experiment that decides this option.
+
+Remaining unknowns to clear, cheapest first:
+
+1. **R `duckdb` as a webR binary.** <https://webr.r-wasm.org/latest/> →
+   `webr::install("duckdb"); library(duckdb)`. Minutes. Hard blocker if absent.
+2. **Other packages as wasm binaries**: `shinydashboard`, `DT`, `shinyjs`,
+   `shinycssloaders`, `writexl` (C code), `R6`, `dplyr`, `tidyr`, `purrr`, `logger`,
+   `jsonlite`, `digest`, `markdown`.
+3. **`RSQLite` session persistence** must be replaced with browser storage or dropped.
+4. **DuckDB read performance through WORKERFS** — the spike below.
+
+**Sequencing: do not port the app to find out.** (a) webR duckdb test; (b) build one
+scoped snapshot and measure its actual size against the few-hundred-MB budget;
+(c) one-day spike — taxon search plus results table only, in shinylive, against that
+file mounted via WORKERFS. Decide after (c).
+
+### 4C — Python rewrite as a downloadable desktop app (the fallback, and possibly the destination)
+
+Considered as an alternative to 4B. **It removes every technical unknown in 4B:** no
+4 GB wasm ceiling (so the snapshot can be 2 GB+ and the aggressive trimming stops
+being load-bearing), no question about `duckdb` under webR (Python wheels are
+first-party and mature on macOS arm64/x86 and Windows), no Emscripten filesystem I/O
+question, no `RSQLite`-in-browser problem. 4B is low-effort/high-risk; 4C is
+high-effort/low-risk.
+
+**The stronger argument is consolidation, not risk.** As planned, 4A and 4B have
+different fates: 4A works today in R, 4B might not work at all. A Python rewrite
+serves *both* targets from one codebase — the same app in the container and on a
+laptop. The alternative, if 4B fails, is maintaining R for Docker plus something else
+for local, with the scoring and BAGS logic implemented twice. That is the outcome to
+avoid.
+
+**Shape.** Shiny for Python, packaged with Briefcase or PyInstaller (optionally a
+Tauri shell), built for both platforms on GitHub Actions runners. Launches a local
+server and opens the browser; no Electron, no WebView2 dependency.
+
+**Cost — less than the raw 8,800 R LOC suggests**, because dropping the API and image
+checks deletes rather than ports a large part of it:
+`mod_data_import_server.R` (963 lines) is mostly retry logic, batching, size modals
+and merge loops, all of which collapse into a few SQL queries against a local DuckDB;
+`image_utils.R` goes entirely. Estimate the core (search → score → rank → BAGS → BIN
+→ select → export) at **2,500–3,500 lines of Python, 3–6 weeks** focused.
+The fiddliest part is `R/utils/table_utils.R` (1,282 lines of DT with custom JS);
+Shiny for Python has modules and editable `DataGrid`/`DataTable` with sorting,
+filtering and selection, but it is not a drop-in and the custom JS needs rethinking.
+
+**De-risking the scientific logic** — the concern that makes rewrites dangerous:
+run the R and Python implementations over the same fixture and diff `quality_score`,
+`criteria_met`, `rank`, BAGS grade and BIN concordance row by row. Build that harness
+first, not last; it turns translation correctness into a test rather than a judgement.
+
+**Downsides, stated plainly:**
+
+- *Install friction is worse than a URL.* Unsigned apps hit Gatekeeper on macOS and
+  SmartScreen on Windows. A genuine double-click needs Apple Developer ($99/yr) plus
+  Microsoft Artifact Signing (~$10/mo) and CI on both platforms. 4B has zero friction;
+  4C has one scary dialog unless you pay. This cuts against the "easy to install" goal.
+- *Delivery risk.* The R app works today. A rewrite that stalls at 80% leaves nothing.
+
+### Decision gate — run this before choosing between 4B and 4C
+
+The webR `duckdb` test (90 seconds) collapses the decision:
+
+- **`duckdb` unavailable in webR** → 4B is dead; the choice is 4C or no local option.
+- **`duckdb` available** → run the 4B spike. If it performs, a zero-install local
+  option costs a fraction of 4C. If it does not, the case for 4C is proven rather
+  than assumed, at a cost of one day.
+
+4A proceeds in R in parallel either way and is not blocked by the answer.
+
+---
+
+## Phase 4 (superseded) — hosting options assessed before IT confirmed Kubernetes
 
 ### 4.1 shinyapps.io cannot host this
 
@@ -582,10 +825,15 @@ rollback by repointing `current.json` works.
 
 ## Open questions
 
-1. **Shiny server software and disk at NHM** (Phase 4.2) — blocks the hosting half.
-2. **Download automation vs manual** (Phase 0.1).
-3. **Are course datasets public?** (Phase 0.2) — may require the overlay design.
-4. **Dataset/project code UI.** `prepare_search_params`, validation, and the fetch
+1. **Does `duckdb` exist as a webR binary?** The decision gate — run this first; it
+   determines whether the local option is 4B or 4C.
+2. **Taxonomic scope of the snapshot.** The single biggest lever on size, and it
+   differs per target: ~2 GB is fine for 4A and 4C, but 4B needs a few hundred MB.
+   Decide whether one scoped snapshot serves all, or 4A/4C ship broader coverage.
+3. **Download automation vs manual** (Phase 0.1).
+4. **Are the records the course needs public?** (Phase 0.2) — with the API dropped,
+   private records are simply unavailable; there is no fallback path any more.
+5. **Dataset/project code UI.** `prepare_search_params`, validation, and the fetch
    phases all support dataset/project codes, but `mod_data_import_ui.R` has no input
    for them — the code paths are unreachable, `README.md` still advertises them, and
    `tests/testthat/test-mod_data_import.R:83-84` asserts they render (so that test
@@ -603,125 +851,3 @@ rollback by repointing `current.json` works.
 column is `inst`. The `intersect()` at lines 34/107 silently drops it, so the
 institution column is missing from every Excel and TSV export today. One-word fix,
 worth taking with this work.
-
----
-
-## Appendix: per-user distribution instead of a server
-
-Considered as an alternative to Phase 4: users install the app locally and it pulls
-the snapshot from Zenodo on first run. This removes the concurrency problem
-entirely, removes the NHM IT dependency, costs nothing to host, and works offline.
-
-**Everything in Phases 1–3 is unchanged and shared.** Only the pointer resolution
-differs: instead of `/srv/bold-snapshots/current.json` maintained by a cron job, the
-app resolves a per-user cache directory and downloads the snapshot itself if absent
-or superseded.
-
-### The download is the binding constraint, not the packaging
-
-8 GB per user from Zenodo. Twenty students on the same campus network at 09:00 is
-the realistic failure mode. Mitigations, all enabled by the `specimen`/`sequence`
-table split in Phase 1.1:
-
-- Ship the **metadata-only build (~2 GB)** as the desktop default; fetch sequences
-  from the BOLD API for selected specimens only, at export time.
-- Accept a local file path / pre-seeded cache so snapshots can be handed out on USB
-  or from a network share, bypassing the download entirely.
-- Verify by checksum and resume partial downloads; never leave a half-written file
-  where the app will try to open it.
-
-### Option A — R package with one-line install (rejected)
-
-**Rejected:** the focal users are non-technical. Requiring them to install R and then a
-package is too much. Retained here only to record why.
-
-`pak::pak("bge-barcoding/BOLDcuratoR")` then `BOLDcuratoR::run_app()`.
-
-- Cross-platform at no cost: CRAN supplies macOS and Windows binaries for every
-  dependency including `duckdb`. No Electron, no code signing, no notarization.
-- Snapshot cached in `tools::R_user_dir("BOLDcuratoR", "data")`.
-- The repo already has `DESCRIPTION` and `renv.lock`; converting `app.R` +
-  `R/modules/*` into a package with an exported `run_app()` is the bulk of the work.
-- Requires R to be installed — acceptable for a barcoding course, not for a general
-  public release.
-- Roughly a week on top of Phases 1–3, and it would have de-risked the NHM hosting
-  unknown — but that does not outweigh the install burden on the target users.
-
-### Option B — Python rewrite with native installers
-
-Shiny for Python, packaged with Briefcase or Tauri + PyInstaller, built for both
-platforms on GitHub Actions runners. `duckdb` wheels exist for macOS (arm64 + x86)
-and Windows.
-
-- Signing: Apple Developer Program ($99/yr, notarization is mandatory for
-  distribution outside the App Store) and Microsoft Artifact Signing (~$10/mo).
-  Note EV certificates no longer bypass SmartScreen — reputation accrues over time,
-  so early users still see warnings.
-- Real cost is the rewrite: ~9,000 lines of R across R6 classes, DT tables, BAGS
-  grading, BIN concordance and 17 scoring criteria. That is re-validating scientific
-  logic, not porting UI. Months.
-- Only justified if desktop distribution is a long-term goal rather than a fix for
-  one course.
-
-### Option C — shinylive, no install at all
-
-Shiny compiled to WebAssembly, hosted as static files (GitHub Pages), querying
-hive-partitioned Parquet on R2 or Zenodo via HTTP range requests entirely
-client-side. Concurrency stops being a concept — 20 users is 20 browsers.
-
-**Python route.** DuckDB's Python client is compiled to WASM and available in
-Pyodide's package repository, so the data layer is known to work. Costs the full
-Option B rewrite.
-
-**R route (no rewrite) — plausible, unverified, several independent blockers.**
-Note that DuckDB-Wasm is the *JavaScript* build; shinylive-for-R runs under webR and
-needs the **R `duckdb` package as a webR binary**, which is a different artifact.
-Evidence suggests it exists (R-universe builds wasm binaries for all CRAN packages,
-and `duckdb/duckdb-r` issue #66 is from someone running duckdb under webR far enough
-to hit an extension-loading problem), but this was not confirmed.
-
-Verify in this order, cheapest first — each can kill the route on its own:
-
-1. **`duckdb` under webR.** Open <https://webr.r-wasm.org/latest/> and run
-   `webr::install("duckdb"); library(duckdb)`. Minutes.
-2. **CORS.** The BOLD API and `caos.boldsystems.org/api/images` probably do not send
-   `Access-Control-Allow-Origin`. In a browser that kills both the live-API fallback
-   *and* the image check — and since `HAS_IMAGE` is a ranking criterion, ranks would
-   shift relative to the server version. Test with `fetch()` from any browser
-   console. Minutes.
-3. **`httpfs` extension under webR** — needed to read remote Parquet, and the subject
-   of the open issue above.
-4. **`BOLDconnectR` has no wasm binary** (GitHub-only), so it must be built with
-   `rwasm` and rebuilt on every upstream change.
-5. **wasm32 caps a tab at ~4 GB** of address space, shared between the R heap, the
-   DuckDB buffer pool and result frames. The Phase 3.4 memory analysis is
-   per-server-process; here it is per-tab against a hard ceiling.
-6. **`RSQLite` session persistence** must be replaced with browser storage
-   (IndexedDB/OPFS) or dropped.
-
-If 1 and 2 both pass, spend **one day on a spike** — smallest possible slice (taxon
-search → results table, over remote Parquet) — before committing anything larger.
-Do not port the app to find out.
-
-### R Shiny as a packaged desktop binary — not recommended
-
-`electricShine` builds Windows only, and documents why macOS is hard: R
-installations hard-code paths, so the bundle is not relocatable. The cross-platform
-R + Electron templates are experimental and single-maintainer. Choosing this means
-maintaining packaging infrastructure rather than curation features.
-
-### Recommendation
-
-**"No install for the user" is already satisfied by a hosted web app** — that is the
-current deployment and what Phases 1–4 preserve. Users get a URL and install
-nothing. Shinylive removes *the server*, not the user's install step; it is not a
-substitute for hosting, it is a substitute for running a box.
-
-So:
-
-- Keep the hosted model. Option A is rejected on install burden (above).
-- If the goal is also "no server to operate", the low-risk form is already in the
-  plan — **Phase 4.5, managed host + Parquet on Cloudflare R2**. Near-zero ops, all
-  existing R code keeps working, no WASM risk.
-- Treat Option C (R route) as a time-boxed experiment gated on the two cheap tests,
-  not as a plan. Option B stays deferred until after the course.

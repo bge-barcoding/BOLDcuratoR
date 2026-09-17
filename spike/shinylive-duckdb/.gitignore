@@ -1,0 +1,10 @@
+# Fixtures and exports are large build outputs, never committed.
+# Putting a 400 MB file in git would be the same mistake as putting the snapshot
+# in GitLab: git keeps every version forever.
+fixtures/
+app/fixtures/
+site/
+*.duckdb
+*.duckdb.wal
+*.data
+*.js.metadata

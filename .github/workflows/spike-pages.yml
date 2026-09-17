@@ -1,0 +1,89 @@
+# Deploys the shinylive spike to GitHub Pages.
+#
+# Manual-only: this is throwaway spike infrastructure, not part of the app's CI,
+# and it should never run on a push to a feature branch.
+#
+# Local testing (Rscript export.R) is the primary path. Pages exists only to
+# measure the real cold-load path over a network. Note GitHub's 100 MB per-file
+# limit: only the SMALL fixture can be deployed here. The 200 MB and 400 MB
+# measurements have to be taken over localhost.
+name: spike-shinylive-pages
+
+on:
+  workflow_dispatch:
+    inputs:
+      rows:
+        description: "Synthetic fixture rows (keep the .data under 100 MB for Pages)"
+        default: "1000000"
+        required: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: spike-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: spike/shinylive-duckdb
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          use-public-rspm: true
+
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          packages: |
+            any::shinylive
+            any::httpuv
+            any::duckdb
+            any::DBI
+            any::shiny
+          working-directory: spike/shinylive-duckdb
+
+      - name: Build fixture
+        run: Rscript build_fixture.R --synthetic --rows ${{ inputs.rows || '1000000' }}
+
+      - name: Set up Emscripten (file_packager)
+        uses: mymindstorm/setup-emsdk@v14
+
+      - name: Package fixture as WORKERFS image
+        run: |
+          ./package_fixture.sh fixtures/bold_spike_01.duckdb
+          mkdir -p app/fixtures
+          cp fixtures/*.data fixtures/*.js.metadata app/fixtures/
+
+      - name: Fail if any asset exceeds GitHub's 100 MB file limit
+        run: |
+          big=$(find app/fixtures -type f -size +100M -print)
+          if [ -n "$big" ]; then
+            echo "These exceed 100 MB and cannot be served from Pages:"
+            echo "$big"
+            echo "Measure the larger fixtures over localhost instead (see README)."
+            exit 1
+          fi
+
+      - name: Export shinylive site
+        run: Rscript export.R --no-serve
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: spike/shinylive-duckdb/site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
