@@ -162,11 +162,14 @@ BIN-only or identified no finer than genus — normal, not a defect. It does mea
 over a four-letter alphabet compresses hard), so the download is comfortable and
 the metadata/sequence split is not needed.
 
-**These snapshots predate the sequence ordering fix**, and still do not need
-rebuilding: `tools/reorder_sequences.py` retrofits the fast layout from the
-snapshot itself in about two minutes — see the benchmark section. A build from
-source now also sorts the sequence table, which adds one ~13 GB sort to the
-figures above.
+**The full snapshot has since been reordered** with
+`tools/reorder_sequences.py`, which retrofits the fast sequence layout from the
+snapshot itself in about two minutes — no re-ingest. A build from source now
+also sorts the sequence table, which adds one ~13 GB sort to the figures above.
+
+A benchmark run against a freshly written file measures cold disk on every
+step: on the first run after reordering, `plan Lepidoptera` took 1.859 s against
+0.359 s warm. Run it twice if the absolute numbers matter.
 
 ## Benchmark — where the time went, and where it goes now
 
@@ -228,12 +231,12 @@ column:
 | ingest order (old) | 2.64 s / 4.5 GB | 2.39 s / 4.5 GB |
 | **specimen order (new)** | 3.06 s / 4.6 GB | **0.21 s / 271 MB** |
 
-End to end through `benchmark`, on a 6.12 GB snapshot with 20 M sequences:
+End to end through `benchmark`, on the real 7.95 GB snapshot:
 
 | Step | Ingest order | Specimen order | |
 |---|---|---|---|
-| stream 183 sequences | 2.466 s / 4,837 MB | **0.195 s / 528 MB** | 12.6× |
-| export all formats | 1.269 s / 4,548 MB | **0.269 s / 537 MB** | 4.7× |
+| stream 183 sequences | 7.375 s, RSS +6,088 MB | **0.437 s, RSS +169 MB** | 17× |
+| export all formats | 12.234 s | **1.328 s** | 9.2× |
 
 `iter_sequences` now resolves rowids in a pass that never touches `nuc`, then
 fetches by rowid. The builder sorts `sequence` by the same key as `specimen`.
@@ -301,8 +304,13 @@ The single-threaded work is reducible instead. Skipping the regex on values
 already known to be empty took it from 2.30 s to 1.93 s. What remains is not
 the regex: it is that `to_text` and `is_empty_text` are Python-level walks of an
 **object-dtype** column, paid once per field. An Arrow-backed string dtype would
-move that into C; that is the next real lever, and it is a dtype change across
-the query layer rather than a tweak.
+move that into C.
+
+**That lever is deliberately not pulled.** Curators download at most ~10,000
+sequences at a time and rarely that, so the stage costs 16 ms on a realistic
+result; the change touches the dtype of every column and every `.str` call in
+the query layer. Performance is closed — reopen it only with a measurement
+showing a real user waiting.
 
 ### Still open
 
@@ -319,7 +327,7 @@ rather than measuring an out-of-memory kill.
 | size pre-check | < 1 s | **0.09–0.41 s** ✓ |
 | BIN-expanded search, small | sub-second | **0.22 s** ✓ |
 | full pipeline, small result | ~1 s | **0.31 s** ✓ |
-| sequence fetch, small result | sub-second | **0.20 s** ✓ (reordered snapshot) |
+| sequence fetch, small result | sub-second | **0.44 s** ✓ (reordered snapshot) |
 | full pipeline, 88 k result | — | 4.0 s, half of it scoring |
 
 ## Testing before the GUI

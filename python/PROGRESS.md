@@ -45,20 +45,28 @@ levers are closed.
 
 ## Performance — done and measured on the real snapshot
 
-**State: the pipeline is 27x faster on the real 7.95 GB snapshot, sequence
-fetch 12x, every output byte-identical, parity green. 164 tests pass.**
+**State: done and confirmed on the real snapshot, reordered. Every output
+byte-identical, parity green, 164 tests pass. Nothing here is outstanding.**
 
-Confirmed on `bold_snapshot_2026-09-11.duckdb`, Windows, 32 GB:
+All figures below are the real `bold_snapshot_2026-09-11.duckdb`, Windows,
+32 GB — no stand-ins:
 
 | Step | Before | After |
 |---|---|---|
 | search `Danaus plexippus` (183 rows) | 4.657 s | **0.219 s** |
 | **full pipeline `Danaus plexippus`** | **8.500 s** | **0.312 s** |
-| stream 183 sequences | 7.375 s, RSS +6.1 GB | **0.195 s, RSS +0.1 GB** * |
-| export all formats | 12.234 s | **0.269 s** * |
+| stream 183 sequences | 7.375 s, RSS +6,088 MB | **0.437 s, RSS +169 MB** |
+| export all formats | 12.234 s | **1.328 s** |
 
-\* sequence figures are from a 20 M-row stand-in with 20 M sequences; the real
-snapshot needs `tools/reorder_sequences.py` run on it first — see below.
+Sequence streaming is 17x faster and grows memory 36x less. The whole
+benchmark run went from about 76 s of measured steps to about 17 s.
+
+**Read the numbers on a freshly reordered file with some care.** The run that
+produced them was the first touch of a newly written 8 GB file, so every
+disk-bound step is cold: `plan Lepidoptera` measured 1.859 s against 0.359 s on
+the warm original, and `fetch Nymphalidae` 7.938 s against 2.015 s. Nothing
+changed in those paths. Run the benchmark twice and take the second if the
+absolute numbers matter.
 
 `README.md` has the full tables and the reasoning. The short version is that
 the same mistake was in two places.
@@ -105,6 +113,18 @@ scoring and selection, found by timing the stages separately:
 
 Both now share `core/frames.distinct_by_group`.
 
+### Performance is closed
+
+Curators download at most ~10,000 sequences at a time and rarely that, so the
+remaining levers are not worth their cost. **Do not reopen this without a
+measurement showing a real user waiting.** The two candidates, both declined:
+
+* Arrow-backed string dtype, which would take scoring an 88,000-row result from
+  1.9 s to perhaps a third of that. It is a dtype change across the query layer
+  and every `.str` call, for a stage that costs 16 ms on a realistic result.
+* `export_all` streams the sequences twice, once for all specimens and once for
+  the selected subset. Two passes where one would do, at 0.4 s a pass.
+
 ### Parallel scoring: asked, measured, no
 
 Scoring 88,000 rows takes 1.9 s and is the largest remaining stage. Threads are
@@ -120,43 +140,40 @@ walking an object-dtype column in Python, once per field. DuckDB can hand
 pandas Arrow-backed strings, which would move that into C -- but it is a dtype
 change across the query layer and every `.str` call, so it is its own task.
 
-### DO THIS FIRST next session: reorder the real snapshot
+### The snapshot has been reordered — done
 
-The sequence fix needs the snapshot's `sequence` table in specimen order, and
-`bold_snapshot_2026-09-11.duckdb` predates it. **No re-ingest is needed** --
-everything required is already in the file, which is what matters now the 20 GB
-staging file is gone. About two minutes for a 6 GB snapshot, peak RSS 1.4 GB:
+`bold_snapshot_2026-09-11.duckdb` was built before the sequence ordering fix
+and has been retrofitted with `tools/reorder_sequences.py`. No re-ingest was
+needed, which is what mattered once the 20 GB staging file was gone.
+
+If a snapshot ever needs it again, that is the whole procedure:
 
 ```powershell
 python tools/reorder_sequences.py `
-    --snapshot "C:\Users\benjp\Downloads\BOLD_Public_11-Sep-2026\bold_snapshot_2026-09-11.duckdb" `
-    --out "C:\Users\benjp\Downloads\BOLD_Public_11-Sep-2026\bold_snapshot_2026-09-11.reordered.duckdb"
+    --snapshot "...\bold_snapshot_2026-09-11.duckdb" `
+    --out "...\bold_snapshot_2026-09-11.reordered.duckdb"
 
 python tools/verify_snapshot.py --snapshot "...reordered.duckdb"
-python -m boldcurator.cli benchmark --snapshot "...reordered.duckdb" --export
 ```
 
 It writes a new file and never touches the input, because DuckDB does not
-reclaim space on `DROP`. Verify it, benchmark it, then replace the original.
-`verify` now **fails** a snapshot still in ingest order, and `info` and
-`benchmark` say so on the snapshot line, so this cannot be forgotten quietly.
+reclaim space on `DROP`. `verify` **fails** a snapshot still in ingest order,
+and `info` and `benchmark` say so on the snapshot line, so a stale one cannot
+go unnoticed. The metadata-only snapshot has no sequences and needs nothing.
 
-The metadata-only snapshot (`bold_meta_2026-09-11.duckdb`) has no sequences and
-needs nothing.
+### The one constraint Phase 3 inherits
 
-### Still open
+**`Lepidoptera` must never be materialised.** 2,095,427 rows resolve in under
+two seconds and the guard fires before the fetch, but 2.1 M rows x 71 columns
+into pandas is an OOM, not a slow query. The GUI needs server-side paging or a
+hard display cap **from the start**, not retrofitted — and `plan_search` is
+built for exactly that: it hands back the exact row set in advance, so a page
+can be fetched by its `rowid`s without re-running the search.
 
-* **`Lepidoptera` must never be materialised.** 2,095,427 rows resolve in
-  0.36 s, and the guard fires before the fetch, but 2.1 M rows x 71 columns into
-  pandas is an OOM. The GUI needs server-side paging or a hard display cap from
-  the start, driven by the pre-check.
-* **`export_all` streams the sequences twice** -- once for all specimens, once
-  for the selected subset. Cheap now that a fetch is 0.2 s, but it is still two
-  passes where one would do.
-* **`search_specimens` had no size guard.** It now takes an opt-in
-  `max_records`, and `benchmark --max-fetch` (default 250,000) skips the wide
-  fetch rather than measuring an OOM kill. `run_search` is unchanged: it still
-  enforces `DOWNLOAD_LIMITS`.
+`search_specimens` also takes an opt-in `max_records` now, and
+`benchmark --max-fetch` (default 250,000) skips the wide fetch rather than
+measuring an OOM kill. `run_search` is unchanged: it still enforces
+`DOWNLOAD_LIMITS`.
 
 ### Next: Phase 3, the GUI
 
@@ -228,8 +245,8 @@ surfacing in the UI rather than letting a curator assume otherwise.
 - [x] re-measured on the real snapshot — 8.5 s pipeline is 0.31 s
 - [x] sequences stored in specimen order, and fetched in two phases
 - [x] `tools/reorder_sequences.py`, so no snapshot needs re-ingesting
-- [ ] **run the reorder on `bold_snapshot_2026-09-11.duckdb`**
-- [ ] Arrow-backed strings, for the scoring stage
+- [x] ran the reorder on `bold_snapshot_2026-09-11.duckdb`
+- [ ] ~~Arrow-backed strings, for the scoring stage~~ — **not needed**; see below
 
 ### Phase 3 — GUI
 - [ ] 3.1–3.8 not started
