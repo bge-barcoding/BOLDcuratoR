@@ -255,6 +255,29 @@ before and after the mount; a copy of the image would have had to grow it past
 **Parked, not resolved**, because the snapshot-size question below dominates it:
 caching matters only for a snapshot small enough to be worth caching.
 
+### httpfs is not available in webR — ANSWERED from source
+
+Range requests over one large Parquet would remove the need to partition at all.
+It is not possible here. Confirmed against `duckdb/duckdb-r` at `8384b78`:
+
+- `src/Makevars`, `Makevars.in` and `Makevars.win` all link exactly
+  `DUCKDB_EXTENSION_PARQUET_LINKED` and `DUCKDB_EXTENSION_CORE_FUNCTIONS_LINKED`.
+  Platform-independent, so this is not a wasm-specific gap.
+- `src/duckdb/extension/` vendors only `core_functions`, `loader` and `parquet`.
+  There is no `httpfs` source in the package at all.
+- `DUCKDB_EXTENSION_AUTOLOAD_DEFAULT` is set, but autoloading would have to fetch
+  a binary built for the wasm32-emscripten platform, which DuckDB does not
+  publish for the R package. And `httpfs` is built on socket-based HTTP, which
+  Emscripten does not provide — which is precisely why duckdb-wasm, the separate
+  JavaScript project, ships its own HTTP filesystem instead of using `httpfs`.
+
+**Consequence:** if 4B proceeds, build-time partitioning is the only way to avoid
+downloading the whole snapshot. `parquet` *is* linked, so partitions can ship as
+Parquet rather than `.duckdb` files.
+
+The in-app **List extensions** button remains as an on-machine confirmation, but
+the answer is already established.
+
 ### Caching the snapshot: the layer question remains open
 
 `docs/static-datapackage-plan.md` §4B assumes "a service worker plus IDBFS caches

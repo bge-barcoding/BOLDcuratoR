@@ -773,6 +773,15 @@ week estimate in §4C holds, and is probably optimistic once tests are counted.
 | **4D, native R** | Near zero — existing app, local DuckDB | User installs R | None — full 2–8 GB |
 | **4C, Python rewrite** | 3–6 weeks + signing and CI on two platforms | Double-click binary | None — full 2–8 GB |
 
+**There is no shortcut around partitioning.** Range-requesting row groups out of
+one large Parquet would have removed the build tooling from 4B's cost entirely.
+It is not available: the R `duckdb` package links only `parquet` and
+`core_functions`, vendors no `httpfs` source, and `httpfs` is built on
+socket-based HTTP that Emscripten does not provide — which is why duckdb-wasm
+(the separate JavaScript project) ships its own HTTP filesystem instead.
+Confirmed against `duckdb/duckdb-r` at `8384b78`; details in the spike README.
+`parquet` being linked does at least mean partitions can ship as Parquet.
+
 **The decision reduces to one question: can the offline users install R?**
 
 - **Yes** → 4D. Twelve thousand lines are kept and it ships in days, not weeks.
