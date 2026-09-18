@@ -301,6 +301,23 @@ def cmd_benchmark(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_gui(args: argparse.Namespace) -> int:
+    """Launch the Shiny UI.
+
+    Imported here, not at module scope, so the CLI keeps working on an install
+    without the ``gui`` extra -- which is most installs, since the CLI and the
+    parity harness never need it.
+    """
+    try:
+        from .ui import run
+    except ImportError as exc:
+        print(f"The GUI needs the optional dependencies: pip install -e \".[gui]\"\n"
+              f"  ({exc})")
+        return 1
+    run(args.snapshot, host=args.host, port=args.port, page_size=args.page_size)
+    return 0
+
+
 def cmd_verify(args: argparse.Namespace) -> int:
     from .build.verify import main as verify_main
 
@@ -314,6 +331,13 @@ def build_parser() -> argparse.ArgumentParser:
     info = sub.add_parser("info", help="describe a snapshot")
     _add_snapshot_arg(info)
     info.set_defaults(func=cmd_info)
+
+    gui = sub.add_parser("gui", help="launch the Shiny UI")
+    _add_snapshot_arg(gui)
+    gui.add_argument("--host", default="127.0.0.1")
+    gui.add_argument("--port", type=int, default=8000)
+    gui.add_argument("--page-size", type=int, default=100)
+    gui.set_defaults(func=cmd_gui)
 
     verify = sub.add_parser("verify", help="verify a snapshot read-only")
     _add_snapshot_arg(verify)

@@ -10,8 +10,9 @@ stable. Plan and checklist: [`../docs/python-app-plan.md`](../docs/python-app-pl
 
 ## Status
 
-Phase 0 (snapshot build) and Phase 1 (core library) are in progress. There is no
-GUI yet — that is Phase 3, gated on the R-vs-Python parity harness passing.
+Phases 0–2 are complete: the snapshot builds and verifies, the core library is
+at parity with the R app, and the CLI and exports work. Phase 3 (the GUI) has
+started — the specimen table spike is in, the rest of the screens are not.
 
 ## Setup
 
@@ -330,7 +331,71 @@ rather than measuring an out-of-memory kill.
 | sequence fetch, small result | sub-second | **0.44 s** ✓ (reordered snapshot) |
 | full pipeline, 88 k result | — | 4.0 s, half of it scoring |
 
-## Testing before the GUI
+## The GUI
+
+```sh
+pip install -e ".[gui]"
+python -m boldcurator.cli gui --snapshot bold_snapshot_2026-09-11.duckdb
+```
+
+Only `ui/` may import a GUI framework; `tests/test_no_gui_dependency.py`
+enforces it over `config/`, `data/`, `core/`, `io/` and `build/`. Importing
+`boldcurator.ui` does not import Shiny either, so the CLI keeps working on an
+install without the `gui` extra.
+
+### Phase 3.1 — the spike, and its answer
+
+The plan framed 3.1 as "can a `DataGrid` render 50,000 rows?". The benchmark
+reframed the question: a family search returns 89,479 records and an order
+2,095,427, so **no widget is ever handed the result**. `core.table.SpecimenTable`
+pages it server-side and the grid receives one page.
+
+That is why the hard part lives in `core/`, not `ui/`: paging, sorting,
+selection that survives both, and bulk edits over a selection larger than the
+page. Shiny or NiceGUI, the widget only asks for a page and reports clicks — so
+the framework stays swappable for a day's work rather than a fortnight's.
+
+Sorting works the same way. Sorting the result fetches **one** column for the
+whole of it, orders the rowids in memory, and carries on paging; the other 70
+columns are never touched outside the visible page. Sorting by a *computed*
+column (`quality_score`, `rank`, `bags_grade`) is refused rather than silently
+ignored — it would mean scoring the whole result, which is what paging exists to
+avoid.
+
+**Measured on the 20 M-row stand-in, page size 100:**
+
+| Result | Rows | Pages | Page fetch | Sort whole result | Select all |
+|---|---|---|---|---|---|
+| species | 183 | 2 | 74 ms | 7 ms | 0.2 ms |
+| family | 87,991 | 880 | **49 ms** | 18 ms | 21 ms |
+| order | 2,023,789 | 20,238 | **47 ms** | 547 ms | 565 ms |
+
+**A page costs the same whether the result holds 183 rows or two million**, and
+RSS stays at 708 MB for the largest because the result is never materialised.
+In the app the 2 M case is refused by `DOWNLOAD_LIMITS` anyway, so the real
+worst case is 250,000 rows.
+
+**Verdict: Shiny for Python carries it. No swap to NiceGUI + AG Grid.** The
+grid does row selection and virtualises its own DOM; everything expensive
+happens below it.
+
+### Drive the UI in a browser before believing it
+
+```sh
+python -m boldcurator.cli gui --snapshot fixture.duckdb --port 8765 &
+pip install playwright && playwright install chromium
+python tools/drive_ui.py --out /tmp/shots
+```
+
+Not optional colour. Two controls in this spike — the descending toggle and the
+rows-per-page select — rendered perfectly, accepted clicks and **did nothing**,
+because their inputs were read inside `reactive.isolate()` and so took no
+reactive dependency. Every unit test passed. Both were obvious on the first
+click, and a third of the same family (a pager that kept reporting the old page
+count) surfaced on the next run. `tools/drive_ui.py` now checks all of it and
+exits non-zero on failure.
+
+## Testing
 
 ```sh
 pip install -e ".[dev]"
@@ -384,13 +449,18 @@ python tools/verify_snapshot.py --snapshot /tmp/fake.duckdb
 src/boldcurator/
   config/     scoring criteria, rank ladder, continents, limits
   data/       snapshot schema, connection handling, queries
-  core/       species rule, scoring, ranking, BAGS, BINs, selection, pipeline
+  core/       species rule, scoring, ranking, BAGS, BINs, selection,
+              pipeline, and the paged table the GUI renders
   io/         exports and session persistence
   build/      snapshot builder and verifier
-tools/        run the build/verify tools without installing
+  ui/         Shiny app — the ONLY place a GUI framework is imported
+tools/        build, verify, reorder, benchmark-snapshot, drive-ui
 tests/        unit tests and the fixture generator
 parity/       R-vs-Python comparison harness
 ```
 
-Nothing under `config/`, `data/`, `core/` or `io/` may import a GUI framework —
-that is what keeps the core testable headless and the GUI choice reversible.
+Nothing under `config/`, `data/`, `core/`, `io/` or `build/` may import a GUI
+framework — that is what keeps the core testable headless and the GUI choice
+reversible. The specimen table's behaviour lives in `core/table.py` for the
+same reason: it is the part most likely to force a framework change, so it is
+the part that must not depend on one.

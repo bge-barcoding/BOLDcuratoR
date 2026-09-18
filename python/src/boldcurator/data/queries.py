@@ -280,6 +280,58 @@ def plan_search(store: SnapshotStore, query: SearchQuery) -> SearchPlan:
                       seed_bins=seed_bins)
 
 
+#: Column name carrying the physical ``rowid`` when ``fetch_rows`` is asked for
+#: it.  Leading underscore because it is a handle, not data: it is meaningful
+#: only against the snapshot it came from and must never reach an export.
+ROW_ID_COLUMN = "_rowid"
+
+
+def fetch_rows(store: SnapshotStore, row_ids, *,
+               columns: list[str] | None = None,
+               with_row_id: bool = False,
+               order_by_processid: bool = False) -> pd.DataFrame:
+    """Project ``columns`` for exactly these ``rowid``s.
+
+    The primitive the whole read path is built on.  ``columns`` are *app*
+    names; omit it for the full row.  Asking for one column is how the table
+    layer gets a sort key without materialising 70 others, and asking for a
+    page's worth of rowids is how it renders a page without materialising the
+    result.
+
+    The rows come back in no particular order -- a semi-join has no reason to
+    preserve one.  ``with_row_id`` adds :data:`ROW_ID_COLUMN` so a caller that
+    needs a specific order can restore it, which is what the table layer does
+    for every page.
+    """
+    physical = store.physical_columns
+    if columns is not None:
+        wanted = set(columns)
+        physical = [c for c in physical if S.app_name(c) in wanted]
+        missing = wanted - {S.app_name(c) for c in physical}
+        if missing:
+            raise KeyError(f"No such column(s) in this snapshot: {sorted(missing)}")
+    projection = S.projection(physical)
+    if with_row_id:
+        projection = f"s.rowid AS {S.quote_ident(ROW_ID_COLUMN)}, {projection}"
+
+    row_ids = np.asarray(row_ids)
+    if len(row_ids) == 0:
+        return store.connection.execute(
+            f"SELECT {projection} FROM specimen s WHERE false"
+        ).df()
+
+    order = " ORDER BY s.processid" if order_by_processid else ""
+    store.connection.register("_wanted_rows", pd.DataFrame({"rid": row_ids}))
+    try:
+        return store.connection.execute(
+            f"SELECT {projection} FROM specimen s "
+            "SEMI JOIN _wanted_rows p ON p.rid = s.rowid"
+            f"{order}"
+        ).df()
+    finally:
+        store.connection.unregister("_wanted_rows")
+
+
 def fetch_planned(store: SnapshotStore, plan: SearchPlan, *,
                   limit: int | None = None) -> pd.DataFrame:
     """Materialise the 70-odd columns for an already-resolved row set.
@@ -308,22 +360,11 @@ def fetch_planned(store: SnapshotStore, plan: SearchPlan, *,
     original.  A literal ``rowid IN (...)`` list is no better either; the
     pushdown comes from the join, not the predicate.
     """
-    projection = S.projection(store.physical_columns)
-    limit_sql = f" LIMIT {int(limit)}" if limit else ""
-    if plan.expanded_records == 0:
-        return store.connection.execute(
-            f"SELECT {projection} FROM specimen s WHERE false"
-        ).df()
-
-    store.connection.register("_planned_rows", pd.DataFrame({"rid": plan.row_ids}))
-    try:
-        return store.connection.execute(
-            f"SELECT {projection} FROM specimen s "
-            "SEMI JOIN _planned_rows p ON p.rid = s.rowid "
-            f"ORDER BY s.processid{limit_sql}"
-        ).df()
-    finally:
-        store.connection.unregister("_planned_rows")
+    row_ids = plan.row_ids
+    frame = fetch_rows(store, row_ids, order_by_processid=True)
+    if limit:
+        frame = frame.head(int(limit))
+    return frame
 
 
 class ResultTooLarge(RuntimeError):

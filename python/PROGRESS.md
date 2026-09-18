@@ -3,15 +3,14 @@
 Branch: `claude/intelligent-dijkstra-g66cbr`. Plan:
 [`../docs/python-app-plan.md`](../docs/python-app-plan.md).
 
-**State: Phases 0–2 complete, and the pipeline is fast. 164 tests pass, the
-parity gate is green, Phase 3 (GUI) is unblocked — after one two-minute
-snapshot migration, below.**
+**State: Phases 0–2 complete and fast; Phase 3.1 done — Shiny for Python
+carries the specimen table. 187 tests pass, the parity gate is green.**
 
 Run everything from `python/`:
 
 ```sh
 pip install -e ".[dev]"
-python -m pytest tests/ -q      # 164 passing
+python -m pytest tests/ -q      # 187 passing
 python parity/compare.py        # exit 1 on any unexplained R-vs-Python difference
 ```
 
@@ -175,19 +174,85 @@ can be fetched by its `rowid`s without re-running the search.
 measuring an OOM kill. `run_search` is unchanged: it still enforces
 `DOWNLOAD_LIMITS`.
 
-### Next: Phase 3, the GUI
+## Phase 3 — the GUI. 3.1 is done and the answer is yes
 
-Unblocked. Start with the spike (plan 3.1):
-50,000 rows in a Shiny for Python `DataGrid` with multi-row selection and a
-bulk-annotation toolbar. If it cannot carry it, swap `ui/` to NiceGUI + AG Grid
-— nothing below `ui/` changes, and a test enforces that.
+**Shiny for Python carries the specimen table. No swap to NiceGUI + AG Grid.**
 
-The benchmark also answers a GUI design question directly: `Nymphalidae`
-returns 89,479 rows and `Lepidoptera` 2.1 million. **No table widget should be
-handed those**, so the UI needs server-side paging or a hard display cap from
-the start, driven by the `plan_search` pre-check, which resolves even
-`Lepidoptera` in 0.7 s and hands back the exact row set -- so a page can be
-fetched by its `rowid`s instead of re-running the search.
+```sh
+pip install -e ".[gui]"
+python -m boldcurator.cli gui --snapshot bold_snapshot_2026-09-11.duckdb
+```
+
+### What 3.1 actually asked, once the benchmark had spoken
+
+The plan framed it as "render 50,000 rows in a `DataGrid`". That is the wrong
+question: a family search returns 89,479 records and an order 2,095,427, so
+**no widget is ever handed the result**. `core/table.py` pages it server-side
+and the grid receives one page. The right questions were whether the grid does
+selection and a bulk-annotation toolbar, and whether paging feels immediate.
+
+Measured on the 20 M-row stand-in, page size 100:
+
+| Result | Rows | Pages | Page fetch | Sort whole result | Select all |
+|---|---|---|---|---|---|
+| species | 183 | 2 | 74 ms | 7 ms | 0.2 ms |
+| family | 87,991 | 880 | **49 ms** | 18 ms | 21 ms |
+| order | 2,023,789 | 20,238 | **47 ms** | 547 ms | 565 ms |
+
+**A page costs the same at 183 rows and at two million**, and RSS stays at
+708 MB for the largest because the result is never materialised. In the app
+the 2 M case is refused by `DOWNLOAD_LIMITS`, so the real worst case is
+250,000 rows.
+
+### The design decision worth not relitigating
+
+**The table's behaviour is in `core/table.py`, not `ui/`.** Paging, sorting,
+selection that survives both, and bulk edits over a selection larger than the
+page. It is the hardest screen and the one most likely to force a framework
+change, so it is the one that must not depend on a framework. `ui/app.py` is a
+thin shell: every control calls into `SpecimenTable`.
+
+Sorting follows the same rule as the search — fetch **one** column for the whole
+result, order the rowids in memory, carry on paging. Sorting by a computed
+column (`quality_score`, `rank`, `bags_grade`) raises rather than silently
+sorting by something else: it would mean scoring the whole result, which is
+what paging exists to avoid. If a curator genuinely needs it, that is a
+decision to make deliberately, not a thing to let happen by accident.
+
+### Drive the UI in a browser. This is not optional
+
+```sh
+python -m boldcurator.cli gui --snapshot fixture.duckdb --port 8765 &
+pip install playwright && playwright install chromium
+python tools/drive_ui.py --out /tmp/shots
+```
+
+Two controls in this spike -- the descending toggle and the rows-per-page
+select -- rendered perfectly, accepted clicks and **did nothing**. Their inputs
+were read inside `reactive.isolate()`, so the effects took no reactive
+dependency on them. All 187 tests passed. Both were obvious on the first click,
+and a third of the same family (a pager still reporting the old page count)
+appeared on the next run.
+
+**The rule that follows: in a Shiny effect, read every input you want to react
+to OUTSIDE `reactive.isolate()`.** Isolate only the writes. And run
+`tools/drive_ui.py` before believing any UI change works -- it checks ten
+things and exits non-zero.
+
+### Next, in order
+
+- **3.2 shell** — snapshot status bar is already in the spike; add name/email
+  for annotation attribution.
+- **3.3 Data Input page** — countries, continents, dataset/project codes, and
+  the size-check modal. `plan_search` already returns everything the modal
+  needs before anything is materialised.
+- **3.4-3.6 species / BIN / BAGS tabs** — these need whole-result aggregates,
+  not pages, so each needs a size policy of its own. `analyse_bins` and
+  `calculate_bags_grades` are 0.48 s and 0.94 s at 88,000 rows, so a cap
+  somewhere near `WARN_RECORDS` is the obvious starting point.
+- **3.7 specimen table** — mostly done; the six download buttons are not wired.
+- **3.8 session save/resume** — `io/session.py` exists; warn if the snapshot id
+  changed.
 
 ## Findings from the real build, worth acting on
 
@@ -249,7 +314,14 @@ surfacing in the UI rather than letting a curator assume otherwise.
 - [ ] ~~Arrow-backed strings, for the scoring stage~~ — **not needed**; see below
 
 ### Phase 3 — GUI
-- [ ] 3.1–3.8 not started
+- [x] 3.1 spike — **Shiny for Python carries it**; paging is flat at ~47 ms
+- [x] `core/table.py` — paged, sortable, selectable, bulk-annotatable
+- [x] `tools/drive_ui.py` — browser checks, because unit tests missed dead controls
+- [ ] 3.2 shell (status bar done; name/email for attribution not)
+- [ ] 3.3 Data Input page — countries, continents, codes, size-check modal
+- [ ] 3.4 species focus  [ ] 3.5 BIN focus  [ ] 3.6 BAGS A–E
+- [ ] 3.7 specimen table download buttons
+- [ ] 3.8 session save/resume
 
 ### Phases 4–5 — packaging and distribution
 - [ ] not started; compression (above) lands in 5.1
@@ -264,7 +336,8 @@ surfacing in the UI rather than letting a curator assume otherwise.
 | Species-name rule | One unified rule replacing R's five divergent regexes |
 | `HAS_IMAGE` | Removed; image requirement dropped from `RANK_2` so rank 2 stays reachable. Max score 15, not 16 |
 | Dataset/project codes | Implemented properly via `specimen_recordset` |
-| GUI | Shiny for Python, deliberately reversible |
+| GUI | Shiny for Python — spiked and confirmed at 3.1, still reversible |
+| Specimen table | Server-side paged from `core/table.py`; no widget ever receives a whole result |
 | BAGS grade E | Evaluated against the whole snapshot, not just downloaded records |
 
 ## Known divergences from the R app — all deliberate, all tested

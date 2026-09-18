@@ -85,12 +85,17 @@ def geographic_filter(countries: list[str], continents: list[str]) -> list[str]:
 # --------------------------------------------------------------------------
 
 
-def process_specimen_data(frame: pd.DataFrame) -> pd.DataFrame:
+def process_specimen_data(frame: pd.DataFrame, *, sort: bool = True) -> pd.DataFrame:
     """``process_specimen_data`` (``mod_data_import_utils.R:152-214``), unified.
 
     Trims and blanks the three fields the app keys on, stamps provenance, then
     de-duplicates on ``processid`` and sorts.  The species rule applied here is
     the unified one -- see ``core.species`` for what that changes.
+
+    ``sort=False`` keeps the caller's row order.  The paged table needs it: a
+    page is already in the order the curator asked for, and re-sorting it by
+    processid would scramble that.  De-duplication still runs, and is a no-op
+    on a page, since processid is unique in the snapshot.
     """
     from .species import normalise_species
 
@@ -110,7 +115,8 @@ def process_specimen_data(frame: pd.DataFrame) -> pd.DataFrame:
 
     if "processid" in out.columns:
         out = out.drop_duplicates(subset=["processid"], keep="first")
-        out = out.sort_values("processid", kind="stable")
+        if sort:
+            out = out.sort_values("processid", kind="stable")
     return out.reset_index(drop=True)
 
 
