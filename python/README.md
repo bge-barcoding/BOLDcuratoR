@@ -74,16 +74,32 @@ quietly be mistaken for the real thing. Verification passes with warnings --
 reference taxa that a partial or taxonomically scoped snapshot legitimately
 lacks are warnings, not failures.
 
-### 3. Full build (30-60 minutes)
+### 3. Full build
 
-```sh
-python tools/build_snapshot.py \
-    --tsv /path/to/BOLD_Public.2026-09-11.tsv \
-    --out /path/to/bold_snapshot_2026-09-11.duckdb \
-    --temp-dir /path/to/fast/local/scratch
+Because the ingest is the expensive part, do it **once** and build both
+snapshots from it:
 
-python tools/verify_snapshot.py --snapshot /path/to/bold_snapshot_2026-09-11.duckdb
+```powershell
+# metadata only -- usable immediately, and keeps the ingest for the next build
+python tools/build_snapshot.py `
+    --tsv "C:\path\BOLD_Public.2026-09-11.tsv" `
+    --out "C:\path\bold_snapshot_meta_2026-09-11.duckdb" `
+    --staging-path "C:\path\bold.staging" --keep-staging `
+    --no-sequences --temp-dir "C:\path\duckdb_tmp" `
+    --memory-limit 12GB --threads 4
+
+# full snapshot, reusing that ingest instead of re-reading the source
+python tools/build_snapshot.py `
+    --tsv "C:\path\BOLD_Public.2026-09-11.tsv" `
+    --out "C:\path\bold_snapshot_2026-09-11.duckdb" `
+    --staging-path "C:\path\bold.staging" --reuse-staging `
+    --temp-dir "C:\path\duckdb_tmp" --memory-limit 12GB --threads 4
+
+python tools/verify_snapshot.py --snapshot "C:\path\bold_snapshot_2026-09-11.duckdb"
 ```
+
+Staging defaults to `<out>.staging`, so two builds writing **different** output
+files need an explicit `--staging-path` to share one ingest.
 
 > **On Windows / PowerShell**, quote each path and close every quote. An
 > unclosed quote makes PowerShell wait silently for more input (the `>>`
@@ -100,13 +116,18 @@ Useful options:
 |---|---|
 | `--dry-run` | Header check only; no output file. Run this first |
 | `--limit N` | Stop after N rows. Marks the result as a partial build |
-| `--memory-limit`, `--threads` | `8GB` / `4` suits a 16 GB box; drop to `6GB` / `2` if it is also doing other work |
-| `--temp-dir` | Put DuckDB's scratch on **local** disk -- expect ~35 GB peak. On network storage the build takes 3-5x longer |
+| `--no-sequences` | Metadata only. Staging still keeps sequences, so a later full build can reuse it |
+| `--staging-path` | Share one ingest between builds writing different outputs |
+| `--keep-staging` | Keep staging after a successful build, for the build after it |
+| `--reuse-staging` | Skip the ingest and use an existing staging database |
+| `--overwrite` | Replace an existing output file, e.g. a partial one from a failed run |
+| `--memory-limit`, `--threads` | `12GB` / `4` suits a 32 GB box; `6GB` / `2` on 16 GB |
+| `--temp-dir` | Put DuckDB's scratch on **local** disk -- expect ~35 GB peak |
 | `--no-hash` | Skip the source sha256, saving one pass over the file |
 | `--no-progress` | Suppress DuckDB's progress bar |
 
-Expect roughly 30-60 min, ~11 GB peak RSS and ~60 GB free disk on 16 GB /
-8 vCPU / NVMe. The ingest step is the long one and reports progress as it goes.
+**A failed build keeps its staging database**, and the error says so. Retry with
+`--reuse-staging --overwrite` to skip the ingest entirely.
 
 **Verify from a fresh process before distributing anything.** A leftover
 write-ahead log makes a DuckDB file unopenable read-only, and the process that
@@ -118,9 +139,23 @@ Record real numbers here after the first full build — the size estimates in th
 plan are estimates, and the distribution shape depends on what this turns out to
 be.
 
-| Snapshot | Rows | File size | Build time | Machine |
-|---|---|---|---|---|
-| _(to be filled in)_ | | | | |
+Source: `BOLD_Public.11-Sep-2026.tsv`, 33.57 GB extracted, 76 columns, of which
+71 are kept. **20,164,595 records are COI-5P.**
+
+| Step | Time | Machine |
+|---|---|---|
+| sha256 of source | 28.5 s | Windows, 32 GB, `--memory-limit 12GB --threads 4` |
+| ingest + COI-5P filter | 362 s | " |
+| sort + write `specimen` | 669 s | " |
+
+| Snapshot | Rows | File size |
+|---|---|---|
+| metadata only (`--no-sequences`) | 20,164,595 | _(to be filled in)_ |
+| full (with sequences) | 20,164,595 | _(to be filled in)_ |
+
+At ~658 bp per record, 20.16 M sequences are roughly 13 GB of raw text, so the
+full snapshot is expected well above the 3 GB target. That is what makes the
+metadata/sequence split worth measuring rather than assuming.
 
 ## Testing without the real package
 

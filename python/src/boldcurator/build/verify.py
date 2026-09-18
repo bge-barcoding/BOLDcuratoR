@@ -117,8 +117,11 @@ def verify(snapshot: Path, *, previous_rows: int | None = None) -> list[Check]:
         checks.append(Check("specimen_recordset has no orphans", orphan == 0,
                             f"{orphan:,} orphans"))
 
+        # Joined on processid: the sequence table carries no sid, because
+        # producing one required a 20 M-row join that recovered nothing.
         seq_orphan = con.execute(
-            "SELECT count(*) FROM sequence q ANTI JOIN specimen s ON s.sid = q.sid"
+            "SELECT count(*) FROM sequence q "
+            "ANTI JOIN specimen s ON s.processid = q.processid"
         ).fetchone()[0]
         checks.append(Check("sequence has no orphans", seq_orphan == 0,
                             f"{seq_orphan:,} orphans"))

@@ -264,17 +264,49 @@ def build(
     limit: int | None = None,
     allow_recordset_drift: bool = False,
     progress: bool = True,
+    reuse_staging: bool = False,
+    overwrite: bool = False,
+    keep_staging: bool = False,
+    staging_path: Path | None = None,
 ) -> dict[str, str]:
     if not tsv.exists():
         raise BuildError(f"No such file: {tsv}")
     if out.exists():
-        raise BuildError(f"Refusing to overwrite an existing snapshot: {out}")
+        if not overwrite:
+            raise BuildError(
+                f"Refusing to overwrite an existing snapshot: {out}\n"
+                "Pass --overwrite to replace it (useful after a failed run left "
+                "a partial file behind)."
+            )
+        out.unlink()
+        Path(str(out) + ".wal").unlink(missing_ok=True)
 
     out.parent.mkdir(parents=True, exist_ok=True)
-    staging = out.with_suffix(out.suffix + ".staging")
-    for stale in (staging, Path(str(staging) + ".wal")):
-        if stale.exists():
-            stale.unlink()
+    # Staging depends on the source and the marker filter, not on the output, so
+    # it can be shared between builds that write different snapshots -- e.g.
+    # metadata-only first, then the full one, from a single ingest.
+    staging = Path(staging_path) if staging_path else out.with_suffix(
+        out.suffix + ".staging"
+    )
+    staging.parent.mkdir(parents=True, exist_ok=True)
+
+    # A failed build leaves staging behind on purpose -- it holds the whole
+    # ingested package, and re-reading 30+ GB to retry a later step is a waste
+    # of ~10 minutes.
+    have_staging = staging.exists()
+    if reuse_staging and not have_staging:
+        raise BuildError(
+            f"--reuse-staging was given but there is no staging file at "
+            f"{staging}.\n"
+            "Staging defaults to <out>.staging, so a build writing to a "
+            "different --out will not find one left by an earlier build. Pass "
+            "--staging-path to point both builds at the same file, or run "
+            "without --reuse-staging to ingest from the source."
+        )
+    if not reuse_staging:
+        for stale in (staging, Path(str(staging) + ".wal")):
+            if stale.exists():
+                stale.unlink()
 
     header = read_header(tsv)
     plan = plan_columns(header, include_sequences=include_sequences)
@@ -332,14 +364,41 @@ def build(
         where_sql = " WHERE " + " AND ".join(where)
         limit_sql = f" LIMIT {int(limit)}" if limit else ""
 
-        st = _Step("ingest + marker filter")
-        con.execute(
-            f"CREATE TABLE stage AS\n"
-            f"SELECT {staging_select(plan, include_sequences=include_sequences)}\n"
-            f"FROM {read_csv_clause(tsv, header)}\n"
-            f"{where_sql}{limit_sql}"
-        )
-        st.done()
+        if reuse_staging:
+            tables = {r[0] for r in con.execute("SHOW TABLES").fetchall()}
+            if "stage" not in tables:
+                raise BuildError(
+                    f"{staging} has no 'stage' table -- it is not a usable "
+                    "staging file. Run without --reuse-staging."
+                )
+            staged_columns = {
+                r[0] for r in con.execute("DESCRIBE stage").fetchall()
+            }
+            wanted = set(plan.physical)
+            if include_sequences:
+                wanted.add(S.SEQUENCE_SOURCE_COLUMN)  # output needs it
+            missing = sorted(wanted - staged_columns)
+            if missing:
+                raise BuildError(
+                    "The staging file does not carry the columns this build "
+                    f"needs ({', '.join(missing)}). It was probably built with "
+                    "different options -- run without --reuse-staging."
+                )
+            _log("  reusing the existing staging file (ingest skipped)")
+        else:
+            st = _Step("ingest + marker filter")
+            # Stage `nuc` whenever the source has it, even for a --no-sequences
+            # build. What goes in the OUTPUT is decided later; staging without
+            # it would mean a metadata-only build could not hand its staging to
+            # a subsequent full build, forcing a second read of the whole
+            # source -- which is exactly the workflow --keep-staging exists for.
+            con.execute(
+                f"CREATE TABLE stage AS\n"
+                f"SELECT {staging_select(plan, include_sequences=plan.sequence_present)}\n"
+                f"FROM {read_csv_clause(tsv, header)}\n"
+                f"{where_sql}{limit_sql}"
+            )
+            st.done()
 
         n_stage = con.execute("SELECT count(*) FROM stage").fetchone()[0]
         if n_stage == 0:
@@ -367,20 +426,32 @@ def build(
         st.done()
 
         if include_sequences:
+            # Straight from staging, with neither a join nor a sort.
+            #
+            # The earlier version joined out.specimen back to stage and then
+            # ordered by processid, which put a 20 M-row hash join and a global
+            # sort over ~13 GB of sequence strings in flight at once and ran a
+            # 32 GB machine out of memory. Both were waste:
+            #
+            #   * out.specimen is `SELECT ... FROM stage ORDER BY ...` with no
+            #     extra WHERE, so stage and specimen hold identical row sets and
+            #     the join recovered nothing stage did not already have.
+            #   * iter_sequences() finds sequences with a hash SEMI JOIN on
+            #     processid, never by ordered scan or range, so zone maps on a
+            #     sorted processid would only pay off if a result's processids
+            #     were contiguous -- and a taxonomic query scatters them across
+            #     the whole table.
+            #
+            # What remains is a streaming scan and write, at flat memory.
             st = _Step("write sequence")
             con.execute(
                 "CREATE TABLE out.sequence AS\n"
-                "SELECT sp.sid, sp.processid, st.nuc\n"
-                "FROM out.specimen sp\n"
-                "JOIN stage st ON st.processid = sp.processid\n"
-                "WHERE st.nuc IS NOT NULL AND st.nuc <> ''\n"
-                "ORDER BY sp.processid"
+                "SELECT processid, nuc FROM stage\n"
+                "WHERE nuc IS NOT NULL AND nuc <> ''"
             )
             st.done()
         else:
-            con.execute(
-                "CREATE TABLE out.sequence (sid BIGINT, processid VARCHAR, nuc VARCHAR)"
-            )
+            con.execute("CREATE TABLE out.sequence (processid VARCHAR, nuc VARCHAR)")
 
         # --------------------------------------------------------- recordsets
         if plan.recordset_present:
@@ -444,9 +515,15 @@ def build(
     finally:
         con.close()
 
-    for tmp in (staging, Path(str(staging) + ".wal")):
-        if tmp.exists():
-            tmp.unlink()
+    # Only now that the build has succeeded is staging disposable -- unless the
+    # caller wants to build again from the same ingest, which is the whole
+    # point of building metadata-only first and then the full snapshot.
+    if keep_staging:
+        _log(f"\nStaging kept at {staging} -- reuse it with --reuse-staging")
+    else:
+        for tmp in (staging, Path(str(staging) + ".wal")):
+            if tmp.exists():
+                tmp.unlink()
 
     stray_wal = Path(str(out) + ".wal")
     if stray_wal.exists():
@@ -642,6 +719,22 @@ def main(argv: list[str] | None = None) -> int:
                         "expected ['CODE',...] form")
     p.add_argument("--no-progress", action="store_true",
                    help="suppress DuckDB's progress bar")
+    p.add_argument("--reuse-staging", action="store_true",
+                   help="reuse the staging database a previous run left behind "
+                        "instead of re-reading the source. A failed build keeps "
+                        "it, so a retry skips the ingest entirely.")
+    p.add_argument("--overwrite", action="store_true",
+                   help="replace an existing output file (e.g. the partial one "
+                        "a failed run left behind)")
+    p.add_argument("--staging-path", type=Path, default=None,
+                   help="where to put the staging database (default: "
+                        "<out>.staging). Set it explicitly to share one ingest "
+                        "between builds writing different output files.")
+    p.add_argument("--keep-staging", action="store_true",
+                   help="keep the staging database after a successful build so "
+                        "another build can --reuse-staging. Use it when "
+                        "building metadata-only first and the full snapshot "
+                        "after, to ingest the source only once.")
     args = p.parse_args(argv)
 
     if args.dry_run:
@@ -671,9 +764,26 @@ def main(argv: list[str] | None = None) -> int:
             limit=args.limit,
             allow_recordset_drift=args.allow_recordset_drift,
             progress=not args.no_progress,
+            reuse_staging=args.reuse_staging,
+            overwrite=args.overwrite,
+            keep_staging=args.keep_staging,
+            staging_path=args.staging_path,
         )
     except BuildError as exc:
         print(f"\nBUILD FAILED: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:  # noqa: BLE001 - report, then advise on the retry
+        staging = args.staging_path or args.out.with_suffix(
+            args.out.suffix + ".staging"
+        )
+        print(f"\nBUILD FAILED: {type(exc).__name__}: {exc}", file=sys.stderr)
+        if staging.exists():
+            print(
+                f"\nThe staging database was kept at:\n  {staging}\n"
+                "Retry without re-reading the source:\n"
+                f"  --reuse-staging --overwrite",
+                file=sys.stderr,
+            )
         return 1
     _log(f"\nTotal {time.monotonic() - started:.1f}s")
     if args.limit:

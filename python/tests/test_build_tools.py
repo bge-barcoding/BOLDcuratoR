@@ -179,3 +179,179 @@ def test_unknown_marker_yields_a_clear_error(package, tmp_path):
                            "--marker", "NOT-A-MARKER", "--no-hash"])
     assert result.returncode == 1
     assert "No rows survived the filter" in result.stderr
+
+
+# -- sequence table --------------------------------------------------------
+
+
+def test_sequence_table_is_populated_and_orphan_free(package, tmp_path):
+    """Built straight from staging, with no join and no sort.
+
+    The join-and-sort version ran a 32 GB machine out of memory on the real
+    package; both operations recovered nothing.
+    """
+    import duckdb
+
+    out = tmp_path / "seq.duckdb"
+    _run(BUILD + ["--tsv", str(package), "--out", str(out), "--no-hash"]).check_returncode()
+
+    con = duckdb.connect(str(out), read_only=True)
+    try:
+        cols = {r[0] for r in con.execute("DESCRIBE sequence").fetchall()}
+        assert cols == {"processid", "nuc"}, "sid is gone; nothing reads it"
+
+        n_seq, n_spec = con.execute(
+            "SELECT (SELECT count(*) FROM sequence), (SELECT count(*) FROM specimen)"
+        ).fetchone()
+        assert 0 < n_seq <= n_spec
+
+        orphans = con.execute(
+            "SELECT count(*) FROM sequence q "
+            "ANTI JOIN specimen s ON s.processid = q.processid"
+        ).fetchone()[0]
+        assert orphans == 0
+
+        # Every specimen with a basecount over zero should have a sequence.
+        assert con.execute(
+            "SELECT count(*) FROM specimen s "
+            "WHERE s.nuc_basecount > 0 "
+            "AND NOT EXISTS (SELECT 1 FROM sequence q WHERE q.processid = s.processid)"
+        ).fetchone()[0] == 0
+    finally:
+        con.close()
+
+
+def test_no_sequences_build_leaves_an_empty_sequence_table(package, tmp_path):
+    import duckdb
+
+    out = tmp_path / "meta.duckdb"
+    _run(BUILD + ["--tsv", str(package), "--out", str(out), "--no-sequences",
+                  "--no-hash"]).check_returncode()
+    con = duckdb.connect(str(out), read_only=True)
+    try:
+        assert con.execute("SELECT count(*) FROM sequence").fetchone()[0] == 0
+        assert {r[0] for r in con.execute("DESCRIBE sequence").fetchall()} == \
+            {"processid", "nuc"}
+    finally:
+        con.close()
+    assert _run(VERIFY + ["--snapshot", str(out)]).returncode == 0
+
+
+# -- reuse-staging and overwrite -------------------------------------------
+
+
+def test_overwrite_is_required_to_replace_an_existing_snapshot(package, tmp_path):
+    out = tmp_path / "o.duckdb"
+    _run(BUILD + ["--tsv", str(package), "--out", str(out), "--no-hash"]).check_returncode()
+
+    refused = _run(BUILD + ["--tsv", str(package), "--out", str(out), "--no-hash"])
+    assert refused.returncode == 1
+    assert "--overwrite" in refused.stderr
+
+    allowed = _run(BUILD + ["--tsv", str(package), "--out", str(out), "--no-hash",
+                            "--overwrite"])
+    assert allowed.returncode == 0, allowed.stderr
+
+
+def test_reuse_staging_reproduces_the_same_snapshot(package, tmp_path):
+    """A retry, or a second build, must not re-read the whole source.
+
+    This is the real workflow: build metadata-only, keep staging, then build
+    the full snapshot from the same ingest.
+    """
+    import duckdb
+
+    def counts(path):
+        con = duckdb.connect(str(path), read_only=True)
+        try:
+            return con.execute(
+                "SELECT (SELECT count(*) FROM specimen), "
+                "       (SELECT count(*) FROM sequence), "
+                "       (SELECT count(*) FROM taxon), "
+                "       (SELECT count(*) FROM specimen_recordset)"
+            ).fetchone()
+        finally:
+            con.close()
+
+    direct = tmp_path / "direct.duckdb"
+    _run(BUILD + ["--tsv", str(package), "--out", str(direct),
+                  "--no-hash"]).check_returncode()
+
+    staged = tmp_path / "staged.duckdb"
+    first = _run(BUILD + ["--tsv", str(package), "--out", str(staged),
+                          "--no-sequences", "--no-hash", "--keep-staging"])
+    first.check_returncode()
+    staging = Path(str(staged) + ".staging")
+    assert staging.exists(), "‑-keep-staging should leave the staging file"
+    assert "Staging kept" in first.stdout
+
+    # Now the full build, reusing that ingest rather than re-reading the source.
+    second = _run(BUILD + ["--tsv", str(package), "--out", str(staged),
+                           "--no-hash", "--reuse-staging", "--overwrite"])
+    second.check_returncode()
+    assert "ingest skipped" in second.stdout
+    assert "ingest + marker filter" not in second.stdout
+
+    assert counts(direct) == counts(staged)
+    assert not staging.exists(), "a successful build without --keep-staging cleans up"
+
+
+def test_reuse_staging_rejects_something_that_is_not_a_staging_file(package, tmp_path):
+    """The guard that stops a wrong file being mistaken for staging."""
+    import duckdb
+
+    out = tmp_path / "g.duckdb"
+    bogus = Path(str(out) + ".staging")
+    con = duckdb.connect(str(bogus))
+    con.execute("CREATE TABLE something_else (x INTEGER)")
+    con.close()
+
+    result = _run(BUILD + ["--tsv", str(package), "--out", str(out),
+                           "--no-hash", "--reuse-staging"])
+    assert result.returncode == 1
+    assert "no 'stage' table" in result.stderr
+
+
+def test_reuse_staging_without_a_staging_file_is_refused(package, tmp_path):
+    result = _run(BUILD + ["--tsv", str(package), "--out", str(tmp_path / "x.duckdb"),
+                           "--reuse-staging", "--no-hash"])
+    assert result.returncode == 1
+    assert "no staging file" in result.stderr
+
+
+def test_one_ingest_can_serve_two_different_output_files(package, tmp_path):
+    """The real workflow: metadata-only first, then the full snapshot.
+
+    Staging defaults to <out>.staging, so without --staging-path the second
+    build writing a different file would re-read the whole source.
+    """
+    import duckdb
+
+    staging = tmp_path / "shared.staging"
+    meta = tmp_path / "meta.duckdb"
+    full = tmp_path / "full.duckdb"
+
+    first = _run(BUILD + ["--tsv", str(package), "--out", str(meta),
+                          "--no-sequences", "--no-hash",
+                          "--staging-path", str(staging), "--keep-staging"])
+    first.check_returncode()
+    assert staging.exists()
+
+    second = _run(BUILD + ["--tsv", str(package), "--out", str(full), "--no-hash",
+                           "--staging-path", str(staging), "--reuse-staging"])
+    second.check_returncode()
+    assert "ingest skipped" in second.stdout
+    assert not staging.exists(), "the last build cleans up"
+
+    def rows(path, table):
+        con = duckdb.connect(str(path), read_only=True)
+        try:
+            return con.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+        finally:
+            con.close()
+
+    assert rows(meta, "specimen") == rows(full, "specimen")
+    assert rows(meta, "sequence") == 0
+    assert rows(full, "sequence") > 0
+    assert _run(VERIFY + ["--snapshot", str(meta)]).returncode == 0
+    assert _run(VERIFY + ["--snapshot", str(full)]).returncode == 0
