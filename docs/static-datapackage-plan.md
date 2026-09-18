@@ -120,7 +120,10 @@ public package before committing to a size.
   against a local DuckDB file**, which has the same data ceiling as the Python
   rewrite because every constraint measured here is a browser constraint, and
   costs almost nothing because the app already exists.
-- **4A is unaffected** and proceeds in R as planned.
+- **4A is unaffected** and proceeds in R as planned — and see **§4E**, which may
+  make the local option optional altogether: `httpfs` lets a hosted app read the
+  snapshot from object storage over HTTP range requests, so hosting needs no data
+  disk, and monthly snapshot refreshes stop involving IT.
 
 ### Follow-ups this opens
 
@@ -806,6 +809,145 @@ If such queries are not part of the workflow, 4B remains viable as the
 zero-install option alongside whichever native target is chosen. If they are,
 partitioning fails and the local option is native.
 
+### 4E — Hosted app, data in object storage, read over HTTP range requests
+
+**This may remove the need for a local option at all, and it removes the largest
+thing we were going to ask IT for.**
+
+The premise we carried from the start was that hosting needs a big disk, because
+the app needs the snapshot on local storage. It does not. DuckDB's `httpfs`
+extension reads Parquet over HTTP **range requests**, fetching only the row groups
+a query touches. Confirmed in the source: `httpfs` is in DuckDB's
+`AUTOLOADABLE_EXTENSIONS` list and the R package sets
+`DUCKDB_EXTENSION_AUTOLOAD_DEFAULT` (`duckdb/duckdb-r` at `8384b78`). Only the
+*wasm* build lacks it — see the spike README.
+
+```
+NHM Shiny server                 Cloudflare R2 (ours, not IT's)
+┌──────────────────┐             ┌────────────────────────────┐
+│ BOLDcuratoR app  │  HTTPS      │ latest.json  (tiny pointer)│
+│ DuckDB + httpfs  │────range───▶│ bold_YYYYMMDD.parquet      │
+│ no data on disk  │  requests   │ sorted taxonomically       │
+└──────────────────┘             └────────────────────────────┘
+```
+
+**The split of labour, which is the point:**
+
+- **Monthly data updates — us alone.** Upload a new Parquet, update `latest.json`.
+  IT is not involved, ever. This is the cadence that would otherwise have
+  overwhelmed a busy team.
+- **App updates — IT, but rarely.** Code changes only.
+
+**What it costs:** R2 at 8 GB is roughly **$0.12/month**, with zero egress fees.
+No storage for IT to provision, back up or own.
+
+**No pre-slicing is needed.** The taxonomic sort order Phase 1 already specifies
+means Parquet row-group statistics prune the same way DuckDB's zone maps do. The
+"slicing" happens per query, automatically, with no partition scheme to maintain —
+which is what makes this different from 4B.
+
+**Design requirement: the data URL must not be baked into the app.** The app reads
+`latest.json` from R2 at startup and takes the Parquet URL from it. If the URL is
+a build-time constant or an environment variable IT controls, every snapshot
+refresh becomes a redeploy request, and the main benefit is lost. This is the one
+thing to get right in the code before the first deploy.
+
+#### Getting it right in one deploy
+
+The constraint is that we only get to test properly once IT has deployed, and
+repeated "please redeploy" requests will burn goodwill. Two things reduce that
+risk to near zero:
+
+1. **Prove the whole thing locally first.** Everything except the host's network
+   policy can be tested from a laptop against the real R2 bucket: httpfs
+   autoload, range requests, pruning effectiveness, query latency, the pointer
+   file, the app end to end. Do not ask IT for anything until the app works
+   locally against the production bucket.
+2. **Send `data-prep/it-preflight.R` with the request.** One script, run once on
+   the server, whose output answers most of the questions below mechanically —
+   R version, proxy and TLS environment, whether egress reaches the bucket,
+   whether ranges are honoured (HTTP 206), whether `httpfs` installs and loads,
+   the extension and temp directories, cgroup memory limits, and a timed pruned
+   query. It is read-only and installs nothing permanently. Getting its output
+   back converts most of this list into a single round trip.
+
+#### Questions for IT — send once, with the preflight script
+
+Marked **[P]** where the preflight script answers it, so IT need only answer the
+rest in prose.
+
+**Platform**
+
+1. Which software and version — **Shiny Server open source**, **Posit Connect**,
+   or **Docker/Kubernetes**? Decides the concurrency model (§4.3) and whether we
+   control the image.
+2. Do we supply the image, or do you build it? If we supply it we can pre-install
+   `httpfs` and pin every package version, which removes several risks below.
+3. **[P]** Which R version, and can it be pinned?
+4. How are R packages provisioned — `renv::restore()` at deploy, a shared library,
+   or vendored? Is there internet access *at build time*?
+
+**Network — the one genuine blocker**
+
+5. Is outbound HTTPS to our R2 hostname allowed? (We will give one hostname.)
+6. **[P]** Direct, or through a proxy? If a proxy: host, port, does it require
+   authentication, and are `https_proxy`/`no_proxy` set in the app's environment?
+   DuckDB's `httpfs` needs its own `SET http_proxy` if so, which we must configure
+   in code — we need the values before deploying, not after.
+7. **[P]** Is TLS intercepted (a corporate CA re-signing certificates)? If so we
+   need the CA bundle path, or HTTPS fails in ways that look like network errors.
+8. Is outbound HTTPS to `extensions.duckdb.org` allowed? Needed **only** if we
+   cannot pre-install `httpfs` in the image (see Q2). If the answer to either is
+   no, tell us and we will vendor the extension.
+9. Are there egress byte limits, shaping, or idle-connection timeouts on outbound
+   connections? Long-lived DuckDB HTTP connections are the normal case here.
+
+**Filesystem**
+
+10. **[P]** Is there a writable directory for the app process, and where? Needed
+    for DuckDB's extension directory and for temp spill — *not* for the data.
+11. **[P]** How much space is available there? DuckDB spills to disk on large
+    aggregations even when the data is remote. A few GB is plenty.
+
+**Resources**
+
+12. **[P]** RAM and vCPU available per app process. Is an over-limit process
+    killed or throttled?
+13. How many concurrent users should we size for, and is the process/connection
+    count configurable (§4.3)?
+14. Is there an idle timeout that stops or recycles the app? We keep a DuckDB
+    connection warm to avoid re-reading the Parquet footer on every query, and
+    aggressive recycling would undo that.
+
+**Deployment and operations**
+
+15. What is the deploy mechanism and typical turnaround — self-service, or a
+    ticket? This sets how expensive a mistake is.
+16. Can we set environment variables ourselves, without a redeploy?
+17. Where are application logs written, and can we read them without raising a
+    ticket? Without log access, diagnosing anything costs a redeploy cycle.
+18. Who owns TLS, the hostname, and authentication in front of the app?
+19. Is there a staging or test instance? **If yes, most of this risk disappears**
+    — ask for this first, before anything else on the list.
+
+#### Residual risks
+
+- **Latency.** Each query becomes several HTTP round trips instead of local
+  reads. Testable from a laptop before IT is involved, and the preflight script
+  measures it on the server. This is the thing most likely to disappoint.
+- **Concurrency is unchanged.** One R process per app on Shiny Server open source
+  still serialises queries (§4.3). Where the data lives does not affect this.
+- **A public bucket is strongly preferred.** The data is public BOLD data. A
+  private bucket means S3 credentials living on IT's server, which quietly
+  reintroduces the dependency this design exists to remove.
+
+#### Consequence for the local/offline options
+
+If a hosted app with no storage burden serves the taxonomists well, **4B, 4C and
+4D become optional rather than necessary**. They were motivated by the hosted
+option looking constrained. Decide deliberately whether genuine field or
+air-gapped use is a real requirement before anyone costs a rewrite.
+
 ## Phase 4 (superseded) — hosting options assessed before IT confirmed Kubernetes
 
 ### 4.1 shinyapps.io cannot host this
@@ -816,7 +958,9 @@ real decision, not a detail.
 
 ### 4.2 NHM Shiny server — questions for IT
 
-Send this list before building anything host-specific:
+**Superseded by the list in §4E**, which drops the ≥100 GB volume entirely (the
+data moves to object storage) and adds the proxy, TLS-interception, logging and
+staging questions this list was missing. The original is kept for the record:
 
 1. Which software and version — **Shiny Server open source**, **Posit Connect**, or
    **Docker/Kubernetes**? This is the single most important answer.
