@@ -135,27 +135,38 @@ wrote it cannot detect that, because it still holds a read-write handle.
 
 ### Measured build figures
 
-Record real numbers here after the first full build — the size estimates in the
-plan are estimates, and the distribution shape depends on what this turns out to
-be.
-
 Source: `BOLD_Public.11-Sep-2026.tsv`, 33.57 GB extracted, 76 columns, of which
-71 are kept. **20,164,595 records are COI-5P.**
+71 are kept. **20,164,595 records are COI-5P** (of ~"all markers" in the file).
 
-| Step | Time | Machine |
-|---|---|---|
-| sha256 of source | 28.5 s | Windows, 32 GB, `--memory-limit 12GB --threads 4` |
-| ingest + COI-5P filter | 362 s | " |
-| sort + write `specimen` | 669 s | " |
+Machine: Windows, 32 GB RAM, `--memory-limit 12GB --threads 4`, source and
+output on the same local disk.
 
-| Snapshot | Rows | File size |
-|---|---|---|
-| metadata only (`--no-sequences`) | 20,164,595 | _(to be filled in)_ |
-| full (with sequences) | 20,164,595 | _(to be filled in)_ |
+| Step | Time |
+|---|---|
+| sha256 of source | 28.4 s |
+| ingest + COI-5P filter | 344.5 s |
+| sort + write `specimen` | 627.3 s |
+| explode recordsets | 31.8 s |
+| build `taxon` | 2.3 s |
+| build `bin_species` | 1.2 s |
+| **total (metadata only)** | **1037.6 s (~17 min)** |
 
-At ~658 bp per record, 20.16 M sequences are roughly 13 GB of raw text, so the
-full snapshot is expected well above the 3 GB target. That is what makes the
-metadata/sequence split worth measuring rather than assuming.
+| Snapshot | Rows | File size | Zipped |
+|---|---|---|---|
+| metadata only (`--no-sequences`) | 20,164,595 | **2.89 GB** | **~750 MB** |
+| full (with sequences) | 20,164,595 | _(not yet built)_ | |
+
+Contents of the metadata snapshot: 546,861 taxa in the lookup, 412,637 BINs,
+32,146 distinct recordset codes.
+
+Null fractions in the real data, which is what the verifier's bounds are set
+from: `bin_uri` 6.9%, `species` **67.3%**, `country_ocean` 3.1%,
+`nuc_basecount` 0.1%. Species is high because most BOLD barcode records are
+BIN-only or identified no finer than genus — that is normal, not a defect.
+
+**2.89 GB uncompressed compresses to roughly 750 MB**, so the download is far
+smaller than the working file. Distribution should ship the compressed
+artefact and decompress on first run.
 
 ## Testing without the real package
 

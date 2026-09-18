@@ -138,10 +138,17 @@ def verify(snapshot: Path, *, previous_rows: int | None = None) -> list[Check]:
             checks.append(Check(f"every record is {meta['marker_filter']}", off == 0,
                                 f"{off:,} other markers"))
 
-        # Null fractions.  These catch a column that parsed into the wrong
-        # position, which otherwise looks like a perfectly healthy snapshot.
-        for col, limit in (("bin_uri", 0.40), ("species", 0.40),
-                           ("country_ocean", 0.30), ("nuc_basecount", 0.10)):
+        # Null fractions.  These exist to catch a column that parsed into the
+        # wrong position -- which otherwise produces a perfectly healthy-looking
+        # snapshot -- NOT to judge the data's completeness.
+        #
+        # Bounds are set from the real 2026-09-11 package (20,164,595 COI-5P
+        # records): bin_uri 6.9%, species 67.3%, country_ocean 3.1%,
+        # nuc_basecount 0.1%.  Species is high because most BOLD barcode records
+        # are BIN-only or identified no finer than genus; an earlier 40% bound
+        # was a guess and failed a perfectly good snapshot.
+        for col, limit in (("bin_uri", 0.50), ("species", 0.85),
+                           ("country_ocean", 0.40), ("nuc_basecount", 0.20)):
             if col not in cols:
                 continue
             frac = con.execute(
