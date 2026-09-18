@@ -107,12 +107,19 @@ public package before committing to a size.
 
 ### Consequences for the decision
 
-- **4B proceeds.** A zero-install local option is viable at a fraction of 4C's
-  cost, and the risk that justified 4C as a fallback has been retired by
-  measurement rather than assumption.
-- **4C is no longer the presumed destination for the local option.** The
-  consolidation argument in §4C stands on its own merits and is unaffected by
-  this result; what has gone is the "4B might not work at all" premise beneath it.
+- **The mechanism works, at a few hundred MB.** What the spike retired is the
+  premise that the browser might not work at all. What it did not do is make a
+  2–8 GB snapshot fit in a tab: extrapolating the measured ~3× mount transient
+  puts 2 GB at a ~6 GB peak, which no ordinary laptop survives.
+- **So the local option now turns on data scope, not on capability.** A scoped
+  snapshot at a few hundred MB is comfortably served by 4B. The full package is
+  not, by any amount of engineering, because the constraint is downloading and
+  holding the file rather than executing the query.
+- **Three options, not two.** §"Choosing between 4B, 4C and 4D" sets them out.
+  The one previously missing is **4D — the existing Shiny app run natively
+  against a local DuckDB file**, which has the same data ceiling as the Python
+  rewrite because every constraint measured here is a browser constraint, and
+  costs almost nothing because the app already exists.
 - **4A is unaffected** and proceeds in R as planned.
 
 ### Follow-ups this opens
@@ -729,6 +736,67 @@ blocked by this.
 
 ---
 
+### 4D — Native R: the existing app against a local DuckDB file
+
+**Not previously considered, and it changes the 4B-vs-4C framing.**
+
+Every constraint the spike measured is a *browser* constraint, not an R one: the
+4 GB wasm ceiling, the whole-file download, the ~3× mount transient, the 2 GB
+ArrayBuffer boundary, IDBFS. Run the same Shiny app natively — `shiny::runApp()`
+against a DuckDB file on local disk — and all of them disappear at once. DuckDB
+reads only the pages a query touches, which is exactly the 51 MB behaviour
+measured in the spike, but against an 8 GB file with nothing downloaded.
+
+This gets the **same data ceiling as 4C** with the app that already exists.
+
+What it costs: the user must have R. That is the entire difference from 4C.
+
+### Choosing between 4B, 4C and 4D
+
+What the codebase actually contains, measured:
+
+| | lines |
+|---|---|
+| App code (`R/` + `app.R` + `global.R`) | ~9,700 |
+| Tests | ~2,400 |
+| Pure UI (`*_ui.R`) | 751 |
+| Lines containing Shiny reactive constructs | **158** |
+
+The Shiny framework is a thin skin over domain logic. A rewrite loses only ~900
+lines of genuinely Shiny-shaped code — but the other ~9,000, plus the test suite
+encoding the curation rules, still has to be translated line by line. The 3–6
+week estimate in §4C holds, and is probably optimistic once tests are counted.
+
+| | Effort | User friction | Data ceiling |
+|---|---|---|---|
+| **4B, partitioned** | ~1–2 weeks: build tooling + app changes | Zero install | Constrained — taxon-first entry only |
+| **4D, native R** | Near zero — existing app, local DuckDB | User installs R | None — full 2–8 GB |
+| **4C, Python rewrite** | 3–6 weeks + signing and CI on two platforms | Double-click binary | None — full 2–8 GB |
+
+**The decision reduces to one question: can the offline users install R?**
+
+- **Yes** → 4D. Twelve thousand lines are kept and it ships in days, not weeks.
+  4C's case then rests on the consolidation argument in §4C alone — one codebase
+  instead of R-for-Docker plus something else — which is a real maintenance
+  argument but is no longer a capability argument.
+- **No, it must be double-click for people who have never seen R** → 4C, and the
+  rewrite is justified. Not because the browser failed, but because packaging R
+  for non-R users is genuinely bad.
+
+**A second question decides whether 4B survives as a cheap zero-install extra:**
+is `country`/`continent` ever an *entry point*, or always a refinement applied
+after choosing a taxon? Users reportedly start from a family or genus, in which
+case country, continent and BIN are filters *within* an already-loaded slice —
+they run locally in DuckDB over a few hundred MB, the case the spike measured at
+0.17 s. BIN does not break this either: BINs cluster within genera, and entry by
+BIN needs only a second small routing index (BIN → partition) beside the `taxon`
+one. The genuine casualty is a globally scoped non-taxonomic query — "every
+record from Costa Rica, across all taxa" — which needs every partition.
+
+If such queries are not part of the workflow, 4B remains viable as the
+zero-install option alongside whichever native target is chosen. If they are,
+partitioning fails and the local option is native.
+
 ## Phase 4 (superseded) — hosting options assessed before IT confirmed Kubernetes
 
 ### 4.1 shinyapps.io cannot host this
@@ -871,11 +939,19 @@ rollback by repointing `current.json` works.
 
 ## Open questions
 
-1. **Does `duckdb` exist as a webR binary?** The decision gate — run this first; it
-   determines whether the local option is 4B or 4C.
-2. **Taxonomic scope of the snapshot.** The single biggest lever on size, and it
-   differs per target: ~2 GB is fine for 4A and 4C, but 4B needs a few hundred MB.
-   Decide whether one scoped snapshot serves all, or 4A/4C ship broader coverage.
+1. ~~**Does `duckdb` exist as a webR binary?**~~ **ANSWERED** — yes, and the spike
+   it gated has been run. See the resolved section at the top.
+2. **Can the offline users install R?** This now decides the local target on its
+   own: yes → 4D (keep the app, ship in days), no → 4C (rewrite, 3–6 weeks). See
+   "Choosing between 4B, 4C and 4D".
+3. **Is `country`/`continent` ever a query *entry point*, or always a refinement
+   after choosing a taxon?** Decides whether 4B survives as a zero-install option.
+   Entry-point → partitioning fails. Refinement-only → partitioning works.
+4. **Taxonomic scope of the snapshot.** The single biggest lever on size. The spike
+   makes the split concrete rather than assumed: ~2 GB is fine for 4A, 4C and 4D,
+   but 4B measured a ~3× transient peak while mounting, so a browser snapshot wants
+   to stay at or below ~500 MB. Decide whether one scoped snapshot serves all, or
+   the native targets ship broader coverage.
 3. **Download automation vs manual** (Phase 0.1).
 4. **Are the records the course needs public?** (Phase 0.2) — with the API dropped,
    private records are simply unavailable; there is no fallback path any more.
