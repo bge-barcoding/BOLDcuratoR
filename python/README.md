@@ -133,40 +133,79 @@ Useful options:
 write-ahead log makes a DuckDB file unopenable read-only, and the process that
 wrote it cannot detect that, because it still holds a read-write handle.
 
-### Measured build figures
+### Measured build figures — both snapshots are built; do not rebuild
 
-Source: `BOLD_Public.11-Sep-2026.tsv`, 33.57 GB extracted, 76 columns, of which
-71 are kept. **20,164,595 records are COI-5P** (of ~"all markers" in the file).
+Source: `BOLD_Public.11-Sep-2026.tsv`, 33.57 GB extracted, 76 columns, 71 kept.
+**20,164,595 records are COI-5P.** Windows, 32 GB RAM,
+`--memory-limit 12GB --threads 4`.
 
-Machine: Windows, 32 GB RAM, `--memory-limit 12GB --threads 4`, source and
-output on the same local disk.
+| Snapshot | Rows | File size | Zipped | Build time |
+|---|---|---|---|---|
+| metadata (`--no-sequences`) | 20,164,595 | 2.89 GB | ~750 MB | 1037.6 s from source |
+| **full (with sequences)** | 20,164,595 | **7.95 GB** | **1.9 GB** | 439.8 s reusing staging |
 
-| Step | Time |
-|---|---|
-| sha256 of source | 28.4 s |
-| ingest + COI-5P filter | 344.5 s |
-| sort + write `specimen` | 627.3 s |
-| explode recordsets | 31.8 s |
-| build `taxon` | 2.3 s |
-| build `bin_species` | 1.2 s |
-| **total (metadata only)** | **1037.6 s (~17 min)** |
+20,096,366 records carry a sequence. 546,861 taxa, 412,637 BINs, 32,146
+recordset codes.
 
-| Snapshot | Rows | File size | Zipped |
-|---|---|---|---|
-| metadata only (`--no-sequences`) | 20,164,595 | **2.89 GB** | **~750 MB** |
-| full (with sequences) | 20,164,595 | _(not yet built)_ | |
-
-Contents of the metadata snapshot: 546,861 taxa in the lookup, 412,637 BINs,
-32,146 distinct recordset codes.
+Per step, from source: sha256 28.4 s, ingest + COI-5P filter 344.5 s, sort +
+write `specimen` 627.3 s, explode recordsets 31.8 s, `taxon` 2.3 s,
+`bin_species` 1.2 s. Reusing staging skips the ingest, which is why the second
+build took 7 minutes rather than 24 — that is what `--keep-staging` is for.
 
 Null fractions in the real data, which is what the verifier's bounds are set
 from: `bin_uri` 6.9%, `species` **67.3%**, `country_ocean` 3.1%,
 `nuc_basecount` 0.1%. Species is high because most BOLD barcode records are
-BIN-only or identified no finer than genus — that is normal, not a defect.
+BIN-only or identified no finer than genus — normal, not a defect. It does mean
+**BAGS grades apply to about a third of the data**.
 
-**2.89 GB uncompressed compresses to roughly 750 MB**, so the download is far
-smaller than the working file. Distribution should ship the compressed
-artefact and decompress on first run.
+**Sequences stay in the single file.** 7.95 GB compresses to 1.9 GB (4.2x — DNA
+over a four-letter alphabet compresses hard), so the download is comfortable and
+the metadata/sequence split is not needed.
+
+## Testing before the GUI
+
+The build is done. What is *not* yet established is how the query layer behaves
+at 20 M records, and those numbers set the thresholds the UI has to enforce.
+
+```sh
+pip install -e ".[dev]"
+
+python -m pytest tests/ -q        # correctness, against a generated fixture
+python parity/compare.py          # R-vs-Python parity; exit 1 on any surprise
+
+# the one that needs the real snapshot
+python -m boldcurator.cli benchmark --snapshot /path/to/bold_snapshot_2026-09-11.duckdb
+```
+
+`benchmark` times each stage separately — opening the snapshot, taxon resolve,
+the size pre-check, BIN-expanded search at species/family/order scale, the full
+scoring pipeline, sequence streaming and every export format — and reports rows
+and peak RSS alongside. Install `psutil` (`pip install -e ".[bench]"`) for the
+memory column; without it the command still runs and says so.
+
+What the numbers should show:
+
+| Measure | Target |
+|---|---|
+| taxon resolve | < 1 s |
+| BIN-expanded search | sub-second for the query itself |
+| full pipeline, ~50,000 rows | seconds — the R row loop takes ~75 s |
+| sequence streaming | flat memory regardless of count |
+
+A `SizeLimitExceeded` refusal is **reported, not raised** — `DOWNLOAD_LIMITS`
+was set from guesswork, and whether it suits real data is one of the things the
+benchmark measures. `--no-limits` pushes past it deliberately.
+
+Useful variations:
+
+```sh
+# a specific clade, and time the exports too
+python -m boldcurator.cli benchmark --snapshot <file> --taxon Carabidae --export
+
+# one ad-hoc search end to end
+python -m boldcurator.cli search --snapshot <file> \
+    --taxa "Nymphalidae" --continent Europe --out ./results
+```
 
 ## Testing without the real package
 

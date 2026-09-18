@@ -230,22 +230,27 @@ is a failure mode already diagnosed there, not a preference):
   laptops is a data-protection problem, not a size one.
 - Filter to `marker_code = 'COI-5P'` at build time; record the filter in `_meta`.
 
-### Size — MEASURED, 2026-09-11 package
+### Size — MEASURED and CLOSED, 2026-09-11 package
 
-**20,164,595 COI-5P records. Metadata-only snapshot: 2.89 GB, ~17 min to build,
-and ~750 MB zipped.** 546,861 taxa, 412,637 BINs, 32,146 recordset codes. The
-full build with sequences is not yet measured; ~13 GB of raw sequence text is
-expected to put it well above 3 GB.
+Both snapshots are built and verified. **Do not rebuild.**
 
-**Compression changes the distribution story and is the decided route.** A 2.89
-GB working file that downloads as ~750 MB is comfortable, so the app should
-fetch a compressed artefact and decompress on first run rather than trimming
-data to hit a size target. That lands in `tools/fetch_snapshot.py` (Phase 5.1);
-prefer zstd over zip if a dependency is acceptable, and verify the sha256 of the
-compressed file before decompressing. The levers below are now a fallback rather
-than the plan.
+| Snapshot | Rows | Size | Zipped | Build |
+|---|---|---|---|---|
+| metadata (`--no-sequences`) | 20,164,595 | 2.89 GB | ~750 MB | 1037.6 s from source |
+| **full (with sequences)** | 20,164,595 | **7.95 GB** | **1.9 GB** | 439.8 s reusing staging |
 
-### Original size levers — retained as fallback
+20,096,366 records carry a sequence; 546,861 taxa, 412,637 BINs, 32,146
+recordset codes. All 19 verification checks pass on both.
+
+**Sequences stay in the single file, and the size levers below are closed.**
+7.95 GB compresses 4.2x to 1.9 GB — DNA over a four-letter alphabet compresses
+hard — so the download is comfortable and no data needs trimming to hit a
+target. Distribution ships the compressed artefact and decompresses on first
+run; that work lands in `tools/fetch_snapshot.py` (Phase 5.1), preferring zstd
+over zip if a dependency is acceptable, verifying the sha256 of the compressed
+file before decompressing.
+
+### Original size levers — NOT NEEDED, retained only for the record
 
 The user's target is "close to 3 GB". The existing plan estimates ~1.5 GB for `specimen` and
 ~6 GB for `sequence` **with all markers**; COI-5P-only cuts both substantially, but the
@@ -382,7 +387,7 @@ immediately against a synthetic fixture.
 
 ### Phase 0 — Snapshot build (blocked only on obtaining the `.tsv.gz`)
 
-- [ ] 0.1 Confirm download mechanics for `bench.boldsystems.org/…/datapackage` (API key header vs form-login cookie; stable URL vs one-shot signed link). If interactive, that step stays manual — one person, one download. Do not contort the design around it.
+- [x] 0.1 Confirm download mechanics for `bench.boldsystems.org/…/datapackage` (API key header vs form-login cookie; stable URL vs one-shot signed link). If interactive, that step stays manual — one person, one download. Do not contort the design around it.
 - [ ] 0.2 Confirm the course's records are public. Private/unpublished records are simply absent from the public package and there is no API fallback any more. If not, scope an overlay DuckDB file in the same schema, `ATTACH`ed and `UNION ALL`ed.
 - [ ] 0.3 Note the CC-BY-SA 4.0 attribution requirement in writing; it goes in the app's about text and any redistribution.
 - [x] 0.4 `tools/build_snapshot.py` — ingest per the rules above, COI-5P filter, `TRY_CAST` the four numerics (`specimenid`, `elev`, `depth`, `nuc_basecount`), leave partial BCDM dates as text.

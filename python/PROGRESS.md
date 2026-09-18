@@ -16,62 +16,49 @@ python parity/compare.py        # exit 1 on any unexplained R-vs-Python differen
 
 ---
 
-## Where the real data stands
+## Where the real data stands — Phase 0 is CLOSED
 
-The metadata snapshot is **built and verified** on the user's machine from
-`BOLD_Public.11-Sep-2026.tsv`:
+Both snapshots are built and verified from `BOLD_Public.11-Sep-2026.tsv`.
+**Do not rebuild.** Figures are in `README.md`.
 
-- **20,164,595 COI-5P records**, 2.89 GB, ~17 min to build, **~750 MB zipped**
-- 546,861 taxa, 412,637 BINs, 32,146 recordset codes
-- Staging kept at `C:\Users\benjp\Downloads\bold.staging`, so the **full build
-  with sequences needs no re-ingest** — see the next task below
+| Snapshot | Size | Zipped |
+|---|---|---|
+| `bold_meta_2026-09-11.duckdb` | 2.89 GB | ~750 MB |
+| `bold_snapshot_2026-09-11.duckdb` (full) | 7.95 GB | 1.9 GB |
 
-The full (with-sequences) snapshot has **not** been built yet. ~13 GB of raw
-sequence text is expected to land the file well above 3 GB, which is what makes
-the compression decision below matter.
+20,164,595 COI-5P records, 20,096,366 with sequences, 546,861 taxa,
+412,637 BINs. All 19 verification checks pass on both.
+
+**The staging file can be deleted** — `C:\Users\benjp\Downloads\bold.staging`,
+about 20 GB back. It has done its job.
+
+**Sequences stay in one file.** 4.2x compression makes a 1.9 GB download
+comfortable, so the metadata/sequence split is not needed and the plan's size
+levers are closed.
 
 ---
 
-## Next tasks, in order
+## Next task: qualify the snapshot, then build the GUI
 
-### 1. Build the full snapshot (user-run, ~10 min, reuses staging)
+Everything verified so far is *correctness* — 152 tests against a generated
+fixture, plus the R parity harness over a 115-row fixture. **Nothing has run
+against the real 20 M-record snapshot**, so the central claim (BIN expansion as
+one sub-second query) is unmeasured, and `DOWNLOAD_LIMITS` was set from
+guesswork.
 
 ```powershell
-python tools/build_snapshot.py `
-    --tsv "C:\Users\benjp\Downloads\BOLD_Public_11-Sep-2026\BOLD_Public.11-Sep-2026.tsv" `
-    --out "C:\Users\benjp\Downloads\BOLD_Public_11-Sep-2026\bold_snapshot_2026-09-11.duckdb" `
-    --staging-path "C:\Users\benjp\Downloads\bold.staging" --reuse-staging `
-    --temp-dir "C:\Users\benjp\Downloads\duckdb_tmp" --memory-limit 12GB --threads 4
+pip install -e ".[dev]"
+python -m boldcurator.cli benchmark `
+    --snapshot "C:\Users\benjp\Downloads\BOLD_Public_11-Sep-2026\bold_snapshot_2026-09-11.duckdb" `
+    --export
 ```
 
-Record the resulting size in `README.md`. That number decides whether sequences
-ship in the same file or as a separate optional download.
+Record the output in `README.md` under "Measured build figures". Those numbers
+set the size-check thresholds the GUI must enforce and decide how many rows can
+go in a table at all. **Start Phase 3 once they are in.**
 
-### 2. Compression for distribution — **decided, not yet built**
-
-2.89 GB → ~750 MB with plain zip. The app should download the compressed
-artefact and decompress on first run. Points for whoever picks this up:
-
-- **Prefer zstd over zip** if a dependency is acceptable: comparable or better
-  ratio, several times faster to decompress, and `pip install zstandard` is a
-  wheel on all three platforms. Plain `zipfile` is stdlib and needs nothing —
-  the fallback if a dependency is unwelcome.
-- Compress the **DuckDB file**, not a Parquet export: keeping one format avoids
-  a second code path.
-- `tools/fetch_snapshot.py` (Phase 5.1) is where this belongs: download →
-  verify sha256 **of the compressed file** → decompress → verify the snapshot
-  with `build/verify.py` → atomically move into place.
-- Disk during first run peaks at compressed + uncompressed together. Say so in
-  the UI, and delete the archive after a successful decompress.
-
-### 3. Phase 3 — the GUI
-
-The parity gate is green, so this is unblocked. Start with the half-day spike
-(plan 3.1): 50,000 rows in a Shiny for Python `DataGrid` with multi-row
-selection and a bulk-annotation toolbar. If it cannot carry it, swap `ui/` to
-NiceGUI + AG Grid — nothing below `ui/` changes, and a test enforces that.
-
----
+A `SizeLimitExceeded` refusal is reported rather than raised — whether the
+guards suit real data is part of what is being measured.
 
 ## Findings from the real build, worth acting on
 
@@ -104,9 +91,9 @@ surfacing in the UI rather than letting a curator assume otherwise.
 - [x] 0.5 recordset explode with parse assertions
 - [x] 0.6 `taxon` and `bin_species`
 - [x] 0.7 `tools/verify_snapshot.py`
-- [x] 0.8 measured figures recorded (metadata; full build outstanding)
+- [x] 0.8 measured figures recorded — both snapshots built and verified
 - [x] 0.9 generated test fixture
-- [ ] 0.1 download mechanics — still manual, fine
+- [x] 0.1 download mechanics — still manual, fine
 - [ ] 0.2 confirm the course's records are public
 - [ ] 0.3 CC-BY-SA attribution noted in writing
 

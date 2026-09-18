@@ -94,6 +94,177 @@ def cmd_search(args: argparse.Namespace) -> int:
     return 0
 
 
+# --------------------------------------------------------------------------
+# benchmark
+# --------------------------------------------------------------------------
+
+
+def _peak_rss_mb() -> float | None:
+    """Peak resident memory, or None when psutil is not installed.
+
+    Deliberately optional: the benchmark must run on a bare install. `pip
+    install -e ".[bench]"` adds it.
+    """
+    try:
+        import psutil
+    except ImportError:
+        return None
+    return psutil.Process().memory_info().rss / 1e6
+
+
+class _Timer:
+    """Records a named step's wall clock, row count and memory."""
+
+    def __init__(self) -> None:
+        self.rows: list[dict] = []
+
+    def run(self, name: str, fn, *, detail: str = ""):
+        import time
+
+        start = time.monotonic()
+        error = ""
+        value = None
+        try:
+            value = fn()
+        except Exception as exc:  # noqa: BLE001 - a refusal is a result here
+            error = f"{type(exc).__name__}: {exc}"
+        elapsed = time.monotonic() - start
+        self.rows.append({
+            "step": name, "seconds": elapsed, "detail": detail or "",
+            "error": error, "rss_mb": _peak_rss_mb(),
+        })
+        return value
+
+    def annotate(self, detail: str) -> None:
+        if self.rows:
+            self.rows[-1]["detail"] = detail
+
+    def table(self) -> str:
+        width = max(len(r["step"]) for r in self.rows) + 2
+        lines = [f"{'step'.ljust(width)}{'seconds':>10}  {'RSS MB':>8}  detail"]
+        lines.append("-" * (width + 32))
+        for r in self.rows:
+            rss = f"{r['rss_mb']:.0f}" if r["rss_mb"] is not None else "-"
+            detail = r["error"] or r["detail"]
+            lines.append(f"{r['step'].ljust(width)}{r['seconds']:>10.3f}  "
+                         f"{rss:>8}  {detail}")
+        return "\n".join(lines)
+
+
+def cmd_benchmark(args: argparse.Namespace) -> int:
+    """Measure the real thing.
+
+    Every claim this project rests on -- taxon resolve under a second, BIN
+    expansion collapsing to one sub-second query, scoring in seconds rather
+    than the R loop's minutes -- is a claim about a 20 M-record snapshot, and
+    is worth nothing until measured against one.
+
+    A size-limit refusal is reported as a result rather than raised: whether
+    DOWNLOAD_LIMITS is set sensibly for real data is one of the things being
+    measured.
+    """
+    import tempfile
+
+    from .core.pipeline import SizeLimitExceeded, run_search
+    from .data.queries import (
+        SearchQuery,
+        estimate_search,
+        iter_sequences,
+        resolve_taxa,
+        search_specimens,
+    )
+
+    if _peak_rss_mb() is None:
+        print("note: psutil not installed, so memory is not reported. "
+              'Install it with: pip install -e ".[bench]"\n')
+
+    t = _Timer()
+    store = t.run("open snapshot", lambda: SnapshotStore(args.snapshot))
+    if store is None:
+        print(t.table())
+        return 1
+    t.annotate(store.info().describe().splitlines()[0])
+
+    resolved_names: list[str] = []
+    try:
+        for name in args.taxon:
+            res = t.run(f"resolve {name!r}", lambda n=name: resolve_taxa(store, [n]))
+            if res is None:
+                continue
+            if res.resolved:
+                resolved_names.append(name)
+                t.annotate("; ".join(f"{r.rank} {r.n_records:,} records"
+                                     for r in res.resolved))
+            else:
+                t.annotate("not found in this snapshot")
+                continue
+
+            query = SearchQuery(taxa=res.resolved, expand_bins=True)
+            est = t.run(f"estimate {name!r}", lambda q=query: estimate_search(store, q))
+            if est:
+                t.annotate(f"seed {est['seed_records']:,} rows / "
+                           f"{est['seed_bins']:,} BINs -> "
+                           f"{est['expanded_records']:,} after BIN expansion")
+
+            frame = t.run(f"search+expand {name!r}",
+                          lambda q=query: search_specimens(store, q))
+            if frame is not None:
+                t.annotate(f"{len(frame):,} rows x {len(frame.columns)} columns")
+
+        # The pipeline runs on a taxon that actually resolved, so one bad name
+        # on the command line does not lose the measurement entirely.
+        pipeline_taxon = args.pipeline_taxon or (
+            resolved_names[0] if resolved_names else None
+        )
+        if pipeline_taxon is None:
+            print(t.table())
+            print("\nNone of the requested taxa are in this snapshot, so the "
+                  "pipeline could not be measured. Check the spelling, or pick "
+                  "taxa this snapshot covers.")
+            return 1
+        result = t.run(
+            f"full pipeline {pipeline_taxon!r}",
+            lambda: run_search(store, taxa_text=pipeline_taxon,
+                               enforce_limits=not args.no_limits),
+        )
+        if result is not None:
+            s = result.summary()
+            t.annotate(f"{s['records']:,} records, {s['species']} species, "
+                       f"{s['bins']} BINs, {s['selected']} auto-selected")
+
+            ids = [str(p) for p in result.specimens["processid"][: args.sequences]]
+            n = t.run(f"stream {len(ids):,} sequences",
+                      lambda: sum(1 for _ in iter_sequences(store, ids)))
+            if n is not None:
+                t.annotate(f"{n:,} sequences")
+
+            if args.export:
+                from .io.exports import export_all
+
+                with tempfile.TemporaryDirectory() as tmp:
+                    written = t.run("export all formats",
+                                    lambda: export_all(result, tmp, store=store))
+                    if written is not None:
+                        t.annotate(f"{len(written.written)} files, "
+                                   f"{len(written.skipped)} skipped")
+    finally:
+        store.close()
+
+    print(t.table())
+    print()
+    failed = [r for r in t.rows if r["error"]]
+    limit_refusals = [r for r in failed if "SizeLimitExceeded" in r["error"]]
+    if limit_refusals:
+        print("Size limits refused a query. That is the guard working, but "
+              "check DOWNLOAD_LIMITS is set sensibly for real data; "
+              "--no-limits pushes past it.")
+    other = [r for r in failed if r not in limit_refusals]
+    if other:
+        print(f"{len(other)} step(s) failed unexpectedly.")
+        return 1
+    return 0
+
+
 def cmd_verify(args: argparse.Namespace) -> int:
     from .build.verify import main as verify_main
 
@@ -130,11 +301,38 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--out", help="directory to write the export set into")
     search.set_defaults(func=cmd_search)
 
+    bench = sub.add_parser(
+        "benchmark",
+        help="measure resolve, BIN expansion, scoring and export against a "
+             "real snapshot",
+    )
+    _add_snapshot_arg(bench)
+    bench.add_argument("--taxon", action="append", default=None,
+                       help="taxon to exercise, repeatable. Defaults to a "
+                            "species, a family and an order.")
+    bench.add_argument("--pipeline-taxon", default=None,
+                       help="taxon for the full scoring pipeline "
+                            "(default: the first --taxon)")
+    bench.add_argument("--sequences", type=int, default=10_000,
+                       help="how many sequences to stream (default 10000)")
+    bench.add_argument("--export", action="store_true",
+                       help="also time writing every export format")
+    bench.add_argument("--no-limits", action="store_true",
+                       help="ignore DOWNLOAD_LIMITS, to measure past the guard")
+    bench.set_defaults(func=cmd_benchmark)
+
     return p
+
+
+#: A species, a family and an order -- three orders of magnitude apart, which
+#: is what makes the timings meaningful.
+DEFAULT_BENCHMARK_TAXA = ["Danaus plexippus", "Nymphalidae", "Lepidoptera"]
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if getattr(args, "taxon", None) is None and args.command == "benchmark":
+        args.taxon = list(DEFAULT_BENCHMARK_TAXA)
     try:
         return args.func(args)
     except (SnapshotError, ValueError) as exc:
