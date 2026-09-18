@@ -84,6 +84,11 @@ ui <- fluidPage(
       tags$small(tags$br(), "Run AFTER mounting. Run again after a reload."),
       verbatimTextOutput("idb_status"),
       tags$hr(),
+      h4("5. DuckDB extensions"),
+      actionButton("exts", "List extensions"),
+      tags$small(tags$br(), "Is httpfs present? Decides whether range requests are possible."),
+      verbatimTextOutput("ext_status"),
+      tags$hr(),
       h4("Browser memory"),
       verbatimTextOutput("mem"),
       tags$small("Confirm against Chrome Task Manager (Shift+Esc) — ground truth.")
@@ -153,7 +158,8 @@ absolute_url <- function(session, path) {
 
 server <- function(input, output, session) {
   rv <- reactiveValues(con = NULL, status = "Not mounted.", timing = "", bench = NULL,
-                       idb = "Not run. Mount a fixture first, then press Probe IDBFS.")
+                       idb = "Not run. Mount a fixture first, then press Probe IDBFS.",
+                       exts = "Not run.")
 
   output$mem <- renderText({
     m <- input$browser_mem
@@ -291,6 +297,39 @@ server <- function(input, output, session) {
       "wasm    : ", fmt_mb(wasm_mb()))
     rv$resolved <- out$resolved
     rv$results  <- if (is.null(out$rows)) NULL else utils::head(out$rows, 50)
+  })
+
+  # --- extension probe --------------------------------------------------------
+  # Decides between the two ways of avoiding a whole-snapshot download:
+  #
+  #   httpfs present -> DuckDB can range-request row groups out of one large
+  #                     Parquet on static hosting. No partitioning to build or
+  #                     maintain.
+  #   httpfs absent  -> partition at build time and fetch one partition per
+  #                     query, routed by the `taxon` table.
+  #
+  # The webR duckdb build links parquet and core_functions (visible in its compile
+  # flags); httpfs is not among them, and extension autoloading needs a wasm build
+  # of the extension to fetch. Worth two minutes to confirm rather than assume.
+  output$ext_status <- renderText(rv$exts)
+
+  observeEvent(input$exts, {
+    res <- try({
+      # Its own in-memory connection, so this works before anything is mounted --
+      # which also means DBI/duckdb may not be attached yet.
+      library(DBI); library(duckdb)
+      con <- dbConnect(duckdb::duckdb())
+      on.exit(try(dbDisconnect(con, shutdown = TRUE), silent = TRUE), add = TRUE)
+      e <- dbGetQuery(con, "SELECT extension_name, loaded, installed FROM duckdb_extensions() ORDER BY extension_name")
+      have <- function(x) isTRUE(x %in% e$extension_name)
+      paste0(
+        "httpfs : ", if (have("httpfs")) "PRESENT -> range requests are on the table"
+                     else "ABSENT  -> partition at build time instead", "\n",
+        "parquet: ", if (have("parquet")) "present" else "ABSENT (partitions would have to ship as .duckdb)", "\n\n",
+        paste(sprintf("%-22s loaded=%-5s installed=%s",
+                      e$extension_name, e$loaded, e$installed), collapse = "\n"))
+    }, silent = TRUE)
+    rv$exts <- if (inherits(res, "try-error")) paste0("FAILED\n", as.character(res)) else res
   })
 
   # --- IDBFS probe ------------------------------------------------------------
