@@ -130,6 +130,27 @@ def verify(snapshot: Path, *, previous_rows: int | None = None) -> list[Check]:
         checks.append(Check("sequence rows <= specimen rows", n_seq <= n_rows,
                             f"{n_seq:,} of {n_rows:,}"))
 
+        # The sequence table must be stored in specimen order, or every
+        # sequence fetch scans the whole nuc column. Checked as a strict
+        # ordering rather than an equality of rowids, because records with no
+        # sequence are dropped and so the two are offset.
+        if n_seq and meta.get("sequence_order") == "specimen":
+            out_of_order = con.execute(
+                "SELECT count(*) FROM ("
+                "  SELECT s.rowid AS spec_rid,"
+                "         lag(s.rowid) OVER (ORDER BY q.rowid) AS previous"
+                "  FROM sequence q JOIN specimen s ON s.processid = q.processid"
+                ") WHERE previous IS NOT NULL AND spec_rid <= previous"
+            ).fetchone()[0]
+            checks.append(Check("sequences follow specimen order",
+                                out_of_order == 0,
+                                f"{out_of_order:,} out of order"))
+        elif n_seq:
+            checks.append(Check(
+                "sequences follow specimen order", False,
+                "stored in ingest order -- every sequence fetch scans the "
+                "whole nuc column; run tools/reorder_sequences.py"))
+
         if meta.get("marker_filter"):
             off = con.execute(
                 "SELECT count(*) FROM specimen WHERE marker_code IS DISTINCT FROM ?",

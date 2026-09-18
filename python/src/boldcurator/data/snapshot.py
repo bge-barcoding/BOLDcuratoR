@@ -33,6 +33,15 @@ class SnapshotInfo:
     built_at: str
     partial_build: bool = False
     row_limit: str = ""
+    #: Physical order of the ``sequence`` table.  ``"specimen"`` means a
+    #: taxonomic result's sequences are contiguous, which is what makes a
+    #: sequence fetch cheap; anything else means ingest order, where every
+    #: fetch scans the whole ``nuc`` column.
+    sequence_order: str = ""
+
+    @property
+    def sequences_are_ordered(self) -> bool:
+        return self.sequence_order == "specimen"
 
     def describe(self) -> str:
         marker = self.marker_filter or "all markers"
@@ -41,6 +50,12 @@ class SnapshotInfo:
             f"snapshot {self.snapshot_id} -- {self.row_count:,} records "
             f"({marker}, {seq}), {self.bin_count:,} BINs, built {self.built_at}"
         )
+        if self.sequences_included and not self.sequences_are_ordered:
+            text += (
+                "\n  sequences are in ingest order, so every sequence fetch "
+                "scans the whole nuc column. tools/reorder_sequences.py "
+                "retrofits the fast layout without rebuilding from the TSV."
+            )
         if self.partial_build:
             text += (
                 f"\n  PARTIAL BUILD (--limit {self.row_limit or '?'}) -- a trial "
@@ -129,6 +144,7 @@ class SnapshotStore:
             built_at=m.get("built_at", ""),
             partial_build=m.get("partial_build", "false") == "true",
             row_limit=m.get("row_limit", ""),
+            sequence_order=m.get("sequence_order", ""),
         )
 
     @property

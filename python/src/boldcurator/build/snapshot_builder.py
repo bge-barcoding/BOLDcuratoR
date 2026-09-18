@@ -426,28 +426,34 @@ def build(
         st.done()
 
         if include_sequences:
-            # Straight from staging, with neither a join nor a sort.
+            # Sorted the same way specimen is, straight from staging.
             #
-            # The earlier version joined out.specimen back to stage and then
-            # ordered by processid, which put a 20 M-row hash join and a global
-            # sort over ~13 GB of sequence strings in flight at once and ran a
-            # 32 GB machine out of memory. Both were waste:
+            # An earlier version joined out.specimen back to stage and sorted
+            # by processid, which put a 20 M-row hash join and a global sort
+            # over ~13 GB of sequence strings in flight at once and ran a 32 GB
+            # machine out of memory. The join was pure waste -- out.specimen is
+            # `SELECT ... FROM stage ORDER BY ...` with no extra WHERE, so it
+            # recovered nothing stage did not already have -- and sorting by
+            # processid was the wrong key.
             #
-            #   * out.specimen is `SELECT ... FROM stage ORDER BY ...` with no
-            #     extra WHERE, so stage and specimen hold identical row sets and
-            #     the join recovered nothing stage did not already have.
-            #   * iter_sequences() finds sequences with a hash SEMI JOIN on
-            #     processid, never by ordered scan or range, so zone maps on a
-            #     sorted processid would only pay off if a result's processids
-            #     were contiguous -- and a taxonomic query scatters them across
-            #     the whole table.
+            # Removing the sort as well was a step too far. A sequence fetch is
+            # driven by a taxonomic result, so the rows it wants are contiguous
+            # in the SPECIMEN order and nowhere near each other in ingest
+            # order. Storing sequences in ingest order made every fetch scan
+            # the whole nuc column: 2.6 s and 4.5 GB of RSS for 183 sequences,
+            # measured on the real snapshot. Sorted by the same key as
+            # specimen, and paired with the two-phase fetch in iter_sequences,
+            # the same fetch is 0.21 s and 271 MB.
             #
-            # What remains is a streaming scan and write, at flat memory.
-            st = _Step("write sequence")
+            # That leaves one sort of ~13 GB. It is a sort and nothing else,
+            # with no join beside it, and memory_limit and temp_directory are
+            # both set above, so DuckDB spills rather than dying.
+            st = _Step("sort + write sequence")
             con.execute(
                 "CREATE TABLE out.sequence AS\n"
                 "SELECT processid, nuc FROM stage\n"
-                "WHERE nuc IS NOT NULL AND nuc <> ''"
+                "WHERE nuc IS NOT NULL AND nuc <> ''\n"
+                f"ORDER BY {', '.join(S.quote_ident(c) for c in S.SPECIMEN_SORT_ORDER if c in phys)}"
             )
             st.done()
         else:
@@ -482,6 +488,11 @@ def build(
             "source_bytes": str(tsv.stat().st_size),
             "marker_filter": marker or "",
             "sequences_included": "true" if include_sequences else "false",
+            # Which physical order the sequence table is in. "specimen" means a
+            # taxonomic result's sequences are contiguous, which is what makes
+            # iter_sequences cheap; snapshots built before this, or retrofitted
+            # by tools/reorder_sequences.py, say so here.
+            "sequence_order": "specimen" if include_sequences else "",
             # A trial build must be identifiable once it is on disk, or a
             # 10,000-row file gets used for real work by mistake.
             "partial_build": "true" if limit else "false",

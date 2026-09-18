@@ -54,7 +54,9 @@ def build(out: str, n_rows: int) -> None:
     con.execute("SET memory_limit='9GB'")
     con.execute("SET preserve_insertion_order=false")
 
-    phys = [S.physical_name(c) for c in S.REQUIRED_SOURCE_COLUMNS if c != "marker_code"]
+    # marker_code is kept: the builder writes it into `specimen` and the
+    # verifier reads it back, so a snapshot without it cannot be verified.
+    phys = [S.physical_name(c) for c in S.REQUIRED_SOURCE_COLUMNS]
     phys += [S.physical_name(c) for c in S.OPTIONAL_SOURCE_COLUMNS]
     phys = list(dict.fromkeys(phys))
 
@@ -86,7 +88,8 @@ def build(out: str, n_rows: int) -> None:
 
     VALUES = {
         "processid": "'BCPY' || lpad(CAST(i AS VARCHAR), 9, '0')",
-        "kingdom": "'Animalia'",
+        "marker_code": "'COI-5P'",
+    "kingdom": "'Animalia'",
         "phylum": f"'Phylum' || ({ORD} // 6)",
         "class": f"'Class' || ({ORD} // 3)",
         "order_": f"'Order' || {ORD}",
@@ -170,6 +173,7 @@ def build(out: str, n_rows: int) -> None:
         "row_count": str(n_rows), "sequence_count": "0", "taxon_count": str(n_tax),
         "bin_count": str(n_bins), "marker_filter": "COI-5P",
         "sequences_included": "false",
+        "sequence_order": "",
         "built_at": dt.datetime.now().isoformat(timespec="seconds"),
     }.items():
         con.execute("INSERT INTO _meta VALUES (?, ?)", [k, v])

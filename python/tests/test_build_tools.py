@@ -391,3 +391,133 @@ def test_benchmark_snapshot_tool_builds_something_the_store_can_open(tmp_path):
             "reproduces the real builder and every fetch measurement taken "
             "against it is optimistic"
         )
+
+    # a benchmark snapshot the verifier cannot read is not worth measuring
+    _run(VERIFY + ["--snapshot", str(out)]).check_returncode()
+
+
+def _old_layout_copy(built: Path, out: Path) -> None:
+    """A snapshot as the builder used to write it: sequences in ingest order.
+
+    Built from a current snapshot by shuffling the sequence table and clearing
+    the marker, which is exactly the state a pre-existing snapshot is in.
+    """
+    import duckdb
+
+    con = duckdb.connect(str(out))
+    try:
+        con.execute(f"ATTACH '{built}' AS src (READ_ONLY)")
+        me = con.execute("SELECT current_database()").fetchone()[0]
+        for table in ("specimen", "specimen_recordset", "taxon", "bin_species",
+                      "_meta"):
+            con.execute(f'CREATE TABLE {me}."{table}" AS SELECT * FROM src."{table}"')
+        con.execute(f"CREATE TABLE {me}.sequence AS "
+                    "SELECT processid, nuc FROM src.sequence "
+                    "ORDER BY hash(processid)")
+        con.execute(f"DELETE FROM {me}._meta WHERE key = 'sequence_order'")
+        con.execute(f"INSERT INTO {me}._meta VALUES ('sequence_order', '')")
+        con.execute("CHECKPOINT")
+    finally:
+        con.close()
+
+
+def test_reorder_sequences_retrofits_the_fast_layout(fixture_snapshot, tmp_path):
+    """The migration must produce a snapshot that is correct, not merely fast.
+
+    Same sequences, same bytes, same specimens -- only the physical order of
+    the sequence table changes.
+    """
+    import duckdb
+
+    from boldcurator.data.queries import iter_sequences
+    from boldcurator.data.snapshot import SnapshotStore
+
+    old = tmp_path / "old_layout.duckdb"
+    new = tmp_path / "reordered.duckdb"
+    _old_layout_copy(fixture_snapshot, old)
+
+    with SnapshotStore(old) as store:
+        assert not store.info().sequences_are_ordered
+        assert "ingest order" in store.info().describe()
+        ids = [r[0] for r in store.connection.execute(
+            "SELECT processid FROM specimen LIMIT 40").fetchall()]
+        before = dict(iter_sequences(store, ids))
+    assert before, "the fixture must carry sequences for this to mean anything"
+
+    result = _run([sys.executable, str(ROOT / "tools" / "reorder_sequences.py"),
+                   "--snapshot", str(old), "--out", str(new),
+                   "--memory-limit", "1GB", "--threads", "2"])
+    result.check_returncode()
+    assert "verified: sequences follow specimen order" in result.stdout
+
+    with SnapshotStore(new) as store:
+        assert store.info().sequences_are_ordered
+        assert "ingest order" not in store.info().describe()
+        assert dict(iter_sequences(store, ids)) == before
+
+    # every sequence survives, byte for byte
+    con = duckdb.connect(str(new), read_only=True)
+    try:
+        con.execute(f"ATTACH '{old}' AS old (READ_ONLY)")
+        differing = con.execute(
+            "SELECT count(*) FROM ("
+            "  SELECT processid, nuc FROM sequence"
+            "  EXCEPT SELECT processid, nuc FROM old.sequence)"
+        ).fetchone()[0]
+        assert differing == 0
+        assert con.execute("SELECT count(*) FROM sequence").fetchone()[0] == \
+            con.execute("SELECT count(*) FROM old.sequence").fetchone()[0]
+    finally:
+        con.close()
+
+    # and the retrofitted file passes the full verifier
+    verify = _run(VERIFY + ["--snapshot", str(new)])
+    verify.check_returncode()
+
+
+def test_reorder_sequences_refuses_to_clobber_and_to_no_op(fixture_snapshot, tmp_path):
+    old = tmp_path / "old.duckdb"
+    _old_layout_copy(fixture_snapshot, old)
+
+    existing = tmp_path / "already_here.duckdb"
+    existing.write_bytes(b"")
+    clobber = _run([sys.executable, str(ROOT / "tools" / "reorder_sequences.py"),
+                    "--snapshot", str(old), "--out", str(existing)])
+    assert clobber.returncode != 0
+    assert "refusing to overwrite" in clobber.stderr
+
+    # a snapshot already in specimen order is not reordered twice
+    again = _run([sys.executable, str(ROOT / "tools" / "reorder_sequences.py"),
+                  "--snapshot", str(fixture_snapshot),
+                  "--out", str(tmp_path / "pointless.duckdb")])
+    assert again.returncode != 0
+    assert "already in specimen order" in again.stderr
+
+
+def test_verify_fails_a_snapshot_whose_sequences_are_in_ingest_order(
+    fixture_snapshot, tmp_path
+):
+    """The verifier must call out the slow layout, not quietly pass it."""
+    old = tmp_path / "old.duckdb"
+    _old_layout_copy(fixture_snapshot, old)
+    result = _run(VERIFY + ["--snapshot", str(old)])
+    assert result.returncode != 0
+    assert "sequences follow specimen order" in result.stdout + result.stderr
+
+
+def test_reorder_sequences_survives_a_reserved_word_filename(fixture_snapshot, tmp_path):
+    """The catalog is named after the output file, so the name can be SQL.
+
+    `--out full.duckdb` gives a catalog called `full`, which is a reserved
+    word; unquoted, every statement in the tool fails to parse.
+    """
+    from boldcurator.data.snapshot import SnapshotStore
+
+    old = tmp_path / "old.duckdb"
+    _old_layout_copy(fixture_snapshot, old)
+    result = _run([sys.executable, str(ROOT / "tools" / "reorder_sequences.py"),
+                   "--snapshot", str(old), "--out", str(tmp_path / "full.duckdb"),
+                   "--memory-limit", "1GB", "--threads", "2"])
+    result.check_returncode()
+    with SnapshotStore(tmp_path / "full.duckdb") as store:
+        assert store.info().sequences_are_ordered

@@ -397,8 +397,36 @@ def iter_sequences(
 ):
     """Yield ``(processid, nuc)`` in chunks, at constant memory.
 
-    Used by the FASTA exporters so a large export costs the same as a small
-    one.  R's ``download_fasta`` loops over a fully materialised frame.
+    Plan then fetch, for the same reason the specimen search does -- and the
+    reason is worth stating, because the obvious query is the slow one.
+
+    ``SELECT processid, nuc FROM sequence SEMI JOIN wanted`` makes DuckDB
+    project ``nuc`` for all 20 M rows before the join can discard them: 2.6 s
+    and 4.5 GB of RSS to return 183 sequences. Resolving the rowids first costs
+    0.1 s, because that pass never touches ``nuc``, and the fetch that follows
+    can push a rowid filter into the scan.
+
+    **This only pays off on a snapshot whose ``sequence`` table is stored in
+    ``specimen`` order**, which is what ``sequence_order`` in ``_meta`` records
+    and what ``tools/reorder_sequences.py`` retrofits. Older snapshots store it
+    in ingest order, where a taxonomic result's sequences are scattered across
+    every row group and neither shape can prune. Measured on a 20 M-row
+    snapshot with 4.1 GB of sequences, fetching one species' 183 sequences:
+
+    ==========================  ==============  ==============
+    ``sequence`` stored in       one query       plan + fetch
+    ==========================  ==============  ==============
+    ingest order (old)           2.64 s/4.5 GB   2.39 s/4.5 GB
+    specimen order (new)         3.06 s/4.6 GB   **0.21 s/271 MB**
+    ==========================  ==============  ==============
+
+    Neither half helps alone. The layout without the query shape still projects
+    every sequence; the query shape without the layout has nothing contiguous
+    to prune to.
+
+    There is deliberately no ``ORDER BY``: a sort is a blocking operator, it
+    would materialise the whole result before yielding a row, and no caller
+    needs ordered output -- the FASTA writer looks headers up by processid.
     """
     processids = [p for p in processids if p]
     if not processids:
@@ -406,15 +434,21 @@ def iter_sequences(
     ids = pd.DataFrame({"processid": list(dict.fromkeys(processids))})
     store.connection.register("_wanted_ids", ids)
     try:
-        # No ORDER BY. A sort is a blocking operator: it materialises the
-        # entire join result before yielding a single row, which defeats the
-        # streaming this function exists for and made the docstring's
-        # "constant memory" false. Fetching 183 sequences took 8.7 s and
-        # pushed RSS to 15.5 GB in the 2026-09-11 benchmark. No caller needs
-        # ordered output -- the FASTA writer looks headers up by processid.
+        row_ids = store.connection.execute(
+            "SELECT q.rowid AS rid FROM sequence q "
+            "SEMI JOIN _wanted_ids w ON w.processid = q.processid"
+        ).fetchnumpy()["rid"]
+    finally:
+        store.connection.unregister("_wanted_ids")
+
+    if len(row_ids) == 0:
+        return
+
+    store.connection.register("_wanted_rows", pd.DataFrame({"rid": row_ids}))
+    try:
         cursor = store.connection.execute(
             "SELECT q.processid, q.nuc FROM sequence q "
-            "SEMI JOIN _wanted_ids w ON w.processid = q.processid"
+            "SEMI JOIN _wanted_rows r ON r.rid = q.rowid"
         )
         while True:
             rows = cursor.fetchmany(chunk_size)
@@ -422,4 +456,4 @@ def iter_sequences(
                 break
             yield from rows
     finally:
-        store.connection.unregister("_wanted_ids")
+        store.connection.unregister("_wanted_rows")

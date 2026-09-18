@@ -184,7 +184,10 @@ def cmd_benchmark(args: argparse.Namespace) -> int:
     if store is None:
         print(t.table())
         return 1
-    t.annotate(store.info().describe().splitlines()[0])
+    # The whole description, not just its first line: the lines after it are
+    # the warnings (a partial build, sequences in ingest order), and those are
+    # exactly what explains a bad number further down the table.
+    t.annotate(" ".join(part.strip() for part in store.info().describe().splitlines()))
 
     resolved_names: list[str] = []
     try:

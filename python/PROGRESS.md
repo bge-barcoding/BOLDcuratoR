@@ -3,14 +3,15 @@
 Branch: `claude/intelligent-dijkstra-g66cbr`. Plan:
 [`../docs/python-app-plan.md`](../docs/python-app-plan.md).
 
-**State: Phases 0–2 complete, and the pipeline is fast. 160 tests pass, the
-parity gate is green, Phase 3 (GUI) is unblocked.**
+**State: Phases 0–2 complete, and the pipeline is fast. 164 tests pass, the
+parity gate is green, Phase 3 (GUI) is unblocked — after one two-minute
+snapshot migration, below.**
 
 Run everything from `python/`:
 
 ```sh
 pip install -e ".[dev]"
-python -m pytest tests/ -q      # 160 passing
+python -m pytest tests/ -q      # 164 passing
 python parity/compare.py        # exit 1 on any unexplained R-vs-Python difference
 ```
 
@@ -19,7 +20,8 @@ python parity/compare.py        # exit 1 on any unexplained R-vs-Python differen
 ## Where the real data stands — Phase 0 is CLOSED
 
 Both snapshots are built and verified from `BOLD_Public.11-Sep-2026.tsv`.
-**Do not rebuild.** Figures are in `README.md`.
+**Do not rebuild** — the full one needs `tools/reorder_sequences.py` run on it
+(two minutes, no TSV), not a 24-minute re-ingest. Figures are in `README.md`.
 
 | Snapshot | Size | Zipped |
 |---|---|---|
@@ -27,7 +29,10 @@ Both snapshots are built and verified from `BOLD_Public.11-Sep-2026.tsv`.
 | `bold_snapshot_2026-09-11.duckdb` (full) | 7.95 GB | 1.9 GB |
 
 20,164,595 COI-5P records, 20,096,366 with sequences, 546,861 taxa,
-412,637 BINs. All 19 verification checks pass on both.
+412,637 BINs. All 19 verification checks passed on both when they were built.
+The verifier has since gained a twentieth, on sequence ordering, which the full
+snapshot will fail until it is reordered — that is the check doing its job, not
+a corrupt file.
 
 **The staging file can be deleted** — `C:\Users\benjp\Downloads\bold.staging`,
 about 20 GB back. It has done its job.
@@ -38,48 +43,62 @@ levers are closed.
 
 ---
 
-## Performance — done and measured. Phase 3 is next
+## Performance — done and measured on the real snapshot
 
-**State: the pipeline is 10x faster on a small result and 3.7x on a large one,
-every output byte-identical, parity green. The GUI is unblocked.**
+**State: the pipeline is 27x faster on the real 7.95 GB snapshot, sequence
+fetch 12x, every output byte-identical, parity green. 164 tests pass.**
 
-| Full pipeline | Before | After | |
-|---|---|---|---|
-| 183 records | 3.83 s | **0.37 s** | 10.4x |
-| 87,991 records | 15.12 s | **4.04 s** | 3.7x |
-| RSS, 183-record search | 2,158 MB | **371 MB** | |
+Confirmed on `bold_snapshot_2026-09-11.duckdb`, Windows, 32 GB:
 
-Measured on a 20 M-row synthetic snapshot of the real shape, built by
-`tools/make_benchmark_snapshot.py`. `README.md` has the full table and the
-reasoning.
+| Step | Before | After |
+|---|---|---|
+| search `Danaus plexippus` (183 rows) | 4.657 s | **0.219 s** |
+| **full pipeline `Danaus plexippus`** | **8.500 s** | **0.312 s** |
+| stream 183 sequences | 7.375 s, RSS +6.1 GB | **0.195 s, RSS +0.1 GB** * |
+| export all formats | 12.234 s | **0.269 s** * |
 
-### What it actually was
+\* sequence figures are from a 20 M-row stand-in with 20 M sequences; the real
+snapshot needs `tools/reorder_sequences.py` run on it first — see below.
 
-**Not BIN expansion.** Counting the BIN-expanded row set costs 0.2 s. The cost
-was the *projection*: the predicate "in the seed **or** sharing its BINs" is a
-disjunction over two subqueries, which DuckDB cannot push into the scan, so it
-projected all 70 columns of all 20 M rows and filtered afterwards. That is the
-2.9 GB of RSS for a 183-row result, and why 183 rows and 89,479 rows cost the
-same.
+`README.md` has the full tables and the reasoning. The short version is that
+the same mistake was in two places.
+
+### What it actually was, twice
+
+**Not BIN expansion**, which was the previous session's suspect. Counting the
+BIN-expanded row set costs 0.1-0.4 s at every scale. The cost was the
+*projection*: "in the seed **or** sharing its BINs" is a disjunction over two
+subqueries, which DuckDB cannot push into the scan, so it projected all 71
+columns of all 20 M rows and filtered afterwards.
 
 Fixed by planning then fetching: `plan_search` resolves `rowid`s narrowly,
 `fetch_planned` semi-joins them back, and DuckDB pushes *that* into the scan.
-`run_search` uses the one plan as both the size pre-check and the row set
-instead of running the expansion twice.
+`run_search` uses the one plan as both the size pre-check and the row set.
 
-**The `bin_index` table proposed here last session is not needed, and neither
-is a rebuild.** `rowid` is already the physical position. Worth recording why
-`sid` cannot do the same job: `snapshot_builder` assigns it with
-`row_number() OVER ()` *before* the `ORDER BY`, so it is uncorrelated with
-physical position and a semi-join on it measures no better than the original.
-That is not worth a rebuild now, but it is worth knowing.
+**The `bin_index` table proposed here is not needed, and neither is a rebuild.**
+`rowid` is already the physical position. Worth recording why `sid` cannot do
+the job: `snapshot_builder` assigns it with `row_number() OVER ()` *before* the
+`ORDER BY`, so it is uncorrelated with physical position.
 
-**Two more per-group Python loops**, the same defect the R port already fixed
-in scoring and selection, found by measuring the stages separately:
+**Then the same thing in `sequence`.** With the pipeline at 0.3 s, fetching 183
+sequences took 7.4 s and 6 GB. `sequence` was stored in ingest order while
+every fetch is driven by a taxonomic result, so nothing could prune and all
+5 GB of `nuc` was projected. Two changes, and **neither works alone**:
 
-* `bins.process_bin_content` ran four distinct-value passes per BIN — 8.1 s for
+* `iter_sequences` resolves rowids in a pass that never touches `nuc`, then
+  fetches by rowid.
+* the builder sorts `sequence` by the same key as `specimen`.
+
+On the old layout the new query shape is worth nothing (2.39 s vs 2.64 s); on
+the new layout the old query shape is worth nothing (3.06 s). Together:
+0.21 s and 271 MB.
+
+**Two more per-group Python loops**, the same defect the R port already fixed in
+scoring and selection, found by timing the stages separately:
+
+* `bins.process_bin_content` ran four distinct-value passes per BIN -- 8.1 s for
   an 88,000-row result, more than the search. Now 0.48 s.
-* `bags.calculate_bags_grades` ran once per species — 2.6 s at 20,000 species.
+* `bags.calculate_bags_grades` ran once per species -- 2.6 s at 20,000 species.
   Now 0.94 s. The grade still comes from `determine_grade` and only from there;
   a vectorised second copy of the ladder was written first and the parity
   harness caught it, which is the mutation test earning its keep.
@@ -89,39 +108,55 @@ Both now share `core/frames.distinct_by_group`.
 ### Parallel scoring: asked, measured, no
 
 Scoring 88,000 rows takes 1.9 s and is the largest remaining stage. Threads are
-**slower** than serial (2.13 s vs 2.08 s) — the work is `re.Pattern.search` in
+**slower** than serial (2.13 s vs 2.08 s) -- the work is `re.Pattern.search` in
 a Python loop, holding the GIL. Four processes give 1.4x on 4 cores after
 pickling the frame, which is not worth the complexity. On the result size that
-matters — 183 rows — the whole scoring stage is 15 ms.
+matters -- 183 rows -- the whole scoring stage is 15 ms.
 
 Reducing the work beat parallelising it: skipping the regex on already-empty
 values took it 2.30 s -> 1.93 s. **The next real lever is an Arrow-backed
 string dtype.** What is left is not regex, it is `to_text` and `is_empty_text`
 walking an object-dtype column in Python, once per field. DuckDB can hand
-pandas Arrow-backed strings, which would move that into C — but it is a dtype
-change across the query layer and every `.str` call, so it is its own task,
-not a tweak.
+pandas Arrow-backed strings, which would move that into C -- but it is a dtype
+change across the query layer and every `.str` call, so it is its own task.
+
+### DO THIS FIRST next session: reorder the real snapshot
+
+The sequence fix needs the snapshot's `sequence` table in specimen order, and
+`bold_snapshot_2026-09-11.duckdb` predates it. **No re-ingest is needed** --
+everything required is already in the file, which is what matters now the 20 GB
+staging file is gone. About two minutes for a 6 GB snapshot, peak RSS 1.4 GB:
+
+```powershell
+python tools/reorder_sequences.py `
+    --snapshot "C:\Users\benjp\Downloads\BOLD_Public_11-Sep-2026\bold_snapshot_2026-09-11.duckdb" `
+    --out "C:\Users\benjp\Downloads\BOLD_Public_11-Sep-2026\bold_snapshot_2026-09-11.reordered.duckdb"
+
+python tools/verify_snapshot.py --snapshot "...reordered.duckdb"
+python -m boldcurator.cli benchmark --snapshot "...reordered.duckdb" --export
+```
+
+It writes a new file and never touches the input, because DuckDB does not
+reclaim space on `DROP`. Verify it, benchmark it, then replace the original.
+`verify` now **fails** a snapshot still in ingest order, and `info` and
+`benchmark` say so on the snapshot line, so this cannot be forgotten quietly.
+
+The metadata-only snapshot (`bold_meta_2026-09-11.duckdb`) has no sequences and
+needs nothing.
 
 ### Still open
 
 * **`Lepidoptera` must never be materialised.** 2,095,427 rows resolve in
-  0.7 s, and the guard now fires before the fetch, but 2.1 M rows x 70 columns
-  into pandas is an OOM. The GUI needs server-side paging or a hard display cap
-  from the start, driven by the pre-check.
+  0.36 s, and the guard fires before the fetch, but 2.1 M rows x 71 columns into
+  pandas is an OOM. The GUI needs server-side paging or a hard display cap from
+  the start, driven by the pre-check.
+* **`export_all` streams the sequences twice** -- once for all specimens, once
+  for the selected subset. Cheap now that a fetch is 0.2 s, but it is still two
+  passes where one would do.
 * **`search_specimens` had no size guard.** It now takes an opt-in
   `max_records`, and `benchmark --max-fetch` (default 250,000) skips the wide
   fetch rather than measuring an OOM kill. `run_search` is unchanged: it still
   enforces `DOWNLOAD_LIMITS`.
-* **Re-run the benchmark on the real snapshot.** Everything above is measured
-  on a synthetic stand-in of the right shape. The plan-then-fetch win depends
-  on DuckDB pushing a join filter into the scan, so it is worth confirming on
-  the real file and on whatever DuckDB version Windows has:
-
-```powershell
-python -m boldcurator.cli benchmark `
-    --snapshot "C:\Users\benjp\Downloads\BOLD_Public_11-Sep-2026\bold_snapshot_2026-09-11.duckdb" `
-    --export
-```
 
 ### Next: Phase 3, the GUI
 
@@ -190,7 +225,10 @@ surfacing in the UI rather than letting a curator assume otherwise.
 - [x] one BIN-expansion pass per search, not two
 - [x] vectorised BIN analysis and BAGS grading
 - [x] `tools/make_benchmark_snapshot.py`, so this is measurable without the 8 GB file
-- [ ] re-measure on the real snapshot
+- [x] re-measured on the real snapshot — 8.5 s pipeline is 0.31 s
+- [x] sequences stored in specimen order, and fetched in two phases
+- [x] `tools/reorder_sequences.py`, so no snapshot needs re-ingesting
+- [ ] **run the reorder on `bold_snapshot_2026-09-11.duckdb`**
 - [ ] Arrow-backed strings, for the scoring stage
 
 ### Phase 3 — GUI
