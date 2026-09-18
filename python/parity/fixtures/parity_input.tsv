@@ -1,0 +1,116 @@
+case	processid	sampleid	kingdom	phylum	class	order	family	subfamily	genus	species	subspecies	identification	identification_rank	bin_uri	nuc_basecount	voucher_type	inst	museumid	identified_by	identification_method	country.ocean	coord	site	sector	region	collectors	collection_date_start	collection_date_end	taxonomy_notes	short_note	collection_notes	notes
+species:clean binomial	PAR0001	S0001	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species	BOLD:AAA0900	658																	
+species:R keeps it: its destructive pattern anchors ^sp\.	PAR0002	S0002	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus sp.		Danaus sp.	species	BOLD:AAA0900	658																	
+species:both reject: spp\. is unanchored in R	PAR0003	S0003	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus spp.		Danaus spp.	species	BOLD:AAA0900	658																	
+species:both reject	PAR0004	S0004	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus cf. plexippus		Danaus cf. plexippus	species	BOLD:AAA0900	658																	
+species:both reject	PAR0005	S0005	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus aff. plexippus		Danaus aff. plexippus	species	BOLD:AAA0900	658																	
+species:R keeps it: ' nr ' is absent from R's pattern	PAR0006	S0006	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Apis nr mellifera		Apis nr mellifera	species	BOLD:AAA0900	658																	
+species:both reject: digit	PAR0007	S0007	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Vanessa atalanta 2		Vanessa atalanta 2	species	BOLD:AAA0900	658																	
+species:empty	PAR0008	S0008	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus				species	BOLD:AAA0900	658																	
+species:R keeps the literal 'None'; Python treats it as missing	PAR0009	S0009	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	None		None	species	BOLD:AAA0900	658																	
+species:R keeps the literal 'NA'; Python treats it as missing	PAR0010	S0010	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	NA		NA	species	BOLD:AAA0900	658																	
+species:both trim to a valid name	PAR0011	S0011	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	  Pieris rapae  		  Pieris rapae  	species	BOLD:AAA0900	658																	
+seq_quality:exactly at the threshold	PAR0012	S0012	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species	BOLD:AAA0002	500																	
+seq_quality:one below	PAR0013	S0013	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species	BOLD:AAA0002	499																	
+seq_quality:one above	PAR0014	S0014	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species	BOLD:AAA0002	501																	
+seq_quality:no BIN	PAR0015	S0015	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species		658																	
+seq_quality:no basecount	PAR0016	S0016	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species	BOLD:AAA0002																		
+seq_quality:basecount is the literal 'None'	PAR0017	S0017	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species	BOLD:AAA0002	None																	
+seq_quality:basecount is the literal 'NA'	PAR0018	S0018	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species	BOLD:AAA0002	NA																	
+seq_quality:unparseable basecount	PAR0019	S0019	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species	BOLD:AAA0002	not a number																	
+public_voucher:hits positive 'registered' first, so it PASSES	PAR0020	S0020	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species			not registered																
+public_voucher:plain positive	PAR0021	S0021	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species			Museum Voucher																
+public_voucher:negative	PAR0022	S0022	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species			DNA extract																
+public_voucher:negative	PAR0023	S0023	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species			no voucher																
+public_voucher:negative	PAR0024	S0024	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species			Photo Voucher Only																
+public_voucher:positive	PAR0025	S0025	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species			herbarium sheet																
+public_voucher:empty	PAR0026	S0026	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species																			
+type:voucher_type contains 'type' (shortcut)	PAR0027	S0027	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species			Type material																
+type:positive pattern in notes	PAR0028	S0028	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species																			paratype of Smith 1998
+type:positive pattern in taxonomy_notes	PAR0029	S0029	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species																holotype			
+type:no type evidence	PAR0030	S0030	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species																			an ordinary specimen
+identifier:real person	PAR0031	S0031	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species						A. Smith													
+identifier:blacklisted	PAR0032	S0032	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species						Kate Perez													
+identifier:blacklisted	PAR0033	S0033	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species						BOLD													
+identifier:literal None	PAR0034	S0034	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species						None													
+identifier:empty	PAR0035	S0035	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species																			
+id_method:accepted	PAR0036	S0036	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species							Morphology												
+id_method:rejected	PAR0037	S0037	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species							BOLD ID Engine												
+id_method:rejected	PAR0038	S0038	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species							Tree based												
+id_method:literal None	PAR0039	S0039	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species							None												
+id_method:empty	PAR0040	S0040	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species																			
+institution:accepted	PAR0041	S0041	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species				Natural History Museum															
+institution:rejected	PAR0042	S0042	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species				Personal collection															
+institution:rejected	PAR0043	S0043	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species				unknown															
+institution:rejected	PAR0044	S0044	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species				GenBank															
+institution:empty	PAR0045	S0045	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species																			
+rank:1 - type specimen with a clean name	PAR0046	S0046	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species																			holotype
+rank:2 in Python / 3 in R - full metadata, no image	PAR0047	S0047	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species	BOLD:AAA0001	658	Museum Voucher	Natural History Museum	NHMUK010101	A. Smith	Morphology	United Kingdom		Pen Ponds			A. Smith	2015-07					
+rank:2 via the sector alternative	PAR0048	S0048	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species	BOLD:AAA0001	658	Museum Voucher	Natural History Museum	NHMUK010101	A. Smith	Morphology	United Kingdom			something		A. Smith	2015-07					
+rank:2 via the region alternative	PAR0049	S0049	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species	BOLD:AAA0001	658	Museum Voucher	Natural History Museum	NHMUK010101	A. Smith	Morphology	United Kingdom				something	A. Smith	2015-07					
+rank:2 via the coord alternative	PAR0050	S0050	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species	BOLD:AAA0001	658	Museum Voucher	Natural History Museum	NHMUK010101	A. Smith	Morphology	United Kingdom	something				A. Smith	2015-07					
+rank:3 - no collectors, date or locality	PAR0051	S0051	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species	BOLD:AAA0001	658	Museum Voucher	Natural History Museum	NHMUK010101	A. Smith	Morphology	United Kingdom											
+rank:4 - species, sequence, country	PAR0052	S0052	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species	BOLD:AAA0003	658						France											
+rank:5 - species and sequence only	PAR0053	S0053	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species	BOLD:AAA0003	658																	
+rank:6 - species only	PAR0054	S0054	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus plexippus		Danaus plexippus	species																			
+rank:7 - nothing	PAR0055	S0055	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Danaus	Danaus sp.		Danaus sp.	genus																			
+bags:D -- under 3	PAR0056	S0056	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus duo		Bagsus duo	species	BOLD:BAG0002	658						France											
+bags:D -- under 3	PAR0057	S0057	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus duo		Bagsus duo	species	BOLD:BAG0002	658						France											
+bags:B -- at the D/B edge	PAR0058	S0058	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus tres		Bagsus tres	species	BOLD:BAG0003	658						France											
+bags:B -- at the D/B edge	PAR0059	S0059	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus tres		Bagsus tres	species	BOLD:BAG0003	658						France											
+bags:B -- at the D/B edge	PAR0060	S0060	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus tres		Bagsus tres	species	BOLD:BAG0003	658						France											
+bags:B -- the constant says A here, the code says B	PAR0061	S0061	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus decem		Bagsus decem	species	BOLD:BAG0010	658						France											
+bags:B -- the constant says A here, the code says B	PAR0062	S0062	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus decem		Bagsus decem	species	BOLD:BAG0010	658						France											
+bags:B -- the constant says A here, the code says B	PAR0063	S0063	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus decem		Bagsus decem	species	BOLD:BAG0010	658						France											
+bags:B -- the constant says A here, the code says B	PAR0064	S0064	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus decem		Bagsus decem	species	BOLD:BAG0010	658						France											
+bags:B -- the constant says A here, the code says B	PAR0065	S0065	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus decem		Bagsus decem	species	BOLD:BAG0010	658						France											
+bags:B -- the constant says A here, the code says B	PAR0066	S0066	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus decem		Bagsus decem	species	BOLD:BAG0010	658						France											
+bags:B -- the constant says A here, the code says B	PAR0067	S0067	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus decem		Bagsus decem	species	BOLD:BAG0010	658						France											
+bags:B -- the constant says A here, the code says B	PAR0068	S0068	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus decem		Bagsus decem	species	BOLD:BAG0010	658						France											
+bags:B -- the constant says A here, the code says B	PAR0069	S0069	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus decem		Bagsus decem	species	BOLD:BAG0010	658						France											
+bags:B -- the constant says A here, the code says B	PAR0070	S0070	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus decem		Bagsus decem	species	BOLD:BAG0010	658						France											
+bags:A -- the code's actual threshold	PAR0071	S0071	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus undecim		Bagsus undecim	species	BOLD:BAG0011	658						France											
+bags:A -- the code's actual threshold	PAR0072	S0072	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus undecim		Bagsus undecim	species	BOLD:BAG0011	658						France											
+bags:A -- the code's actual threshold	PAR0073	S0073	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus undecim		Bagsus undecim	species	BOLD:BAG0011	658						France											
+bags:A -- the code's actual threshold	PAR0074	S0074	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus undecim		Bagsus undecim	species	BOLD:BAG0011	658						France											
+bags:A -- the code's actual threshold	PAR0075	S0075	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus undecim		Bagsus undecim	species	BOLD:BAG0011	658						France											
+bags:A -- the code's actual threshold	PAR0076	S0076	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus undecim		Bagsus undecim	species	BOLD:BAG0011	658						France											
+bags:A -- the code's actual threshold	PAR0077	S0077	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus undecim		Bagsus undecim	species	BOLD:BAG0011	658						France											
+bags:A -- the code's actual threshold	PAR0078	S0078	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus undecim		Bagsus undecim	species	BOLD:BAG0011	658						France											
+bags:A -- the code's actual threshold	PAR0079	S0079	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus undecim		Bagsus undecim	species	BOLD:BAG0011	658						France											
+bags:A -- the code's actual threshold	PAR0080	S0080	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus undecim		Bagsus undecim	species	BOLD:BAG0011	658						France											
+bags:A -- the code's actual threshold	PAR0081	S0081	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus undecim		Bagsus undecim	species	BOLD:BAG0011	658						France											
+bags:C -- one species across two BINs	PAR0082	S0082	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus multibin		Bagsus multibin	species	BOLD:BAGC001	658						France											
+bags:C -- one species across two BINs	PAR0083	S0083	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus multibin		Bagsus multibin	species	BOLD:BAGC001	658						France											
+bags:C -- one species across two BINs	PAR0084	S0084	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus multibin		Bagsus multibin	species	BOLD:BAGC001	658						France											
+bags:C -- one species across two BINs	PAR0085	S0085	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus multibin		Bagsus multibin	species	BOLD:BAGC002	658						France											
+bags:C -- one species across two BINs	PAR0086	S0086	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus multibin		Bagsus multibin	species	BOLD:BAGC002	658						France											
+bags:C -- one species across two BINs	PAR0087	S0087	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus multibin		Bagsus multibin	species	BOLD:BAGC002	658						France											
+bags:E -- two species in one BIN	PAR0088	S0088	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus sharedone		Bagsus sharedone	species	BOLD:BAGE001	658						France											
+bags:E -- two species in one BIN	PAR0089	S0089	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus sharedone		Bagsus sharedone	species	BOLD:BAGE001	658						France											
+bags:E -- two species in one BIN	PAR0090	S0090	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus sharedone		Bagsus sharedone	species	BOLD:BAGE001	658						France											
+bags:E -- two species in one BIN	PAR0091	S0091	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus sharedone		Bagsus sharedone	species	BOLD:BAGE001	658						France											
+bags:E -- two species in one BIN	PAR0092	S0092	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus sharedtwo		Bagsus sharedtwo	species	BOLD:BAGE001	658						France											
+bags:E -- two species in one BIN	PAR0093	S0093	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus sharedtwo		Bagsus sharedtwo	species	BOLD:BAGE001	658						France											
+bags:E -- two species in one BIN	PAR0094	S0094	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus sharedtwo		Bagsus sharedtwo	species	BOLD:BAGE001	658						France											
+bags:E -- two species in one BIN	PAR0095	S0095	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus sharedtwo		Bagsus sharedtwo	species	BOLD:BAGE001	658						France											
+bags:no BIN -- counts toward specimen_count	PAR0096	S0096	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus nobin		Bagsus nobin	species		658																	
+bags:no BIN -- counts toward specimen_count	PAR0097	S0097	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus nobin		Bagsus nobin	species		658																	
+bags:no BIN -- counts toward specimen_count	PAR0098	S0098	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus nobin		Bagsus nobin	species		658																	
+bags:no BIN -- counts toward specimen_count	PAR0099	S0099	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus nobin		Bagsus nobin	species		658																	
+bags:genus-level rank is not species-level	PAR0100	S0100	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus genusonly		Bagsus genusonly	genus	BOLD:BAGG001																		
+bags:genus-level rank is not species-level	PAR0101	S0101	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus genusonly		Bagsus genusonly	genus	BOLD:BAGG001																		
+bags:genus-level rank is not species-level	PAR0102	S0102	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus genusonly		Bagsus genusonly	genus	BOLD:BAGG001																		
+bags:genus-level rank is not species-level	PAR0103	S0103	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Bagsus	Bagsus genusonly		Bagsus genusonly	genus	BOLD:BAGG001																		
+select:tie on score, lower processid wins	PAR0104	S0104	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Selectus	Selectus unus		Selectus unus	species	BOLD:SEL0001	658						France											
+select:tie on score, higher processid loses	PAR0105	S0105	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Selectus	Selectus unus		Selectus unus	species	BOLD:SEL0001	658						France											
+select:same BIN, different country -> its own representative	PAR0106	S0106	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Selectus	Selectus unus		Selectus unus	species	BOLD:SEL0001	658						Kenya											
+select:same BIN, empty country -> grouped as Unknown	PAR0107	S0107	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Selectus	Selectus unus		Selectus unus	species	BOLD:SEL0001	658																	
+select:higher score wins outright	PAR0108	S0108	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Selectus	Selectus duo		Selectus duo	species	BOLD:SEL0002	658	Museum Voucher	Natural History Museum		A. Smith	Morphology	France		somewhere			A. Smith	2015					
+select:lower score loses	PAR0109	S0109	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Selectus	Selectus duo		Selectus duo	species	BOLD:SEL0002	658						France											
+bins:two valid species in one BIN -> discordant	PAR0110	S0110	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Concordus	Concordus alpha		Concordus alpha	species	BOLD:CON0001	658																	
+bins:two valid species in one BIN -> discordant	PAR0111	S0111	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Concordus	Concordus beta		Concordus beta	species	BOLD:CON0001	658																	
+bins:one valid species -> concordant	PAR0112	S0112	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Concordus	Concordus gamma		Concordus gamma	species	BOLD:CON0002	658																	
+bins:a cf. record beside it -- R's alternation lets any cf. pass	PAR0113	S0113	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Concordus	Concordus cf. gamma		Concordus cf. gamma	species	BOLD:CON0002	658																	
+bins:no valid species, two genera -> discordant	PAR0114	S0114	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Genusone	Genusone sp.		Genusone sp.	genus	BOLD:CON0003																		
+bins:no valid species, two genera -> discordant	PAR0115	S0115	Animalia	Arthropoda	Insecta	Lepidoptera	Nymphalidae	Danainae	Genustwo	Genustwo sp.		Genustwo sp.	genus	BOLD:CON0003																		

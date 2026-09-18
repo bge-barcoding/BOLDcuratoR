@@ -395,8 +395,8 @@ immediately against a synthetic fixture.
 - [x] 2.1 `cli.py` — `boldcurator search --taxa-file … --countries … --continents … --datasets … --out …`, plus `snapshot info` and `snapshot verify`.
 - [ ] 2.2 `io/exports.py` — the seven live outputs above. Quote TSVs properly; use `inst` not `institution`.
 - [ ] 2.3 `io/session.py` — SQLite annotation store (`selected`, `flag`, `updated_id`, `curator_notes`, each keyed by `processid` with timestamp + user). **Store the query + processid list + annotations, not the whole frame** — a named snapshot makes the result reproducible, so session blobs drop from ~125 MB to a few KB. Stamp `snapshot_id` on the session row.
-- [ ] 2.4 `parity/export_r_reference.R` — run the R scorer/ranker/BAGS/selection over the shared fixture and dump a CSV.
-- [ ] 2.5 `parity/compare.py` — row-by-row diff of `quality_score`, `criteria_met`, `rank`, BAGS grade, BIN concordance, auto-selection. **Every difference must be explained by a decision in this plan** (the unified species rule, the `HAS_IMAGE` removal, global grade E); anything unexplained is a bug. Output `parity/REPORT.md`.
+- [x] 2.4 `parity/export_r_reference.R` — run the R scorer/ranker/BAGS/selection over the shared fixture and dump a CSV.
+- [x] 2.5 `parity/compare.py` — row-by-row diff of `quality_score`, `criteria_met`, `rank`, BAGS grade, BIN concordance, auto-selection. **Every difference must be explained by a decision in this plan** (the unified species rule, the `HAS_IMAGE` removal, global grade E); anything unexplained is a bug. Output `parity/REPORT.md`.
 - [ ] 2.6 CI workflow running the Python tests and the parity harness on Linux/macOS/Windows.
 
 **Gate: do not start Phase 3 until `parity/REPORT.md` is clean.**
