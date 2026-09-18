@@ -84,14 +84,13 @@ def cmd_search(args: argparse.Namespace) -> int:
                                result.bin_analysis["summary"].items()))
 
     if args.out:
-        out = Path(args.out)
-        out.mkdir(parents=True, exist_ok=True)
-        result.specimens.to_csv(out / "specimens.tsv", sep="\t", index=False)
-        result.bags_grades.to_csv(out / "bags_grades.tsv", sep="\t", index=False)
-        result.bin_analysis["content"].to_csv(
-            out / "bin_content.tsv", sep="\t", index=False
-        )
-        print(f"wrote {out}/specimens.tsv, bags_grades.tsv, bin_content.tsv")
+        from .io.exports import export_all
+
+        # Reopen the snapshot for the sequence stream the FASTA exports need.
+        with SnapshotStore(args.snapshot) as store:
+            written = export_all(result, Path(args.out), store=store)
+        print()
+        print(written.describe())
     return 0
 
 
@@ -128,7 +127,7 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--project", action="append", help="BOLD project code")
     search.add_argument("--no-bin-expansion", action="store_true")
     search.add_argument("--limit", type=int)
-    search.add_argument("--out", help="directory to write result tables into")
+    search.add_argument("--out", help="directory to write the export set into")
     search.set_defaults(func=cmd_search)
 
     return p
