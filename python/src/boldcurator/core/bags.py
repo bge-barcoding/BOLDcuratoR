@@ -1,0 +1,139 @@
+"""BAGS grading (Barcode, Audit & Grade System).
+
+Ported from the **implementation**, ``determine_bags_grade``
+(``R/utils/bags_grading.R:123-151``), not from ``BAGS_GRADE_CRITERIA`` in
+``constants.R``.  The two disagree: the constant says grade A at 10 specimens,
+the code and the R tests both say 11.  The constant is dead -- nothing reads it.
+
+**Grade E is computed differently here, and better.**  R's ``check_shared_bins``
+(``bags_grading.R:84-115``) can only see the records the user happened to
+download, so "this BIN is shared with another species" is systematically
+under-detected.  Given the snapshot's ``bin_species`` table, sharing is
+evaluated against every record in the snapshot.  That is a scientific
+improvement rather than a speedup, and it means grade E will not match the
+Shiny app's; ``shared_bin_scope`` records which was used.
+"""
+
+from __future__ import annotations
+
+import pandas as pd
+
+from .species import column_or_missing, is_empty, is_species_level, to_text
+
+GRADES = ("A", "B", "C", "D", "E")
+
+
+def determine_grade(
+    specimen_count: int | float | None,
+    bin_count: int | float | None,
+    has_shared_bins: bool | None,
+) -> str:
+    """The rules, in the order R applies them."""
+    try:
+        if specimen_count is None or bin_count is None:
+            return "E"
+        if pd.isna(specimen_count) or pd.isna(bin_count):
+            return "E"
+        specimen_count = int(specimen_count)
+        bin_count = int(bin_count)
+    except (TypeError, ValueError):
+        return "E"
+
+    if has_shared_bins is None or pd.isna(has_shared_bins):
+        has_shared_bins = False
+
+    if has_shared_bins or specimen_count < 0 or bin_count < 0:
+        return "E"
+    if bin_count > 1:
+        return "C"
+    if specimen_count < 3:
+        return "D"
+    if specimen_count >= 11:
+        return "A"
+    return "B"
+
+
+def shared_bins(
+    frame: pd.DataFrame,
+    *,
+    species_column: str = "species",
+    bin_column: str = "bin_uri",
+) -> set[str]:
+    """BINs holding more than one distinct species-level name.
+
+    Works for both the local frame and the snapshot's ``bin_species`` table --
+    the same species-level rule applies to each.
+    """
+    if len(frame) == 0:
+        return set()
+    eligible = frame[is_species_level(frame, species_column=species_column)]
+    if len(eligible) == 0:
+        return set()
+    bins = to_text(column_or_missing(eligible, bin_column)).str.strip()
+    species = to_text(column_or_missing(eligible, species_column)).str.strip()
+    keep = (bins != "") & (species != "")
+    counts = (
+        pd.DataFrame({"bin_uri": bins[keep], "species": species[keep]})
+        .drop_duplicates()
+        .groupby("bin_uri")
+        .size()
+    )
+    return set(counts[counts > 1].index)
+
+
+def calculate_bags_grades(
+    specimens: pd.DataFrame,
+    *,
+    bin_species: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """One row per species-level species: grade, counts and BIN sharing.
+
+    ``bin_species`` is the snapshot table.  Pass it to evaluate grade E against
+    every public record; omit it to reproduce R's local-only behaviour, which
+    is what the parity harness does.
+    """
+    empty = pd.DataFrame(
+        columns=["species", "bags_grade", "specimen_count", "bin_count",
+                 "shared_bins", "bin_uris", "shared_bin_scope"]
+    )
+    if specimens is None or len(specimens) == 0:
+        return empty
+
+    eligible = specimens[is_species_level(specimens)].copy()
+    if len(eligible) == 0:
+        return empty
+
+    eligible["_species"] = to_text(eligible["species"]).str.strip()
+    bin_text = to_text(column_or_missing(eligible, "bin_uri")).str.strip()
+    eligible["_bin"] = bin_text.mask(is_empty(column_or_missing(eligible, "bin_uri")), "")
+
+    scope = "snapshot" if bin_species is not None else "local"
+    shared = shared_bins(bin_species if bin_species is not None else eligible)
+
+    rows = []
+    for species, group in eligible.groupby("_species", sort=True):
+        bins = sorted({b for b in group["_bin"] if b})
+        # specimen_count counts rows WITHOUT a BIN too -- R does, and it is
+        # what makes a species with 3 BIN-less records grade B rather than D.
+        specimen_count = len(group)
+        has_shared = any(b in shared for b in bins)
+        rows.append(
+            {
+                "species": species,
+                "bags_grade": determine_grade(specimen_count, len(bins), has_shared),
+                "specimen_count": specimen_count,
+                "bin_count": len(bins),
+                "shared_bins": has_shared,
+                "bin_uris": "; ".join(bins),
+                "shared_bin_scope": scope,
+            }
+        )
+
+    return pd.DataFrame(rows, columns=empty.columns)
+
+
+def grade_lookup(grades: pd.DataFrame) -> dict[str, str]:
+    """species -> grade, for joining onto a specimen frame."""
+    if grades is None or len(grades) == 0:
+        return {}
+    return dict(zip(grades["species"], grades["bags_grade"]))
