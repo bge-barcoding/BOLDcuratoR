@@ -229,7 +229,33 @@ rather than a per-visit one.
 - **Low-memory machines.** Everything here was measured on one Windows 11 laptop
   with headroom for a 1.3 GB spike. An 8 GB machine is the case to check.
 
-### Caching the snapshot: IDBFS is probably the wrong layer
+### IDBFS: does not persist as used here — parked
+
+**Measured, 49 MB fixture, three consecutive page loads: the snapshot never
+survived a reload.** Every load reported "Not cached yet".
+
+The cause is visible in the timings: `syncfs(persist)` took **0.0 s** for a
+48.8 MB write. IndexedDB operations are asynchronous, and webR's docs say to
+await the promise `webR.FS.syncfs(false)` returns; `webr::syncfs()` called from R
+fires and returns without waiting, so the page reloads before anything is
+flushed. Fixable in principle by driving the JS API and awaiting it, which is
+where to resume if IDBFS is ever worth revisiting.
+
+**The wasm delta from that test is inconclusive and should not be quoted.** The
+probe reads `Module.HEAPU8.buffer.byteLength`, which is *allocated* wasm memory:
+it grows only when the heap must expand, and never shrinks. With 167 MB already
+allocated, a 49 MB copy can fit in existing slack and report 0. So the 0 MB
+figure does not show IDBFS is lazy — it shows the measurement cannot resolve
+49 MB at that heap size.
+
+This does **not** affect the WORKERFS result. At 441 MB the heap was 115 MB
+before and after the mount; a copy of the image would have had to grow it past
+556 MB. That magnitude cannot hide in slack.
+
+**Parked, not resolved**, because the snapshot-size question below dominates it:
+caching matters only for a snapshot small enough to be worth caching.
+
+### Caching the snapshot: the layer question remains open
 
 `docs/static-datapackage-plan.md` §4B assumes "a service worker plus IDBFS caches
 the app and the database". For the *app* that is right. For the *database* it
@@ -265,6 +291,49 @@ ceiling — spending exactly the resource WORKERFS was found to preserve.
 cache headers — so `webr::mount()` fetches it from disk cache instead of the
 network. That keeps WORKERFS lazy *and* removes the re-download, rather than
 trading one for the other. Untested; it is the obvious next step if IDBFS fails.
+
+## THE OPEN QUESTION: how big can the snapshot actually be?
+
+The real BOLD package is a ~30 GB TSV, which the Phase 1 estimate puts at a
+**2–8 GB** DuckDB snapshot. Everything measured here tops out at 441 MB, so the
+results establish that the *mechanism* works and say nothing yet about that size.
+
+Extrapolating the two constraints that were measured:
+
+| | 441 MB (measured) | 2 GB | 8 GB |
+|---|---|---|---|
+| Mount transient, ~3× image | 1.3 GB | ~6 GB | ~24 GB |
+| Download, localhost | 42 s | ~3 min | ~13 min |
+| Download, 50 Mbps | ~70 s | ~5 min | ~21 min |
+
+The transient alone rules out a 2 GB snapshot on a normal laptop, before the
+download is considered. If that extrapolation holds, the question is not "does
+shinylive work" — it does — but **how far the snapshot must be scoped down** to
+fit. That is a data-scoping decision (taxonomic subset, fewer columns, dropping
+`nuc`), not a technical one, and it belongs with §8 of the plan.
+
+### Stress test — find the breaking point before building anything else
+
+The fixtures go as large as `--rows` allows; 8.5 M rows gave 441 MB, so roughly
+52 bytes/row.
+
+```bash
+# ~1 GB and ~2 GB. Hours to build, and needs several GB of free disk plus TEMP.
+Rscript build_fixture.R --synthetic --rows 20000000,40000000
+```
+
+Then package and mount each as usual, recording: does `file_packager` complete,
+does the mount succeed, what the transient peak is, and whether queries still
+return. **A failure at any step is the answer** — record which size broke and
+where.
+
+Known places this may break before the browser does, none of them yet tested:
+
+- `file_packager.py` on a multi-GB input.
+- The 2 GB boundary: `ArrayBuffer` and `Blob` handling around and above 2 GB has
+  historically been where 32-bit assumptions surface, and wasm32 is 32-bit.
+- Browser storage quota for a Blob of that size.
+- Simply building the fixture: 40 M rows sorted through DuckDB on a laptop.
 
 ### Recommended snapshot budget
 
