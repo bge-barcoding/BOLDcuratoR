@@ -355,3 +355,39 @@ def test_one_ingest_can_serve_two_different_output_files(package, tmp_path):
     assert rows(full, "sequence") > 0
     assert _run(VERIFY + ["--snapshot", str(meta)]).returncode == 0
     assert _run(VERIFY + ["--snapshot", str(full)]).returncode == 0
+
+
+def test_benchmark_snapshot_tool_builds_something_the_store_can_open(tmp_path):
+    """The benchmark generator is only useful if it produces a real snapshot.
+
+    Small enough to be a test, same code path as the 20 M-row build.
+    """
+    import importlib.util
+
+    from boldcurator.data.snapshot import SnapshotStore
+
+    tool = Path(__file__).resolve().parents[1] / "tools" / "make_benchmark_snapshot.py"
+    spec = importlib.util.spec_from_file_location("make_benchmark_snapshot", tool)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    out = tmp_path / "bench.duckdb"
+    module.build(str(out), 5_000)
+
+    with SnapshotStore(out) as store:
+        info = store.info()
+        assert info.row_count == 5_000
+        assert info.bin_count > 0
+        assert info.taxon_count > 0
+        # every rank the search resolves against must be present
+        ranks = {r[0] for r in store.connection.execute(
+            "SELECT DISTINCT taxon_rank FROM taxon").fetchall()}
+        assert {"species", "genus", "family", "order"} <= ranks
+        # sid must NOT track physical position -- that is the whole point
+        correlation = store.connection.execute(
+            "SELECT abs(corr(rowid, sid)) FROM specimen").fetchone()[0]
+        assert correlation < 0.1, (
+            "sid tracks physical order, so the generated snapshot no longer "
+            "reproduces the real builder and every fetch measurement taken "
+            "against it is optimistic"
+        )

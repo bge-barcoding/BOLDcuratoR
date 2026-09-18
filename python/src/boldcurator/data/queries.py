@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import numpy as np
 import pandas as pd
 
 from . import schema as S
@@ -176,74 +177,191 @@ def _seed_sql(query: SearchQuery) -> tuple[str, list[object]]:
     return "\nUNION\n".join(branches), params
 
 
-def estimate_search(store: SnapshotStore, query: SearchQuery) -> dict[str, int]:
-    """Row and BIN counts **before** anything is materialised.
-
-    This is what lets the size check fire in front of the fetch instead of
-    after it, which is the single cheapest protection against a runaway query.
-    """
-    seed_sql, params = _seed_sql(query)
+def _seed_counts(store: SnapshotStore, seed_sql: str, params: list[object]
+                 ) -> tuple[int, int]:
     seed_records, seed_bins = store.connection.execute(
         f"WITH seed AS ({seed_sql}) "
         "SELECT count(*), count(DISTINCT bin_uri) FILTER "
         "(WHERE bin_uri IS NOT NULL AND bin_uri <> '') FROM seed",
         params,
     ).fetchone()
+    return int(seed_records), int(seed_bins or 0)
 
-    expanded = int(seed_records)
+
+def _expansion_sql(seed_sql: str, projection: str) -> str:
+    """The BIN-expanded row set, projecting whatever ``projection`` asks for.
+
+    The ``sid`` branch keeps seed records that have no BIN, which BIN expansion
+    would otherwise drop.
+    """
+    return (
+        f"WITH seed AS ({seed_sql}), "
+        "seed_bins AS (SELECT DISTINCT bin_uri FROM seed "
+        "              WHERE bin_uri IS NOT NULL AND bin_uri <> '') "
+        f"SELECT {projection} FROM specimen s "
+        "WHERE s.sid IN (SELECT sid FROM seed) "
+        "   OR s.bin_uri IN (SELECT bin_uri FROM seed_bins)"
+    )
+
+
+def estimate_search(store: SnapshotStore, query: SearchQuery) -> dict[str, int]:
+    """Row and BIN counts **before** anything is materialised.
+
+    This is what lets the size check fire in front of the fetch instead of
+    after it, which is the single cheapest protection against a runaway query.
+
+    Counts only, for the as-you-type pre-check.  A search that is going to run
+    anyway should call :func:`plan_search`, which costs the same and hands back
+    the rows it counted.
+    """
+    seed_sql, params = _seed_sql(query)
+    seed_records, seed_bins = _seed_counts(store, seed_sql, params)
+
+    expanded = seed_records
     if query.expand_bins and seed_bins:
-        expanded = store.connection.execute(
-            f"WITH seed AS ({seed_sql}), "
-            "seed_bins AS (SELECT DISTINCT bin_uri FROM seed "
-            "              WHERE bin_uri IS NOT NULL AND bin_uri <> '') "
-            "SELECT count(*) FROM specimen s "
-            "WHERE s.sid IN (SELECT sid FROM seed) "
-            "   OR s.bin_uri IN (SELECT bin_uri FROM seed_bins)",
-            params,
-        ).fetchone()[0]
+        expanded = int(store.connection.execute(
+            _expansion_sql(seed_sql, "count(*)"), params
+        ).fetchone()[0])
 
     return {
-        "seed_records": int(seed_records),
-        "seed_bins": int(seed_bins or 0),
-        "expanded_records": int(expanded),
+        "seed_records": seed_records,
+        "seed_bins": seed_bins,
+        "expanded_records": expanded,
     }
 
 
-def search_specimens(store: SnapshotStore, query: SearchQuery) -> pd.DataFrame:
+# --------------------------------------------------------------------------
+# Plan, then fetch
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SearchPlan:
+    """Exactly which rows a search returns, resolved before any is materialised.
+
+    ``row_ids`` holds DuckDB ``rowid`` values -- physical positions in
+    ``specimen``.  They are stable because the snapshot is opened read-only and
+    never written; nothing else would make them safe to carry between queries.
+    """
+
+    row_ids: "np.ndarray"
+    seed_records: int
+    seed_bins: int
+
+    @property
+    def expanded_records(self) -> int:
+        return int(len(self.row_ids))
+
+    def as_estimate(self) -> dict[str, int]:
+        return {
+            "seed_records": self.seed_records,
+            "seed_bins": self.seed_bins,
+            "expanded_records": self.expanded_records,
+        }
+
+
+def plan_search(store: SnapshotStore, query: SearchQuery) -> SearchPlan:
+    """Resolve the result set **narrowly** -- rowids and counts, no payload.
+
+    This is the half of a search that is cheap.  Splitting it out is what makes
+    the other half cheap too: see :func:`fetch_planned`.
+    """
+    seed_sql, params = _seed_sql(query)
+    seed_records, seed_bins = _seed_counts(store, seed_sql, params)
+
+    if query.expand_bins and seed_bins:
+        sql = _expansion_sql(seed_sql, "s.rowid AS rid")
+    else:
+        sql = (f"WITH seed AS ({seed_sql}) "
+               "SELECT s.rowid AS rid FROM specimen s "
+               "WHERE s.sid IN (SELECT sid FROM seed)")
+    row_ids = store.connection.execute(sql, params).fetchnumpy()["rid"]
+    return SearchPlan(row_ids=np.asarray(row_ids), seed_records=seed_records,
+                      seed_bins=seed_bins)
+
+
+def fetch_planned(store: SnapshotStore, plan: SearchPlan, *,
+                  limit: int | None = None) -> pd.DataFrame:
+    """Materialise the 70-odd columns for an already-resolved row set.
+
+    **Why a semi-join on ``rowid`` and not the obvious ``WHERE ... OR ...``.**
+    The predicate the search really wants -- "in the seed, *or* sharing one of
+    the seed's BINs" -- is a disjunction over two subqueries.  DuckDB cannot
+    push either half into the table scan, so it projects all 70 columns of all
+    20 M rows and filters afterwards: 3.0 s and 2.9 GB of RSS to return 183
+    rows.  That, not BIN expansion, was the cost.
+
+    Resolving the rowids first costs 0.17 s, and the fetch that follows joins a
+    tiny build side against ``rowid``, which DuckDB *can* push into the scan as
+    a zone-map filter.  Measured on a 20 M-row snapshot of the real shape:
+
+    ======================  =========  ==========
+    183-row result          current    two-phase
+    ======================  =========  ==========
+    resolve + fetch          3.03 s     0.22 s
+    88,000-row result        3.66 s     1.01 s
+    ======================  =========  ==========
+
+    ``rowid`` is the key that works and ``sid`` is not, because ``sid`` is
+    assigned before the taxonomic sort and so is uncorrelated with physical
+    position -- a semi-join on ``sid`` measures 2.8 s, no better than the
+    original.  A literal ``rowid IN (...)`` list is no better either; the
+    pushdown comes from the join, not the predicate.
+    """
+    projection = S.projection(store.physical_columns)
+    limit_sql = f" LIMIT {int(limit)}" if limit else ""
+    if plan.expanded_records == 0:
+        return store.connection.execute(
+            f"SELECT {projection} FROM specimen s WHERE false"
+        ).df()
+
+    store.connection.register("_planned_rows", pd.DataFrame({"rid": plan.row_ids}))
+    try:
+        return store.connection.execute(
+            f"SELECT {projection} FROM specimen s "
+            "SEMI JOIN _planned_rows p ON p.rid = s.rowid "
+            f"ORDER BY s.processid{limit_sql}"
+        ).df()
+    finally:
+        store.connection.unregister("_planned_rows")
+
+
+class ResultTooLarge(RuntimeError):
+    """A search resolved to more rows than the caller is willing to hold.
+
+    Raised from the plan, before the wide fetch, so the refusal costs the
+    narrow pass and nothing else.
+    """
+
+    def __init__(self, records: int, maximum: int):
+        self.records, self.maximum = records, maximum
+        super().__init__(
+            f"This search resolves to {records:,} records, over the "
+            f"{maximum:,} this call allows."
+        )
+
+
+def search_specimens(store: SnapshotStore, query: SearchQuery, *,
+                     max_records: int | None = None) -> pd.DataFrame:
     """Run the search, with BIN expansion, and return an app-shaped frame.
+
+    Plan then fetch -- see :func:`fetch_planned` for why the two-phase shape is
+    worth the extra query.
 
     ``nuc`` is never projected here -- sequences are fetched on demand by
     ``iter_sequences``.  In the R app ``nuc`` rides through every merge and every
     session serialisation, which is most of why a 50,000-row result costs
     hundreds of megabytes.
+
+    ``max_records`` refuses an oversized result before materialising it.  It is
+    opt-in because ``run_search`` already applies ``DOWNLOAD_LIMITS``; anything
+    calling this directly is on its own otherwise, which is how the benchmark
+    came to materialise 2,095,427 rows into pandas without complaint.
     """
-    seed_sql, params = _seed_sql(query)
-    projection = S.projection(store.physical_columns)
-    limit_sql = f" LIMIT {int(query.limit)}" if query.limit else ""
-
-    if query.expand_bins:
-        sql = (
-            f"WITH seed AS ({seed_sql}), "
-            "seed_bins AS (SELECT DISTINCT bin_uri FROM seed "
-            "              WHERE bin_uri IS NOT NULL AND bin_uri <> '') "
-            f"SELECT {projection} FROM specimen s "
-            # The sid branch keeps seed records that have no BIN, which BIN
-            # expansion would otherwise drop.
-            "WHERE s.sid IN (SELECT sid FROM seed) "
-            "   OR s.bin_uri IN (SELECT bin_uri FROM seed_bins) "
-            f"ORDER BY s.processid{limit_sql}"
-        )
-        bind = params
-    else:
-        sql = (
-            f"WITH seed AS ({seed_sql}) "
-            f"SELECT {projection} FROM specimen s "
-            "WHERE s.sid IN (SELECT sid FROM seed) "
-            f"ORDER BY s.processid{limit_sql}"
-        )
-        bind = params
-
-    return store.connection.execute(sql, bind).df()
+    plan = plan_search(store, query)
+    if max_records is not None and plan.expanded_records > max_records:
+        raise ResultTooLarge(plan.expanded_records, max_records)
+    return fetch_planned(store, plan, limit=query.limit)
 
 
 def missing_recordset_codes(store: SnapshotStore, codes: list[str]) -> list[str]:

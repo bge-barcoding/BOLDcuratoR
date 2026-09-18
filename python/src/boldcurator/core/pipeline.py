@@ -19,10 +19,10 @@ from ..config.constants import CONTINENT_COUNTRIES, DOWNLOAD_LIMITS
 from ..data.queries import (
     Resolution,
     SearchQuery,
-    estimate_search,
+    fetch_planned,
     missing_recordset_codes,
+    plan_search,
     resolve_taxa,
-    search_specimens,
 )
 from ..data.snapshot import SnapshotStore
 from . import bags, bins, selection
@@ -232,7 +232,11 @@ def run_search(
             "from a code covering private records -- both return nothing."
         )
 
-    estimate = estimate_search(store, query)
+    # One narrow pass does both jobs: it is the size pre-check AND it hands
+    # back the rows it counted. The previous shape ran the BIN expansion twice
+    # -- once to count, once to fetch -- and threw the first answer away.
+    plan = plan_search(store, query)
+    estimate = plan.as_estimate()
     if enforce_limits and limit is None:
         if (estimate["expanded_records"] > DOWNLOAD_LIMITS["MAX_RECORDS"]
                 or estimate["seed_bins"] > DOWNLOAD_LIMITS["MAX_BINS"]):
@@ -243,7 +247,7 @@ def run_search(
             "Scoring and the results table will be slow."
         )
 
-    frame = search_specimens(store, query)
+    frame = fetch_planned(store, plan, limit=limit)
     frame = process_specimen_data(frame)
     frame = score_and_rank(frame)
 

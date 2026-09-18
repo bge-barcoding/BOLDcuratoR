@@ -27,7 +27,8 @@ from ..config.constants import (
 from .species import (
     column_or_missing,
     is_empty,
-    matches,
+    is_empty_text,
+    matches_text,
     to_text,
 )
 
@@ -36,8 +37,20 @@ from .species import (
 _TYPE_RE = re.compile("type", re.IGNORECASE)
 
 
-def _fields(frame: pd.DataFrame, criterion: Criterion) -> list[pd.Series]:
-    return [column_or_missing(frame, name) for name in criterion.fields]
+def _field(frame: pd.DataFrame, name: str) -> tuple[pd.Series, pd.Series]:
+    """A field as text, with its "has a value" mask.
+
+    Both halves are needed by every check, and computing them together is what
+    lets the pattern skip the empty rows -- and stops ``to_text`` running twice
+    over the same column, once inside ``is_empty`` and once inside ``matches``.
+    """
+    text = to_text(column_or_missing(frame, name))
+    return text, ~is_empty_text(text)
+
+
+def _fields(frame: pd.DataFrame, criterion: Criterion
+            ) -> list[tuple[pd.Series, pd.Series]]:
+    return [_field(frame, name) for name in criterion.fields]
 
 
 def _check_general(frame: pd.DataFrame, criterion: Criterion) -> pd.Series:
@@ -52,18 +65,18 @@ def _check_general(frame: pd.DataFrame, criterion: Criterion) -> pd.Series:
     """
     neg, pos = criterion.negative_re, criterion.positive_re
     result = pd.Series(False, index=frame.index)
-    for values in _fields(frame, criterion):
-        contributes = ~is_empty(values) & ~matches(values, neg)
+    for text, present in _fields(frame, criterion):
+        contributes = present & ~matches_text(text, neg, present)
         if pos is not None:
-            contributes &= matches(values, pos)
+            contributes &= matches_text(text, pos, present)
         result |= contributes
     return result
 
 
 def _check_species_id(frame: pd.DataFrame, criterion: Criterion) -> pd.Series:
     """``check_species_id`` -- the first field only, non-empty and clean."""
-    values = column_or_missing(frame, criterion.fields[0])
-    return ~is_empty(values) & ~matches(values, criterion.negative_re)
+    text, present = _field(frame, criterion.fields[0])
+    return present & ~matches_text(text, criterion.negative_re, present)
 
 
 def _check_type_specimen(frame: pd.DataFrame, criterion: Criterion) -> pd.Series:
@@ -72,11 +85,11 @@ def _check_type_specimen(frame: pd.DataFrame, criterion: Criterion) -> pd.Series
     A ``voucher_type`` containing "type" wins outright, before the positive
     pattern is tried against the five note fields.
     """
-    voucher = column_or_missing(frame, "voucher_type")
-    result = ~is_empty(voucher) & matches(voucher, _TYPE_RE)
+    voucher, has_voucher = _field(frame, "voucher_type")
+    result = has_voucher & matches_text(voucher, _TYPE_RE, has_voucher)
     pos = criterion.positive_re
-    for values in _fields(frame, criterion):
-        result |= ~is_empty(values) & matches(values, pos)
+    for text, present in _fields(frame, criterion):
+        result |= present & matches_text(text, pos, present)
     return result
 
 
@@ -106,17 +119,18 @@ def _check_public_voucher(frame: pd.DataFrame, criterion: Criterion) -> pd.Serie
     ``registered`` and the negative contains ``not registered``, so
     "not registered" matches the positive first and **passes**.
     """
-    values = column_or_missing(frame, criterion.fields[0])
-    return ~is_empty(values) & (
-        matches(values, criterion.positive_re) | ~matches(values, criterion.negative_re)
+    text, present = _field(frame, criterion.fields[0])
+    return present & (
+        matches_text(text, criterion.positive_re, present)
+        | ~matches_text(text, criterion.negative_re, present)
     )
 
 
 def _check_id_method(frame: pd.DataFrame, criterion: Criterion) -> pd.Series:
     """``check_id_method`` -- non-empty and free of the negative pattern."""
     result = pd.Series(False, index=frame.index)
-    for values in _fields(frame, criterion):
-        result |= ~is_empty(values) & ~matches(values, criterion.negative_re)
+    for text, present in _fields(frame, criterion):
+        result |= present & ~matches_text(text, criterion.negative_re, present)
     return result
 
 

@@ -165,13 +165,14 @@ def cmd_benchmark(args: argparse.Namespace) -> int:
     """
     import tempfile
 
-    from .core.pipeline import SizeLimitExceeded, run_search
+    from .core.pipeline import run_search
     from .data.queries import (
         SearchQuery,
         estimate_search,
+        fetch_planned,
         iter_sequences,
+        plan_search,
         resolve_taxa,
-        search_specimens,
     )
 
     if _peak_rss_mb() is None:
@@ -206,10 +207,24 @@ def cmd_benchmark(args: argparse.Namespace) -> int:
                            f"{est['seed_bins']:,} BINs -> "
                            f"{est['expanded_records']:,} after BIN expansion")
 
-            frame = t.run(f"search+expand {name!r}",
-                          lambda q=query: search_specimens(store, q))
-            if frame is not None:
-                t.annotate(f"{len(frame):,} rows x {len(frame.columns)} columns")
+            # Timed as the two halves it actually is. The narrow pass resolves
+            # which rows match; the wide one projects them. Reporting a single
+            # "search" number hid that essentially all of it was the second
+            # half, projecting 70 columns of 20 M rows to return 183.
+            plan = t.run(f"plan {name!r}", lambda q=query: plan_search(store, q))
+            if plan is not None:
+                t.annotate(f"{plan.expanded_records:,} rows resolved")
+
+            if plan is not None and plan.expanded_records > args.max_fetch:
+                t.run(f"fetch {name!r}", lambda: None)
+                t.annotate(f"skipped: {plan.expanded_records:,} rows is over "
+                           f"--max-fetch {args.max_fetch:,}; a frame that size "
+                           "should not be materialised at all")
+            else:
+                frame = t.run(f"fetch {name!r}",
+                              lambda p=plan: fetch_planned(store, p))
+                if frame is not None:
+                    t.annotate(f"{len(frame):,} rows x {len(frame.columns)} columns")
 
         # The pipeline runs on a taxon that actually resolved, so one bad name
         # on the command line does not lose the measurement entirely.
@@ -231,6 +246,24 @@ def cmd_benchmark(args: argparse.Namespace) -> int:
             s = result.summary()
             t.annotate(f"{s['records']:,} records, {s['species']} species, "
                        f"{s['bins']} BINs, {s['selected']} auto-selected")
+
+            # The post-search stages, timed again on their own. They are
+            # trivial on a small result and are the whole cost on a large one,
+            # and a single pipeline number cannot show which.
+            from .core import bags as _bags, bins as _bins, selection as _sel
+            from .core.scoring import criterion_flags as _flags
+
+            specimens = result.specimens
+            flags = t.run("  score (criterion flags)", lambda: _flags(specimens))
+            t.annotate(f"{len(specimens):,} rows x "
+                       f"{0 if flags is None else len(flags.columns)} criteria")
+            t.run("  BAGS grades", lambda: _bags.calculate_bags_grades(specimens))
+            t.annotate(f"{len(result.bags_grades):,} species graded")
+            t.run("  BIN analysis", lambda: _bins.analyse_bins(specimens))
+            t.annotate(f"{result.bin_analysis['summary']['total_bins']:,} BINs")
+            t.run("  auto-selection",
+                  lambda: _sel.auto_select_best_specimens(specimens))
+            t.annotate(f"{len(result.selections):,} chosen")
 
             ids = [str(p) for p in result.specimens["processid"][: args.sequences]]
             n = t.run(f"stream {len(ids):,} sequences",
@@ -315,6 +348,11 @@ def build_parser() -> argparse.ArgumentParser:
                             "(default: the first --taxon)")
     bench.add_argument("--sequences", type=int, default=10_000,
                        help="how many sequences to stream (default 10000)")
+    bench.add_argument("--max-fetch", type=int, default=250_000,
+                       help="skip the wide fetch above this many rows "
+                            "(default 250000). The raw fetch has no size "
+                            "guard of its own, and 2.1 M rows x 70 columns "
+                            "into pandas is not a measurement, it is an OOM.")
     bench.add_argument("--export", action="store_true",
                        help="also time writing every export format")
     bench.add_argument("--no-limits", action="store_true",

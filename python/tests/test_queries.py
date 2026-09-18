@@ -96,3 +96,64 @@ def test_missing_recordset_codes_are_reported(store):
 def test_search_with_no_criteria_is_refused(store):
     with pytest.raises(ValueError):
         Q.estimate_search(store, Q.SearchQuery())
+
+
+# --------------------------------------------------------------------------
+# Plan, then fetch
+# --------------------------------------------------------------------------
+
+
+def test_plan_agrees_with_estimate(store):
+    """The plan replaces the estimate in the pipeline, so it must count the same."""
+    taxa = Q.resolve_taxa(store, ["Danaus plexippus"]).resolved
+    for expand in (True, False):
+        query = Q.SearchQuery(taxa=taxa, expand_bins=expand)
+        assert Q.plan_search(store, query).as_estimate() == \
+            Q.estimate_search(store, query)
+
+
+def test_fetch_by_plan_returns_exactly_the_rows_the_plan_resolved(store):
+    taxa = Q.resolve_taxa(store, ["Nymphalidae"]).resolved
+    query = Q.SearchQuery(taxa=taxa, expand_bins=True)
+    plan = Q.plan_search(store, query)
+    frame = Q.fetch_planned(store, plan)
+    assert len(frame) == plan.expanded_records
+    assert frame.equals(Q.search_specimens(store, query))
+
+
+def test_plan_row_ids_are_unique(store):
+    """A duplicated rowid would silently duplicate records in the fetch."""
+    taxa = Q.resolve_taxa(store, ["Nymphalidae"]).resolved
+    plan = Q.plan_search(store, Q.SearchQuery(taxa=taxa, expand_bins=True))
+    assert len(set(plan.row_ids.tolist())) == plan.expanded_records
+
+
+def test_an_empty_plan_still_gives_a_correctly_shaped_frame(store):
+    """Zero rows must not mean zero columns -- callers index by name."""
+    taxa = Q.resolve_taxa(store, ["Danaus plexippus"]).resolved
+    query = Q.SearchQuery(taxa=taxa, countries=["Atlantis"], expand_bins=False)
+    plan = Q.plan_search(store, query)
+    assert plan.expanded_records == 0
+    frame = Q.fetch_planned(store, plan)
+    assert len(frame) == 0
+    assert list(frame.columns) == store.app_columns
+
+
+def test_the_fetch_size_guard_refuses_before_materialising(store):
+    taxa = Q.resolve_taxa(store, ["Nymphalidae"]).resolved
+    query = Q.SearchQuery(taxa=taxa, expand_bins=True)
+    n = Q.plan_search(store, query).expanded_records
+    with pytest.raises(Q.ResultTooLarge) as caught:
+        Q.search_specimens(store, query, max_records=n - 1)
+    assert caught.value.records == n
+    # and it is opt-in: the same search without the cap still runs
+    assert len(Q.search_specimens(store, query)) == n
+
+
+def test_the_plan_respects_the_limit_on_fetch_not_on_resolution(store):
+    """A limit caps what is materialised; the size check still sees the truth."""
+    taxa = Q.resolve_taxa(store, ["Nymphalidae"]).resolved
+    query = Q.SearchQuery(taxa=taxa, expand_bins=True, limit=5)
+    plan = Q.plan_search(store, query)
+    assert plan.expanded_records > 5
+    assert len(Q.fetch_planned(store, plan, limit=5)) == 5

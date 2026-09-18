@@ -15,8 +15,10 @@ both reported by the parity harness:
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
+from .frames import distinct_by_group, reindex_counts, reindex_joined
 from .species import (
     column_or_missing,
     is_valid_species_name,
@@ -60,40 +62,77 @@ def check_taxonomic_concordance(bin_specimens: pd.DataFrame) -> bool:
     return True
 
 
+_CONTENT_COLUMNS = ["bin_uri", "total_records", "unique_species", "species_list",
+                    "countries", "concordance", "bin_coverage"]
+
+
 def process_bin_content(specimens: pd.DataFrame) -> pd.DataFrame:
-    """One row per BIN: counts, species list, countries, concordance."""
-    columns = ["bin_uri", "total_records", "unique_species", "species_list",
-               "countries", "concordance", "bin_coverage"]
+    """One row per BIN: counts, species list, countries, concordance.
+
+    **Vectorised.**  The obvious shape -- ``for bin_uri, group in
+    frame.groupby(...)`` with ``check_taxonomic_concordance(group)`` inside --
+    runs four distinct-value passes over a small frame per BIN, so an 88,000-row
+    result with ~5,000 BINs cost 8.1 s, more than the search that produced it.
+    Every quantity it needs is a distinct-count per BIN, so one pass per rank
+    computes them all.  ``check_taxonomic_concordance`` is kept for a single
+    BIN's records and is the specification this reproduces.
+    """
     if specimens is None or len(specimens) == 0:
-        return pd.DataFrame(columns=columns)
+        return pd.DataFrame(columns=_CONTENT_COLUMNS)
 
     bins = to_text(column_or_missing(specimens, "bin_uri")).str.strip()
-    frame = specimens[bins != ""].copy()
-    frame["_bin"] = bins[bins != ""]
+    keep = (bins != "").to_numpy()
+    frame = specimens[keep]
+    bin_key = bins[keep]
     if len(frame) == 0:
-        return pd.DataFrame(columns=columns)
+        return pd.DataFrame(columns=_CONTENT_COLUMNS)
 
     total = len(specimens)
-    rows = []
-    for bin_uri, group in frame.groupby("_bin", sort=True):
-        species = column_or_missing(group, "species")
-        names = sorted(
-            {v for v in to_text(species).str.strip()[is_valid_species_name(species)] if v}
+    species_raw = column_or_missing(frame, "species")
+    species = to_text(species_raw).str.strip().where(
+        is_valid_species_name(species_raw), ""
+    )
+
+    per_species = distinct_by_group(bin_key, species)
+    per_country = distinct_by_group(
+        bin_key, to_text(column_or_missing(frame, "country.ocean")).str.strip()
+    )
+    per_rank = {
+        rank: distinct_by_group(
+            bin_key, to_text(column_or_missing(frame, rank)).str.strip()
         )
-        countries = _distinct(group, "country.ocean")
-        rows.append(
-            {
-                "bin_uri": bin_uri,
-                "total_records": len(group),
-                "unique_species": len(names),
-                "species_list": "; ".join(names),
-                "countries": "; ".join(countries),
-                "concordance": CONCORDANT if check_taxonomic_concordance(group)
-                else DISCORDANT,
-                "bin_coverage": len(group) / total if total else 0.0,
-            }
-        )
-    return pd.DataFrame(rows, columns=columns)
+        for rank in ("genus", "family", "order")
+    }
+
+    counts = bin_key.groupby(bin_key, sort=True).size()
+    index = counts.index
+
+    n_species = reindex_counts(per_species, index)
+    n_genus, n_family, n_order = (
+        reindex_counts(per_rank[r], index) for r in ("genus", "family", "order")
+    )
+
+    # The hierarchical fallback, as a single selection: the first rank with any
+    # distinct value decides, and more than one value there is discordant.
+    decided_by = np.select(
+        [n_species > 0, n_genus > 0, n_family > 0],
+        [n_species, n_genus, n_family],
+        default=n_order,
+    )
+    concordance = np.where(decided_by > 1, DISCORDANT, CONCORDANT)
+
+    return pd.DataFrame(
+        {
+            "bin_uri": index.to_numpy(),
+            "total_records": counts.to_numpy(),
+            "unique_species": n_species.to_numpy(),
+            "species_list": reindex_joined(per_species, index).to_numpy(),
+            "countries": reindex_joined(per_country, index).to_numpy(),
+            "concordance": concordance,
+            "bin_coverage": counts.to_numpy() / total if total else 0.0,
+        },
+        columns=_CONTENT_COLUMNS,
+    )
 
 
 def analyse_bins(specimens: pd.DataFrame) -> dict[str, object]:

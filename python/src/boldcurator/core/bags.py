@@ -16,8 +16,10 @@ Shiny app's; ``shared_bin_scope`` records which was used.
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
+from .frames import distinct_by_group, reindex_counts, reindex_joined
 from .species import column_or_missing, is_empty, is_species_level, to_text
 
 GRADES = ("A", "B", "C", "D", "E")
@@ -110,26 +112,49 @@ def calculate_bags_grades(
     scope = "snapshot" if bin_species is not None else "local"
     shared = shared_bins(bin_species if bin_species is not None else eligible)
 
-    rows = []
-    for species, group in eligible.groupby("_species", sort=True):
-        bins = sorted({b for b in group["_bin"] if b})
-        # specimen_count counts rows WITHOUT a BIN too -- R does, and it is
-        # what makes a species with 3 BIN-less records grade B rather than D.
-        specimen_count = len(group)
-        has_shared = any(b in shared for b in bins)
-        rows.append(
-            {
-                "species": species,
-                "bags_grade": determine_grade(specimen_count, len(bins), has_shared),
-                "specimen_count": specimen_count,
-                "bin_count": len(bins),
-                "shared_bins": has_shared,
-                "bin_uris": "; ".join(bins),
-                "shared_bin_scope": scope,
-            }
-        )
+    # Vectorised for the same reason BIN analysis is: the loop this replaces
+    # ran once per species, and a family-sized result holds thousands.
+    # Measured on 88,000 rows: 1.1 s at 5,000 species, 2.6 s at 20,000.
+    species_key = eligible["_species"]
+    per_bin = distinct_by_group(species_key, eligible["_bin"])
 
-    return pd.DataFrame(rows, columns=empty.columns)
+    counts = species_key.groupby(species_key, sort=True).size()
+    index = counts.index
+    bin_count = reindex_counts(per_bin, index)
+    bin_uris = reindex_joined(per_bin, index)
+
+    in_shared = eligible["_bin"].isin(shared) & (eligible["_bin"] != "")
+    has_shared = (
+        in_shared.groupby(species_key, sort=True).any().reindex(index).fillna(False)
+    )
+
+    # The grade still comes from determine_grade, and only from there. A
+    # second, vectorised copy of the ladder would be a rule in two places --
+    # and the parity harness proved the point by catching exactly that.
+    # Grading depends on nothing but the (specimens, bins, shared) triple, and
+    # thousands of species share a few hundred distinct triples, so one call
+    # per distinct triple is both faithful and cheap.
+    specimen_count = counts.to_numpy()
+    shared_arr = has_shared.to_numpy(dtype=bool)
+    bins_arr = bin_count.to_numpy()
+    triples = list(zip(specimen_count.tolist(), bins_arr.tolist(),
+                       shared_arr.tolist()))
+    ladder = {t: determine_grade(*t) for t in set(triples)}
+    grade = np.array([ladder[t] for t in triples], dtype=object)
+
+    return pd.DataFrame(
+        {
+            "species": index.to_numpy(),
+            "bags_grade": grade,
+            "specimen_count": specimen_count,
+            "bin_count": bins_arr,
+            "shared_bins": shared_arr,
+            "bin_uris": bin_uris.to_numpy(),
+            "shared_bin_scope": scope,
+        },
+        columns=empty.columns,
+    )
+
 
 
 def grade_lookup(grades: pd.DataFrame) -> dict[str, str]:

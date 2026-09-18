@@ -162,48 +162,122 @@ BIN-only or identified no finer than genus — normal, not a defect. It does mea
 over a four-letter alphabet compresses hard), so the download is comfortable and
 the metadata/sequence split is not needed.
 
-## Benchmark — measured 2026-09-18, and the verdict
+## Benchmark — where the time went, and where it goes now
 
 Run against the full 7.95 GB snapshot (20,164,595 records), Windows, 32 GB.
 
 | Step | Seconds | RSS MB | Result |
 |---|---|---|---|
-| open snapshot | 0.016 | 108 | |
-| resolve `Danaus plexippus` | 0.000 | 113 | species, 182 records |
-| estimate `Danaus plexippus` | 0.125 | 354 | seed 182 → 183 expanded |
-| search+expand `Danaus plexippus` | **2.671** | 2894 | 183 rows |
-| resolve `Nymphalidae` | 0.000 | 2896 | family, 87,949 records |
-| estimate `Nymphalidae` | 0.172 | 2925 | seed 87,949 / 5,347 BINs → 89,479 |
-| search+expand `Nymphalidae` | 9.516 | 3180 | 89,479 rows |
-| resolve `Lepidoptera` | 0.016 | 3181 | order, 2,094,602 records |
-| estimate `Lepidoptera` | 0.484 | 3283 | → 2,095,427 expanded |
-| search+expand `Lepidoptera` | 23.891 | 9782 | 2,095,427 rows |
-| full pipeline `Danaus plexippus` | **13.704** | 9614 | 183 records |
-| stream 183 sequences | **8.734** | **15506** | 183 sequences |
-| export all formats | 18.593 | 15541 | 6 files |
+| open snapshot | 0.031 | 107 | |
+| resolve `Danaus plexippus` | 0.000 | 112 | species, 182 records |
+| estimate `Danaus plexippus` | 0.359 | 366 | seed 182 → 183 expanded |
+| search+expand `Danaus plexippus` | **4.657** | 2923 | 183 rows |
+| search+expand `Nymphalidae` | 8.203 | 3180 | 89,479 rows |
+| search+expand `Lepidoptera` | 18.235 | 9781 | 2,095,427 rows |
+| full pipeline `Danaus plexippus` | **8.500** | 9590 | 183 records |
+| stream 183 sequences | 8.109 | 15492 | 183 sequences |
+| export all formats | 13.687 | 15530 | 6 files |
 
-**Verdict: resolve and estimate are excellent; the rest was not ready.** Taxon
-resolution is effectively instant (0–16 ms against a 546,861-row lookup) and the
-size pre-check costs 0.1–0.5 s, so a search's cost is known before anything is
-materialised — both design goals met.
+**Resolve and estimate were always fine. One query was 90% of everything
+else.** For the 183-record pipeline the split is: the search 3.46 s, the size
+pre-check 0.22 s, and *all* of processing, scoring, ranking, BAGS, BIN analysis
+and auto-selection together 0.13 s. Nothing downstream was ever the problem.
 
-Everything after that was too slow, and two causes were outright bugs:
+### Why the search cost 3.5 s to return 183 rows
 
-1. **`SELECT * FROM bin_species` ran on every search** — the whole table into
-   pandas regardless of result size. That is most of 13.7 s for a *183-record*
-   search. Now fetches only the BINs the result touches. **Fixed.**
-2. **`iter_sequences` had an `ORDER BY`** on the output of a semi-join over
-   20 M rows. A sort is a blocking operator: it materialises the entire result
-   before yielding a row, which defeats the streaming the function exists for
-   and made its "constant memory" docstring false — 8.7 s and 15.5 GB to fetch
-   183 sequences. No caller needs ordered output. **Fixed.**
-3. **BIN expansion is a full table scan** — ~2.7 s floor, because `specimen` is
-   sorted taxonomically so `bin_uri IN (…)` cannot use zone maps. Still open;
-   see `PROGRESS.md`. It is a ~100× improvement on the R app's HTTP loop but
-   misses the sub-second target.
+The predicate a BIN-expanded search needs — "in the seed, **or** sharing one of
+the seed's BINs" — is a disjunction over two subqueries. DuckDB cannot push
+either half into the table scan, so it projects all 70 columns of all 20 M rows
+and filters afterwards. The 2.9 GB of RSS for a 183-row result is that whole
+projection, and it is why the cost barely moved between 183 rows and 89,479.
 
-**Re-run the benchmark after pulling** — the two fixes are unmeasured against
-real data, and the numbers decide whether a schema change is needed.
+BIN expansion itself was never expensive: counting the same row set, which
+touches only `sid` and `bin_uri`, takes 0.2 s.
+
+**So resolve the rows first, then fetch them.** `plan_search` runs the narrow
+pass and returns a `rowid` per matching row; `fetch_planned` joins that small
+set back against `specimen.rowid`, which DuckDB *can* push into the scan as a
+zone-map filter. `run_search` now calls `plan_search` once and uses it as both
+the size pre-check and the row set, instead of running the expansion twice and
+throwing the first answer away.
+
+`rowid` is the key that works. `sid` is not: it is assigned before the
+taxonomic sort, so it is uncorrelated with physical position and a semi-join on
+it measures no better than the original. A literal `rowid IN (…)` list is no
+better either — the pushdown comes from the join, not from the predicate.
+**No schema change and no rebuild is needed**, which supersedes the `bin_index`
+table proposed in `PROGRESS.md`.
+
+### Measured, on a 20 M-row snapshot of the same shape
+
+Built by `python/tools/make_benchmark_snapshot.py`: 20,164,595 rows, 70
+columns, 417,999 BINs, taxonomic sort order, a species of 183 records, a family
+of 87,991 and an order of 2,023,789 — i.e. the *Danaus* / *Nymphalidae* /
+*Lepidoptera* shapes. Synthetic data, real query plans. Linux, 4 cores, 15 GB.
+
+| Full pipeline | Before | After | |
+|---|---|---|---|
+| 183 records | 3.83 s | **0.37 s** | 10.4× |
+| 87,991 records | 15.12 s | **4.04 s** | 3.7× |
+| RSS, 183-record search | 2,158 MB | **371 MB** | |
+
+Every stage output — specimens, BAGS grades, BIN content, selections, summary
+— is byte-identical before and after, at all three scales, and the R parity
+harness stays green.
+
+Four changes, each measured separately:
+
+| Change | Where | 183 rows | 87,991 rows |
+|---|---|---|---|
+| plan-then-fetch on `rowid` | `data/queries.py` | 3.49 → 0.22 s | 3.71 → 1.02 s |
+| one expansion pass, not two | `core/pipeline.py` | −0.22 s | −0.24 s |
+| vectorised BIN analysis | `core/bins.py` | 0.061 → 0.021 s | 8.08 → 0.48 s |
+| vectorised BAGS grading | `core/bags.py` | — | 2.61 → 0.94 s (20k species) |
+
+### Can the scoring run in parallel? No — measured
+
+Scoring 88,000 rows takes 1.9 s, and it is the largest remaining stage. It does
+not want threads:
+
+| | Seconds |
+|---|---|
+| serial | 2.08 |
+| `ThreadPoolExecutor(2)` | 2.13 |
+| `ThreadPoolExecutor(4)` | 2.09 |
+| `ProcessPoolExecutor(4)`, incl. pickling | 1.52 |
+
+Threads are **slower** — the work is `re.Pattern.search` inside a Python loop,
+which holds the GIL throughout. Four processes buy 1.4× on 4 cores after
+paying to pickle the frame, which is not worth the complexity. And on the
+result size that actually matters — 183 rows — the entire scoring stage is
+15 ms, so there is nothing to parallelise.
+
+The single-threaded work is reducible instead. Skipping the regex on values
+already known to be empty took it from 2.30 s to 1.93 s (a third of scored
+values are empty; `short_note` and `taxonomy_notes` are empty throughout). What
+remains is not the regex: it is that `to_text` and `is_empty_text` are
+Python-level walks of an **object-dtype** column, paid once per field. An
+Arrow-backed string dtype would move that into C; that is the next real lever,
+and it is a dtype change across the query layer rather than a tweak.
+
+### Still open
+
+`Lepidoptera` resolves to 2,095,427 rows. `plan_search` resolves them in 0.7 s
+and the size guard now fires before anything is materialised, but **no table
+widget should ever be handed that frame** — 2.1 M rows × 70 columns into pandas
+is an OOM, not a slow query. The GUI needs server-side paging or a hard display
+cap from the start, driven by the pre-check that already runs in under a
+second. `benchmark --max-fetch` now refuses the wide fetch above 250,000 rows
+rather than measuring an out-of-memory kill.
+
+| Measure | Target | Now |
+|---|---|---|
+| taxon resolve | < 1 s | **0.003 s** ✓ |
+| size pre-check | < 1 s | **0.22–0.71 s** ✓ |
+| BIN-expanded search, small | sub-second | **0.22 s** ✓ |
+| full pipeline, small result | ~1 s | **0.37 s** ✓ |
+| full pipeline, 88 k result | — | 4.0 s, half of it scoring |
+| sequence streaming | flat memory | flat ✓ |
 
 ## Testing before the GUI
 
@@ -217,23 +291,28 @@ python parity/compare.py          # R-vs-Python parity; exit 1 on any surprise
 python -m boldcurator.cli benchmark --snapshot /path/to/bold_snapshot_2026-09-11.duckdb --export
 ```
 
-`benchmark` times each stage separately and reports rows and peak RSS. Install
-`psutil` (`pip install -e ".[bench]"`) for the memory column; without it the
-command still runs and says so.
+`benchmark` times each stage separately and reports rows and peak RSS. It
+splits the search into its two halves (`plan` then `fetch`) and times the
+post-search stages individually, because a single "search" number hid that
+essentially all of it was one query. Install `psutil`
+(`pip install -e ".[bench]"`) for the memory column; without it the command
+still runs and says so.
 
-| Measure | Target | 2026-09-18 |
-|---|---|---|
-| taxon resolve | < 1 s | **0.000–0.016 s** ✓ |
-| size pre-check | < 1 s | **0.125–0.484 s** ✓ |
-| BIN-expanded search | sub-second | 2.7 s (183 rows) ✗ |
-| full pipeline, small result | ~1 s | 13.7 s ✗ — fixed, unmeasured |
-| sequence streaming | flat memory | 15.5 GB ✗ — fixed, unmeasured |
+**You do not need the real snapshot to benchmark.**
+`tools/make_benchmark_snapshot.py` builds a 20 M-row stand-in with the same
+shape in about six minutes — see the benchmark section above for what it does
+and does not reproduce.
 
-A `SizeLimitExceeded` refusal is **reported, not raised**. Note `Lepidoptera`
-did *not* trip the guard: 2,095,427 expanded records against a `MAX_RECORDS` of
-250,000, because `--no-limits` is off only for `run_search` — the raw
-`search_specimens` path the benchmark uses has no guard. That is worth
-revisiting.
+```sh
+python tools/make_benchmark_snapshot.py --out bench.duckdb
+python -m boldcurator.cli benchmark --snapshot bench.duckdb
+```
+
+A `SizeLimitExceeded` refusal is **reported, not raised** — whether
+`DOWNLOAD_LIMITS` is set sensibly for real data is one of the things being
+measured. `search_specimens` now takes an opt-in `max_records`, and the
+benchmark's own `--max-fetch` (default 250,000) skips the wide fetch rather
+than materialising 2.1 M rows × 70 columns into pandas and being killed.
 
 ## Testing without the real package
 

@@ -3,14 +3,14 @@
 Branch: `claude/intelligent-dijkstra-g66cbr`. Plan:
 [`../docs/python-app-plan.md`](../docs/python-app-plan.md).
 
-**State: Phases 0–2 complete. 142 tests pass. The parity gate is green, so
-Phase 3 (GUI) is unblocked.**
+**State: Phases 0–2 complete, and the pipeline is fast. 160 tests pass, the
+parity gate is green, Phase 3 (GUI) is unblocked.**
 
 Run everything from `python/`:
 
 ```sh
 pip install -e ".[dev]"
-python -m pytest tests/ -q      # 142 passing
+python -m pytest tests/ -q      # 160 passing
 python parity/compare.py        # exit 1 on any unexplained R-vs-Python difference
 ```
 
@@ -38,29 +38,84 @@ levers are closed.
 
 ---
 
-## Next task: performance, THEN the GUI
+## Performance — done and measured. Phase 3 is next
 
-The snapshot was benchmarked on 2026-09-18 (full table in `README.md`). The
-result: **taxon resolve and the size pre-check are excellent; everything after
-them was too slow, and the GUI should not start until that is resolved.** A
-13.7-second wait for a 183-record search is not a usable app.
+**State: the pipeline is 10x faster on a small result and 3.7x on a large one,
+every output byte-identical, parity green. The GUI is unblocked.**
 
-### Fixed this session, but UNMEASURED against real data
+| Full pipeline | Before | After | |
+|---|---|---|---|
+| 183 records | 3.83 s | **0.37 s** | 10.4x |
+| 87,991 records | 15.12 s | **4.04 s** | 3.7x |
+| RSS, 183-record search | 2,158 MB | **371 MB** | |
 
-Both were outright bugs, found only because the benchmark existed:
+Measured on a 20 M-row synthetic snapshot of the real shape, built by
+`tools/make_benchmark_snapshot.py`. `README.md` has the full table and the
+reasoning.
 
-1. **`SELECT * FROM bin_species` on every search** (`core/pipeline.py`) — the
-   whole table into pandas regardless of result size, dominating a 183-record
-   search. Now fetches only the BINs the result touches, which prunes well
-   because `bin_species` is sorted by `bin_uri`.
-2. **`ORDER BY` inside `iter_sequences`** (`data/queries.py`) — a blocking sort
-   over a 20 M-row semi-join, so nothing streamed and memory peaked at 15.5 GB
-   fetching 183 sequences. Removed; no caller needs ordered output.
+### What it actually was
 
-**First task next session: pull and re-run the benchmark.** These two fixes
-should account for most of the pipeline and sequence cost. Do not design
-anything further until the new numbers are in — the point of the last session
-was that guessing at performance is how we got here.
+**Not BIN expansion.** Counting the BIN-expanded row set costs 0.2 s. The cost
+was the *projection*: the predicate "in the seed **or** sharing its BINs" is a
+disjunction over two subqueries, which DuckDB cannot push into the scan, so it
+projected all 70 columns of all 20 M rows and filtered afterwards. That is the
+2.9 GB of RSS for a 183-row result, and why 183 rows and 89,479 rows cost the
+same.
+
+Fixed by planning then fetching: `plan_search` resolves `rowid`s narrowly,
+`fetch_planned` semi-joins them back, and DuckDB pushes *that* into the scan.
+`run_search` uses the one plan as both the size pre-check and the row set
+instead of running the expansion twice.
+
+**The `bin_index` table proposed here last session is not needed, and neither
+is a rebuild.** `rowid` is already the physical position. Worth recording why
+`sid` cannot do the same job: `snapshot_builder` assigns it with
+`row_number() OVER ()` *before* the `ORDER BY`, so it is uncorrelated with
+physical position and a semi-join on it measures no better than the original.
+That is not worth a rebuild now, but it is worth knowing.
+
+**Two more per-group Python loops**, the same defect the R port already fixed
+in scoring and selection, found by measuring the stages separately:
+
+* `bins.process_bin_content` ran four distinct-value passes per BIN — 8.1 s for
+  an 88,000-row result, more than the search. Now 0.48 s.
+* `bags.calculate_bags_grades` ran once per species — 2.6 s at 20,000 species.
+  Now 0.94 s. The grade still comes from `determine_grade` and only from there;
+  a vectorised second copy of the ladder was written first and the parity
+  harness caught it, which is the mutation test earning its keep.
+
+Both now share `core/frames.distinct_by_group`.
+
+### Parallel scoring: asked, measured, no
+
+Scoring 88,000 rows takes 1.9 s and is the largest remaining stage. Threads are
+**slower** than serial (2.13 s vs 2.08 s) — the work is `re.Pattern.search` in
+a Python loop, holding the GIL. Four processes give 1.4x on 4 cores after
+pickling the frame, which is not worth the complexity. On the result size that
+matters — 183 rows — the whole scoring stage is 15 ms.
+
+Reducing the work beat parallelising it: skipping the regex on already-empty
+values took it 2.30 s -> 1.93 s. **The next real lever is an Arrow-backed
+string dtype.** What is left is not regex, it is `to_text` and `is_empty_text`
+walking an object-dtype column in Python, once per field. DuckDB can hand
+pandas Arrow-backed strings, which would move that into C — but it is a dtype
+change across the query layer and every `.str` call, so it is its own task,
+not a tweak.
+
+### Still open
+
+* **`Lepidoptera` must never be materialised.** 2,095,427 rows resolve in
+  0.7 s, and the guard now fires before the fetch, but 2.1 M rows x 70 columns
+  into pandas is an OOM. The GUI needs server-side paging or a hard display cap
+  from the start, driven by the pre-check.
+* **`search_specimens` had no size guard.** It now takes an opt-in
+  `max_records`, and `benchmark --max-fetch` (default 250,000) skips the wide
+  fetch rather than measuring an OOM kill. `run_search` is unchanged: it still
+  enforces `DOWNLOAD_LIMITS`.
+* **Re-run the benchmark on the real snapshot.** Everything above is measured
+  on a synthetic stand-in of the right shape. The plan-then-fetch win depends
+  on DuckDB pushing a join filter into the scan, so it is worth confirming on
+  the real file and on whatever DuckDB version Windows has:
 
 ```powershell
 python -m boldcurator.cli benchmark `
@@ -68,35 +123,9 @@ python -m boldcurator.cli benchmark `
     --export
 ```
 
-### Open: BIN expansion is a full table scan
+### Next: Phase 3, the GUI
 
-~2.7 s floor even for 183 rows, 23.9 s for Lepidoptera. `specimen` is sorted
-taxonomically, so the `bin_uri IN (…)` half of the expansion cannot use zone
-maps and scans all 20 M rows. The taxonomic sort makes the *seed* fast (estimate
-is 0.125 s) but does nothing for the expansion.
-
-It is still ~100x better than the R app's per-50-BIN HTTP loop, so this is a
-"not as good as designed", not a regression.
-
-**If it is still the bottleneck after re-measuring**, the fix is a
-`bin_index(bin_uri, sid)` table sorted by `bin_uri` — the same shape as
-`specimen_recordset`, which already works this way. Expansion then becomes a
-pruned range read on `bin_index` followed by a hash semi-join on an integer
-`sid` column (~160 MB to scan) instead of a 400 MB string column. Cost: ~500 MB
-of snapshot and a rebuild. **The staging file has been deleted, so a rebuild
-means a full 24-minute re-ingest** — which is exactly why this waits for
-evidence rather than being done speculatively.
-
-### Also worth fixing
-
-`search_specimens` has **no size guard** — only `run_search` enforces
-`DOWNLOAD_LIMITS`. That is why `Lepidoptera` materialised 2,095,427 rows (9.8 GB
-RSS) in the benchmark without complaint. Either push the guard down into
-`search_specimens` or make the benchmark opt in explicitly.
-
-### Then: Phase 3, the GUI
-
-Unblocked once the numbers are acceptable. Start with the spike (plan 3.1):
+Unblocked. Start with the spike (plan 3.1):
 50,000 rows in a Shiny for Python `DataGrid` with multi-row selection and a
 bulk-annotation toolbar. If it cannot carry it, swap `ui/` to NiceGUI + AG Grid
 — nothing below `ui/` changes, and a test enforces that.
@@ -104,7 +133,9 @@ bulk-annotation toolbar. If it cannot carry it, swap `ui/` to NiceGUI + AG Grid
 The benchmark also answers a GUI design question directly: `Nymphalidae`
 returns 89,479 rows and `Lepidoptera` 2.1 million. **No table widget should be
 handed those**, so the UI needs server-side paging or a hard display cap from
-the start, driven by the `estimate` pre-check that already runs in 0.1–0.5 s.
+the start, driven by the `plan_search` pre-check, which resolves even
+`Lepidoptera` in 0.7 s and hands back the exact row set -- so a page can be
+fetched by its `rowid`s instead of re-running the search.
 
 ## Findings from the real build, worth acting on
 
@@ -153,6 +184,14 @@ surfacing in the UI rather than letting a curator assume otherwise.
 - [x] 2.4 `parity/export_r_reference.R`
 - [x] 2.5 `parity/compare.py` — **green**
 - [ ] 2.6 CI workflow (Linux/macOS/Windows)
+
+### Phase 2.5 — performance
+- [x] plan-then-fetch, so a search projects only the rows it returns
+- [x] one BIN-expansion pass per search, not two
+- [x] vectorised BIN analysis and BAGS grading
+- [x] `tools/make_benchmark_snapshot.py`, so this is measurable without the 8 GB file
+- [ ] re-measure on the real snapshot
+- [ ] Arrow-backed strings, for the scoring stage
 
 ### Phase 3 — GUI
 - [ ] 3.1–3.8 not started

@@ -35,8 +35,10 @@ def test_benchmark_times_every_stage(fixture_snapshot, capsys):
                  "--taxon", "Danaus plexippus", "--sequences", "50", "--export"])
     out = capsys.readouterr().out
     assert code == 0
-    for step in ("open snapshot", "resolve", "estimate", "search+expand",
-                 "full pipeline", "stream", "export all formats"):
+    for step in ("open snapshot", "resolve", "estimate", "plan", "fetch",
+                 "full pipeline", "score (criterion flags)", "BAGS grades",
+                 "BIN analysis", "auto-selection", "stream",
+                 "export all formats"):
         assert step in out, f"{step} missing from the benchmark output"
     assert "seconds" in out
 

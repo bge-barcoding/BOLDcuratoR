@@ -64,9 +64,15 @@ def to_text(values: pd.Series) -> pd.Series:
     turning missing values into the string ``"nan"``.
     """
     if values.dtype == object or isinstance(values.dtype, pd.StringDtype):
-        out = values.astype(object).where(values.notna(), "")
-        return pd.Series([x if isinstance(x, str) else ("" if x is None else str(x))
-                          for x in out], index=values.index, dtype=object)
+        # One pass. The obvious astype().where() first materialises a whole
+        # intermediate Series that the comprehension then walks again, and
+        # to_text is on the hot path of every criterion.
+        present = values.notna().to_numpy()
+        return pd.Series(
+            [x if isinstance(x, str) else ("" if not ok or x is None else str(x))
+             for x, ok in zip(values.to_numpy(), present)],
+            index=values.index, dtype=object,
+        )
     if pd.api.types.is_float_dtype(values.dtype):
         # 658.0 must render as "658", the way R's as.character does for a
         # whole number, or a pattern anchored with ^...$ would stop matching.
@@ -80,10 +86,23 @@ def to_text(values: pd.Series) -> pd.Series:
     return values.astype(object).where(values.notna(), "").astype(str)
 
 
+def is_empty_text(text: pd.Series) -> pd.Series:
+    """``is_empty`` for a column already put through :func:`to_text`.
+
+    One pass, rather than ``.str.strip()`` then ``.str.upper()`` then
+    ``.isin()`` then ``==``: each of those is its own Python-level walk of the
+    column, and scoring calls this once per criterion per field.
+    """
+    return pd.Series(
+        [(stripped := v.strip()) == "" or stripped.upper() in EMPTY_TOKENS
+         for v in text],
+        index=text.index, dtype=bool,
+    )
+
+
 def is_empty(values: pd.Series) -> pd.Series:
     """Vectorised ``is_empty_value`` (``specimen_scorer.R:77-81``)."""
-    text = to_text(values).str.strip()
-    return (text == "") | text.str.upper().isin(EMPTY_TOKENS)
+    return is_empty_text(to_text(values))
 
 
 def column_or_missing(frame: pd.DataFrame, name: str) -> pd.Series:
@@ -98,19 +117,46 @@ def column_or_missing(frame: pd.DataFrame, name: str) -> pd.Series:
     return pd.Series([np.nan] * len(frame), index=frame.index, dtype=object)
 
 
-def matches(values: pd.Series, pattern: re.Pattern[str] | None) -> pd.Series:
-    """Vectorised ``grepl``: ``False`` where the value is missing."""
+def matches_text(text: pd.Series, pattern: re.Pattern[str] | None,
+                 where: pd.Series | None = None) -> pd.Series:
+    """``grepl`` over already-converted text.
+
+    ``where`` skips the match for rows the caller has already ruled out, which
+    in practice means the empty ones.  Every criterion ANDs its pattern with
+    "the field is non-empty", so those rows were going to be ``False``
+    regardless.  About a third of scored values are empty on a real-shaped
+    frame, and whole fields (``short_note``, ``taxonomy_notes``) are empty
+    throughout; skipping them took scoring 88,000 rows from 2.30 s to 1.93 s.
+
+    The remaining cost is not the regex.  It is that ``to_text`` and
+    ``is_empty_text`` are Python-level walks of an object-dtype column, paid
+    once per field whether or not the field holds anything -- which is what an
+    Arrow-backed string dtype would remove, and this would not.
+    """
     if pattern is None:
-        return pd.Series(False, index=values.index)
-    text = to_text(values)
+        return pd.Series(False, index=text.index)
+    search = pattern.search
+    if where is None:
+        return pd.Series([bool(search(v)) for v in text],
+                         index=text.index, dtype=bool)
     return pd.Series(
-        [bool(pattern.search(v)) for v in text], index=values.index, dtype=bool
+        [bool(search(v)) if keep else False
+         for v, keep in zip(text, where.to_numpy())],
+        index=text.index, dtype=bool,
     )
+
+
+def matches(values: pd.Series, pattern: re.Pattern[str] | None,
+            where: pd.Series | None = None) -> pd.Series:
+    """Vectorised ``grepl``: ``False`` where the value is missing."""
+    return matches_text(to_text(values), pattern, where)
 
 
 def is_valid_species_name(values: pd.Series) -> pd.Series:
     """The single rule: non-empty and free of the invalid-name markers."""
-    return ~is_empty(values) & ~matches(values, _INVALID_SPECIES_RE)
+    text = to_text(values)
+    present = ~is_empty_text(text)
+    return present & ~matches_text(text, _INVALID_SPECIES_RE, present)
 
 
 def is_binomial(values: pd.Series) -> pd.Series:
@@ -153,5 +199,6 @@ def normalise_species(values: pd.Series) -> pd.Series:
     # The full emptiness test, not a bare == "" -- otherwise the literal
     # strings "None" and "NA" survive as species names and are counted by BAGS
     # as species in their own right, which is what R does today.
-    invalid = is_empty(values) | matches(text, _INVALID_SPECIES_RE)
+    empty = is_empty(values)
+    invalid = empty | matches_text(text, _INVALID_SPECIES_RE, ~empty)
     return text.mask(invalid, pd.NA)
