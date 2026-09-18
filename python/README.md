@@ -13,6 +13,36 @@ stable. Plan and checklist: [`../docs/python-app-plan.md`](../docs/python-app-pl
 Phase 0 (snapshot build) and Phase 1 (core library) are in progress. There is no
 GUI yet — that is Phase 3, gated on the R-vs-Python parity harness passing.
 
+## Setup
+
+Python 3.10 or newer. From this `python/` directory:
+
+```sh
+pip install -e .
+```
+
+That pulls in DuckDB, pandas and openpyxl, and puts `boldcurator`,
+`boldcurator-build-snapshot` and `boldcurator-verify-snapshot` on your PATH.
+The `-e` (editable) install means a `git pull` takes effect without
+reinstalling.
+
+On Windows, if `pip` is not found, use `python -m pip install -e .`.
+
+A virtual environment is recommended but not required:
+
+```sh
+python -m venv .venv
+# Windows:  .venv\Scripts\activate
+# macOS/Linux:  source .venv/bin/activate
+pip install -e .
+```
+
+Add the test dependencies with `pip install -e ".[dev]"`, then `pytest`.
+
+Once installed, either invocation style works — `boldcurator-build-snapshot ...`
+or `python tools/build_snapshot.py ...`. The examples below use the second so
+they work from a checkout whether or not you installed.
+
 ## Building a snapshot
 
 You need the BOLD public data package (`BOLD_Public.<date>.tsv.gz`, ~3 GB
