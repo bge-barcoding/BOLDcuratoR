@@ -81,9 +81,31 @@ def main(argv: list[str] | None = None) -> int:
             page.click(f"a.nav-link:has-text('{name}')")
             time.sleep(settle)
 
-        # -- search
+        # -- the pre-check, before anything is fetched
         page.fill("#user", "Driver")
         page.fill("#taxa", args.taxon)
+        page.click("#check")
+        time.sleep(SETTLE)
+        sized = page.locator("#estimate_box").inner_text()
+        check("the pre-check sizes the search", "Matching records" in sized,
+              " ".join(sized.split())[:90])
+        page.screenshot(path=str(args.out / "00-input.png"), full_page=True)
+
+        # a geographic filter must visibly narrow it
+        page.fill("#countries", "France")
+        page.click("#check")
+        time.sleep(SETTLE)
+        check("a country filter narrows the pre-check",
+              page.locator("#estimate_box").inner_text() != sized)
+        page.fill("#countries", "")
+        page.check("input[name='continents'][value='Europe']")
+        page.click("#check")
+        time.sleep(SETTLE)
+        check("a continent can be ticked",
+              "Matching records" in page.locator("#estimate_box").inner_text())
+        page.uncheck("input[name='continents'][value='Europe']")
+
+        # -- search
         page.click("#search")
         time.sleep(SETTLE * 2.5)
         check("search lands on the species checklist",

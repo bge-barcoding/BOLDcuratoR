@@ -26,7 +26,7 @@ from pathlib import Path
 import pandas as pd
 from shiny import App, reactive, render, ui
 
-from ..config.constants import FLAG_OPTIONS
+from ..config.constants import CONTINENT_COUNTRIES, DOWNLOAD_LIMITS, FLAG_OPTIONS
 from ..core.grouping import GRADE_DESCRIPTIONS, GRADES, PRIORITY_GRADES
 from ..core.table import DEFAULT_PAGE_SIZE
 from ..data.snapshot import SnapshotStore
@@ -128,9 +128,41 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
         ui.navset_pill_list(
             ui.nav_panel(
                 "Data Input",
-                ui.input_text_area("taxa", "Taxa (one per line)",
-                                   value="Nymphalidae", rows=4, width="520px"),
-                ui.input_action_button("search", "Search", class_="btn-primary"),
+                ui.row(
+                    ui.column(5,
+                        ui.input_text_area(
+                            "taxa", "Taxa — one per line, synonyms after commas",
+                            value="Nymphalidae", rows=5, width="100%"),
+                        ui.input_text_area(
+                            "countries", "Countries / oceans — one per line",
+                            rows=3, width="100%"),
+                    ),
+                    ui.column(4,
+                        ui.input_checkbox_group(
+                            "continents", "Continents",
+                            choices=list(CONTINENT_COUNTRIES), inline=False),
+                        ui.div(
+                            "Continents and countries are combined as a union, "
+                            "not an intersection. The filter applies to the "
+                            "records your taxa match; records sharing their "
+                            "BINs are pulled in wherever they are from, which "
+                            "is what gives the BIN its full context.",
+                            class_="small text-muted", style="max-width:320px;"),
+                    ),
+                    ui.column(3,
+                        ui.input_text_area("datasets", "Dataset codes (DS-…)",
+                                           rows=3, width="100%"),
+                        ui.input_text_area("projects", "Project codes",
+                                           rows=3, width="100%"),
+                    ),
+                ),
+                ui.div(
+                    ui.input_action_button("check", "Check size", class_="btn-sm"),
+                    ui.input_action_button("search", "Search",
+                                           class_="btn-primary"),
+                    style="display:flex;gap:10px;align-items:center;",
+                ),
+                ui.output_ui("estimate_box"),
                 ui.output_ui("search_summary"),
                 value="input",
             ),
@@ -149,6 +181,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
         revision = reactive.Value(0)
         status = reactive.Value("")
         offset = reactive.Value(0)
+        estimate: reactive.Value = reactive.Value({})
         group_index: dict[str, reactive.Value] = {
             g: reactive.Value(0) for g in GRADES
         }
@@ -162,11 +195,26 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
 
         # -- search --------------------------------------------------------
 
+        def _form() -> dict:
+            return {
+                "taxa_text": input.taxa() or "",
+                "countries_text": input.countries() or "",
+                "continents": list(input.continents() or ()),
+                "dataset_text": input.datasets() or "",
+                "project_text": input.projects() or "",
+            }
+
+        @reactive.effect
+        @reactive.event(input.check)
+        def _check():
+            estimate.set(state.estimate(**_form()))
+
         @reactive.effect
         @reactive.event(input.search)
         def _search():
             state.user = (input.user() or "").strip()
-            status.set(state.run_search(input.taxa()))
+            estimate.set({})
+            status.set(state.run_search(**_form()))
             offset.set(0)
             for value in group_index.values():
                 value.set(0)
@@ -191,17 +239,57 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
 
         @output
         @render.ui
+        def estimate_box():
+            counts = estimate.get()
+            if not counts:
+                return ui.div()
+            if counts.get("error"):
+                return ui.div(counts["error"],
+                              class_="alert alert-warning py-2 px-3 small mt-3")
+            colour = "#dc3545" if counts["over_limit"] else "#2c7fb8"
+            return ui.div(
+                ui.div(
+                    value_box(f"{counts['seed_records']:,}", "Matching records",
+                              "#6c757d"),
+                    value_box(f"{counts['seed_bins']:,}", "BINs", "#6c757d"),
+                    value_box(f"{counts['expanded_records']:,}",
+                              "After BIN expansion", colour),
+                    style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;",
+                ),
+                ui.div("Resolved: " + ", ".join(counts["resolved"])
+                       if counts["resolved"] else "",
+                       class_="small text-muted mt-2"),
+                ui.div(
+                    f"Over the limit of {DOWNLOAD_LIMITS['MAX_RECORDS']:,} records "
+                    f"/ {DOWNLOAD_LIMITS['MAX_BINS']:,} BINs. Narrow the taxa or "
+                    "add a geographic filter.",
+                    class_="alert alert-danger py-2 px-3 small mt-2",
+                ) if counts["over_limit"] else ui.div(),
+                *[ui.div(w, class_="alert alert-warning py-2 px-3 small mt-2")
+                  for w in counts.get("warnings", [])],
+            )
+
+        @output
+        @render.ui
         def search_summary():
             search = current()
             text = status.get()
             if search is None:
                 return ui.div(text, class_="small text-muted pt-3")
+            plan = search.plan
             return ui.div(
-                ui.div(text, class_="small text-muted pt-3"),
-                ui.div(f"Searched: {search.query_label}", class_="small"),
-                ui.div(f"{len(state.annotations.selected):,} records selected, "
-                       f"{len(state.annotations.annotated_processids()):,} annotated",
-                       class_="small text-muted"),
+                ui.div(
+                    value_box(f"{plan.expanded_records:,}", "Records", "#2c7fb8"),
+                    value_box(f"{plan.seed_bins:,}", "BINs", "#6c757d"),
+                    value_box(f"{len(state.annotations.selected):,}", "Selected",
+                              "#28a745"),
+                    value_box(
+                        f"{len(state.annotations.annotated_processids()):,}",
+                        "Annotated", "#6f42c1"),
+                    style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;",
+                ),
+                ui.div(f"Searched: {search.query_label}", class_="small mt-2"),
+                ui.div(text, class_="small text-muted"),
             )
 
         # -- the guard every summary screen shares -------------------------

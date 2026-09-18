@@ -3,17 +3,117 @@
 Branch: `claude/intelligent-dijkstra-g66cbr`. Plan:
 [`../docs/python-app-plan.md`](../docs/python-app-plan.md).
 
-**State: Phases 0–2 complete and fast; Phase 3 has all six screens — species,
-BINs, the five BAGS grades and the paged specimen table. 212 tests pass, the
-parity gate is green.**
+**State: Phases 0–2 complete and fast. Phase 3 has all six screens working —
+Data Input, Species, BINs, the five BAGS grades, and the paged specimen table.
+225 tests pass, the parity gate is green.**
 
-Run everything from `python/`:
+---
 
-```sh
-pip install -e ".[dev]"
-python -m pytest tests/ -q      # 212 passing
-python parity/compare.py        # exit 1 on any unexplained R-vs-Python difference
+# START HERE TOMORROW
+
+Phases 0-2 are closed and performance is closed. Phase 3 has six working
+screens; what remains is listed below in priority order. Everything after the
+second horizontal rule is reference — why things are the way they are — and
+does not need reading to get going.
+
+## First, 60 seconds of setup
+
+```powershell
+cd C:\GitHub\BOLDcurator\python
+git pull
+pip install -e ".[dev,gui]"
+python -m pytest tests/ -q          # 225 passing
+python parity/compare.py            # PASS
+
+python -m boldcurator.cli gui --snapshot "<the reordered snapshot>"
 ```
+
+The snapshot to use is the **reordered** one (`sequence_order = specimen`).
+`info` and `benchmark` warn on the snapshot line if you point at the old
+layout, and `verify` fails it outright.
+
+## What to build next, in order
+
+### 1. The six download buttons (plan 3.7) -- the obvious next piece
+
+`io/exports.py` already writes all seven formats and is parity-tested; nothing
+new needs writing, they need placing on the screens and wiring to
+`ui/state.AppState`. Notes:
+
+* `export_all(result, directory, store=store)` takes a `SearchResult`, which is
+  what `SearchState.analysis(store)` returns -- so the summary screens can
+  export directly. The **Specimens** screen has only a plan, not a result, so
+  either compute the analysis for an export or export from the plan via
+  `analyse_plan`.
+* Annotations live in `AppState.annotations` and are merged by
+  `io/annotations.merge_annotations`; `SearchResult.specimens` does **not**
+  carry them, so an export must merge first or it will ship a frame with no
+  curator columns.
+* Shiny serves a file with `@render.download`. Write to a temp dir and yield
+  the path.
+
+### 2. Gap analysis (plan 3.4)
+
+`perform_gap_analysis` (`mod_species_analysis_utils.R:57+`) is **not ported**.
+It compares the taxa the user typed -- as synonym groups, first name is the
+valid one -- against what the search found, and reports Found / Missing per
+group. `core/pipeline.parse_taxa_input` already returns the groups, and
+`SearchResult.taxonomy_groups` carries them. It belongs in `core/summaries.py`
+beside `build_species_checklist`, then on the Species screen.
+
+### 3. Session save/resume (plan 3.8)
+
+`io/session.py` exists and is tested; it saves the query, processids and
+annotations rather than the whole frame. Wire Save/Load to `AppState`, and
+**warn on resume if the snapshot id changed** -- BIN membership and
+identifications may have moved under the saved work.
+
+### 4. CI (plan 2.6) -- still not done
+
+225 tests and the parity harness run only when someone remembers. A GitHub
+Actions matrix (Linux/macOS/Windows) that installs, runs pytest and runs
+`parity/compare.py` needs no real snapshot: `conftest.py` builds the fixture,
+and `tests/make_fake_package.py` generates the source. Worth doing before the
+GUI grows further.
+
+### 5. Two Phase 0 items only you can close
+
+* **0.2** confirm the course's records are public. If some are not, they are
+  simply absent from a public snapshot and we need an overlay DuckDB file in
+  the same schema, `ATTACH`ed and `UNION ALL`ed -- worth knowing early because
+  it changes the query layer.
+* **0.3** the CC-BY-SA 4.0 attribution requirement, in writing, for the about
+  text and any redistribution.
+
+### Also open, not urgent
+
+* **The R app rejects 4% of real BOLD dataset codes.** `mod_data_import_utils.R:50`
+  validates against `^DS-[A-Z0-9]+$` and sets `results$valid <- FALSE`, a hard
+  gate before any query runs; the builder found 544 of 13,706 real DS- codes do
+  not match. That is a live bug in the *shipped R app*, not in this rewrite.
+  The SQL to list examples is further down this file.
+* `export_all` streams the sequences twice, once for all specimens and once for
+  the selected subset. Two passes where one would do, at ~0.4 s a pass.
+
+## The three rules this session cost the most to learn
+
+
+1. **Drive the UI in a browser before believing it.** Every UI bug so far has
+   been invisible to the unit tests and obvious on the first click. Run
+   `tools/drive_ui.py` -- it checks seventeen things across all six screens and
+   exits non-zero.
+2. **In a Shiny effect, read every input you react to OUTSIDE
+   `reactive.isolate()`**, and isolate only the writes. Two controls rendered
+   perfectly, accepted clicks and did nothing because of this.
+3. **When checking the UI, match against the table, not the panel.** The
+   annotation toolbar holds a flag `<select>` listing every flag name, so
+   `"synonym" in panel.inner_text()` passes for an annotation that never
+   rendered.
+
+And the one that predates the GUI: **measure before optimising**. Two sessions
+of guessing at performance cost more than the fixes did, and both real causes
+(a projection that could not be pushed down, a table stored in the wrong
+physical order) were invisible to reasoning and obvious to a benchmark.
 
 ---
 
@@ -249,7 +349,7 @@ name, so `"synonym" in panel.inner_text()` passes for an annotation that never
 rendered. That false pass cost a round.
 
 Run `tools/drive_ui.py` before believing any UI change works. It checks
-fourteen things across all six screens and exits non-zero.
+seventeen things across all six screens and exits non-zero.
 
 ## Phase 3.2-3.6 — the six screens are in
 
@@ -302,16 +402,17 @@ attempted and survived. Searching stays instant either way.
 `core/pipeline.analyse_plan` is the entry point: everything after planning,
 for a caller that already holds a plan.
 
-### Next
+### Data Input is in
 
-- **3.3 Data Input** — countries, continents and dataset/project codes are not
-  wired into the search box yet; only taxa are. The size-check modal can use
-  `plan_search`, which already returns the counts before anything is fetched.
-- **3.7 downloads** — the six export buttons. `io/exports.py` has all seven
-  formats already; they need placing on the screens.
-- **3.8 session save/resume** — `io/session.py` exists; warn if the snapshot id
-  changed, since BIN membership and identifications may have.
-- **Gap analysis** (plan 3.4) — `perform_gap_analysis` is not ported yet.
+Taxa, countries, continent tick-boxes, dataset and project codes, parsed
+exactly as the CLI parses them so the two cannot drift. **Check size** runs
+`estimate_search` and reports matching records / BINs / after-expansion
+**without fetching a record** -- the pre-check the whole design rests on.
+
+Two behaviours are stated on the screen because they are easy to get backwards:
+continents and countries are a **union**, not an intersection; and the
+geographic filter applies to the seed while **BIN expansion deliberately
+reaches past it**, so a BIN arrives with its full context.
 
 ## Findings from the real build, worth acting on
 
@@ -380,7 +481,7 @@ surfacing in the UI rather than letting a curator assume otherwise.
 - [x] `tools/drive_ui.py` — browser checks, because unit tests missed dead controls
 - [x] 3.2 shell — snapshot bar, name for annotation attribution
 - [x] 3.4 species checklist  [x] 3.5 BIN dashboard  [x] 3.6 BAGS A–E
-- [ ] 3.3 Data Input — countries, continents, codes, size-check modal
+- [x] 3.3 Data Input — taxa, countries, continents, codes, size pre-check
 - [ ] 3.4 gap analysis against the taxa typed in
 - [ ] 3.7 the six download buttons
 - [ ] 3.8 session save/resume

@@ -21,10 +21,24 @@ from dataclasses import dataclass, field
 
 from ..config.constants import DOWNLOAD_LIMITS
 from ..core.grouping import SpecimenGroup, group_specimens
-from ..core.pipeline import SearchResult, analyse_plan
+from ..core.pipeline import (
+    SearchResult,
+    analyse_plan,
+    geographic_filter,
+    parse_lines,
+    parse_taxa_input,
+    flatten_taxa,
+)
 from ..core.summaries import build_species_checklist
 from ..core.table import SpecimenTable
-from ..data.queries import SearchPlan, SearchQuery, plan_search, resolve_taxa
+from ..data.queries import (
+    SearchPlan,
+    SearchQuery,
+    estimate_search,
+    missing_recordset_codes,
+    plan_search,
+    resolve_taxa,
+)
 from ..data.snapshot import SnapshotStore
 from ..io.annotations import Annotations
 
@@ -127,22 +141,93 @@ class AppState:
         self.annotations = Annotations()
         self.search: SearchState | None = None
 
-    def run_search(self, taxa_text: str) -> str:
-        """Plan a search. Returns a human-readable status line."""
-        names = [n.strip() for n in (taxa_text or "").splitlines() if n.strip()]
-        if not names:
-            return "Type a taxon name."
+    # -- the search form ---------------------------------------------------
 
-        resolution = resolve_taxa(self.store, names)
-        if not resolution.resolved:
-            self.search = None
-            return "No records for: " + ", ".join(resolution.unmatched)
+    def _build(self, taxa_text: str, countries_text: str, continents: list[str],
+               dataset_text: str, project_text: str):
+        """Turn the form into a query, or explain why it cannot be one.
 
-        plan = plan_search(self.store, SearchQuery(taxa=resolution.resolved,
-                                                   expand_bins=True))
+        Returns ``(query, resolution, warnings, error)``. Every field is parsed
+        the way the CLI parses it -- one value per line, blanks dropped -- so
+        the two cannot drift.
+        """
+        groups = parse_taxa_input(taxa_text)
+        names = flatten_taxa(groups)
+        geo = geographic_filter(parse_lines(countries_text), list(continents or []))
+        datasets = parse_lines(dataset_text)
+        projects = parse_lines(project_text)
+
         warnings: list[str] = []
-        if resolution.unmatched:
-            warnings.append("No records for: " + ", ".join(resolution.unmatched))
+        resolution = resolve_taxa(self.store, names) if names else None
+        if resolution is not None and resolution.unmatched:
+            warnings.append(
+                "No records for: " + ", ".join(resolution.unmatched)
+                + ". Check the spelling, or they may exist only on unpublished "
+                "records, which a public snapshot cannot contain.")
+        if resolution is not None:
+            for name, options in resolution.ambiguous.items():
+                warnings.append(
+                    f"{name!r} is ambiguous: "
+                    + ", ".join(f"{o.rank} ({o.n_records:,} records)"
+                                for o in options)
+                    + ". All of them were searched.")
+
+        missing = missing_recordset_codes(self.store, datasets + projects)
+        if missing:
+            warnings.append(
+                "No records for these dataset/project codes: "
+                + ", ".join(missing)
+                + ". Offline there is no authentication error to tell a typo "
+                "from a code covering private records -- both return nothing.")
+
+        query = SearchQuery(
+            taxa=resolution.resolved if resolution else [],
+            countries=geo,
+            dataset_codes=datasets,
+            project_codes=projects,
+            expand_bins=True,
+        )
+        if query.is_empty():
+            if names:
+                return None, resolution, warnings, (
+                    "None of those names are in this snapshot.")
+            return None, resolution, warnings, (
+                "Type a taxon name, or a dataset or project code.")
+        return query, resolution, warnings, ""
+
+    def estimate(self, taxa_text: str = "", countries_text: str = "",
+                 continents: list[str] | None = None, dataset_text: str = "",
+                 project_text: str = "") -> dict:
+        """Size the search without fetching a single record.
+
+        Counts only -- this is the pre-check the whole design rests on, and it
+        costs a fraction of a second even for an order of two million records.
+        """
+        query, resolution, warnings, error = self._build(
+            taxa_text, countries_text, continents or [], dataset_text, project_text)
+        if query is None:
+            return {"error": error, "warnings": warnings}
+        counts = estimate_search(self.store, query)
+        counts["warnings"] = warnings
+        counts["error"] = ""
+        counts["resolved"] = [f"{t.name} ({t.rank})" for t in query.taxa]
+        counts["countries"] = len(query.countries)
+        counts["over_limit"] = (
+            counts["expanded_records"] > DOWNLOAD_LIMITS["MAX_RECORDS"]
+            or counts["seed_bins"] > DOWNLOAD_LIMITS["MAX_BINS"])
+        return counts
+
+    def run_search(self, taxa_text: str = "", countries_text: str = "",
+                   continents: list[str] | None = None, dataset_text: str = "",
+                   project_text: str = "") -> str:
+        """Plan a search from the form. Returns a human-readable status line."""
+        query, resolution, warnings, error = self._build(
+            taxa_text, countries_text, continents or [], dataset_text, project_text)
+        if query is None:
+            self.search = None
+            return error
+
+        plan = plan_search(self.store, query)
         if plan.expanded_records > ANALYSIS_LIMIT:
             warnings.append(
                 f"{plan.expanded_records:,} records: the specimen table works, "
@@ -152,11 +237,14 @@ class AppState:
                 f"{plan.expanded_records:,} records: the summary screens will "
                 "take a few seconds the first time.")
 
+        label = ", ".join(t.name for t in query.taxa) or "dataset/project codes"
+        if query.countries:
+            label += f" · {len(query.countries)} countries"
         self.search = SearchState(
             plan=plan,
             table=SpecimenTable(self.store, plan, page_size=self.page_size,
                                 annotations=self.annotations, user=self.user),
-            query_label=", ".join(t.name for t in resolution.resolved),
+            query_label=label,
             warnings=warnings,
         )
         return (f"{plan.expanded_records:,} records "

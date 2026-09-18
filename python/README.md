@@ -383,7 +383,7 @@ happens below it.
 
 | Screen | What it is | Cost |
 |---|---|---|
-| Data Input | taxa, then search | instant |
+| Data Input | taxa, countries, continents, dataset and project codes, and a size pre-check | instant |
 | Species | one row per species: counts, BINs, grade, countries, mean quality | whole-result |
 | BINs | total / concordant / discordant / shared, then the BIN table | whole-result |
 | BAGS A–E | one screen per grade, split into groups | whole-result |
@@ -420,6 +420,23 @@ records**. Grade E here is graded against the whole snapshot, so a BIN can be
 genuinely shared while the other species is absent from this search — dropping
 those would hide the records the grade exists to flag. They are kept, and the
 group says why it looks innocent.
+
+### Data Input, and the pre-check
+
+Taxa (one per line, synonyms after commas), countries, continent tick-boxes,
+and dataset/project codes — parsed exactly as the CLI parses them, so the two
+cannot drift. **Check size** runs `estimate_search` and reports matching
+records, BINs, and the count after BIN expansion **without fetching a single
+record**; that is the pre-check the whole design rests on, and it costs a
+fraction of a second even for an order of two million.
+
+Two behaviours are easy to get backwards and are stated on the screen itself:
+
+- continents and countries are a **union**, not an intersection — ticking
+  Europe *and* typing Canada gives you both;
+- the geographic filter applies to the records your taxa match, and **BIN
+  expansion deliberately reaches past it** — records sharing those BINs are
+  pulled in wherever they are from, which is what gives a BIN its full context.
 
 ### The size policy
 
