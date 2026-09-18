@@ -379,6 +379,57 @@ worst case is 250,000 rows.
 grid does row selection and virtualises its own DOM; everything expensive
 happens below it.
 
+### The six screens
+
+| Screen | What it is | Cost |
+|---|---|---|
+| Data Input | taxa, then search | instant |
+| Species | one row per species: counts, BINs, grade, countries, mean quality | whole-result |
+| BINs | total / concordant / discordant / shared, then the BIN table | whole-result |
+| BAGS A–E | one screen per grade, split into groups | whole-result |
+| Specimens | every record, paged | any size |
+
+**The BAGS screens are the point of the app**, and they are group navigators
+rather than one long table. Grade C means "this species is split across more
+than one BIN" and grade E means "this BIN holds more than one species" — in
+both, the unit of work is a single species-BIN problem, and a flat table of
+every grade-C record mixes dozens of unrelated problems together. So:
+
+| Grade | One group per | Caption |
+|---|---|---|
+| A, B, D | species | `Species: X (>10 specimens, single BIN)` |
+| **C** | species × BIN | `Species: X — BIN: Y` |
+| **E** | shared BIN | `Shared BIN: Y (2 species)` |
+
+**E and C are marked in the navigation** and say "work here first" on the
+banner, because they are the grades where the barcode and the name disagree.
+The screen shows a list of problems beside one problem's specimens, with
+Previous/Next to walk through them, and "Select this group" **replaces** the
+selection rather than adding to it — otherwise annotating the second problem
+would silently re-annotate the first.
+
+Non-species-level records ride along by BIN membership. A record identified
+only to genus carries no BAGS grade of its own, but if it sits in a grade-E BIN
+it is part of the problem: it may be the misidentification, or the evidence the
+BIN is fine. Ported from `organize_grade_specimens`
+(`mod_bags_grading_utils.R:32-149`).
+
+One divergence from the R app, and it is deliberate. R keeps a shared-BIN group
+only when more than one species-level name appears **in the downloaded
+records**. Grade E here is graded against the whole snapshot, so a BIN can be
+genuinely shared while the other species is absent from this search — dropping
+those would hide the records the grade exists to flag. They are kept, and the
+group says why it looks innocent.
+
+### The size policy
+
+The specimen table is paged and works at any size. The species, BIN and BAGS
+screens are whole-result aggregates — a species' specimen count is a fact about
+every record in the result, so there is no paging around it. They are computed
+**lazily and once**, on first use, and refused above `DOWNLOAD_LIMITS`
+`MAX_RECORDS` with an explanation rather than attempted and survived. Searching
+stays instant either way.
+
 ### Drive the UI in a browser before believing it
 
 ```sh
@@ -387,13 +438,24 @@ pip install playwright && playwright install chromium
 python tools/drive_ui.py --out /tmp/shots
 ```
 
-Not optional colour. Two controls in this spike — the descending toggle and the
-rows-per-page select — rendered perfectly, accepted clicks and **did nothing**,
-because their inputs were read inside `reactive.isolate()` and so took no
-reactive dependency. Every unit test passed. Both were obvious on the first
-click, and a third of the same family (a pager that kept reporting the old page
-count) surfaced on the next run. `tools/drive_ui.py` now checks all of it and
-exits non-zero on failure.
+Not optional colour. Every UI bug so far has been invisible to the unit tests
+and obvious on the first click:
+
+- the descending toggle and the rows-per-page select rendered perfectly,
+  accepted clicks and **did nothing** — their inputs were read inside
+  `reactive.isolate()`, so the effects took no reactive dependency on them;
+- the pager kept reporting the old page count, for the same reason;
+- every specimen table holding a BIN-less record rendered as *"boolean value of
+  NA is ambiguous"* — `value != value` catches float NaN but **raises** on
+  `pd.NA`, which is what `process_specimen_data` blanks `bin_uri` to;
+- the specimen table silently ignored its own column list, because the renderer
+  re-filtered to the BAGS layout.
+
+`tools/drive_ui.py` checks fourteen things across all six screens and exits
+non-zero. A note on writing checks for it: match against the **table**, not the
+panel. The annotation toolbar holds a flag `<select>` whose options include
+every flag name, so `"synonym" in panel.inner_text()` passes for an annotation
+that never rendered — a false pass that took a round to notice.
 
 ## Testing
 
@@ -450,7 +512,7 @@ src/boldcurator/
   config/     scoring criteria, rank ladder, continents, limits
   data/       snapshot schema, connection handling, queries
   core/       species rule, scoring, ranking, BAGS, BINs, selection,
-              pipeline, and the paged table the GUI renders
+              pipeline, the paged table, the BAGS grouping, the summaries
   io/         exports and session persistence
   build/      snapshot builder and verifier
   ui/         Shiny app — the ONLY place a GUI framework is imported

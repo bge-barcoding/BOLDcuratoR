@@ -3,14 +3,15 @@
 Branch: `claude/intelligent-dijkstra-g66cbr`. Plan:
 [`../docs/python-app-plan.md`](../docs/python-app-plan.md).
 
-**State: Phases 0–2 complete and fast; Phase 3.1 done — Shiny for Python
-carries the specimen table. 187 tests pass, the parity gate is green.**
+**State: Phases 0–2 complete and fast; Phase 3 has all six screens — species,
+BINs, the five BAGS grades and the paged specimen table. 212 tests pass, the
+parity gate is green.**
 
 Run everything from `python/`:
 
 ```sh
 pip install -e ".[dev]"
-python -m pytest tests/ -q      # 187 passing
+python -m pytest tests/ -q      # 212 passing
 python parity/compare.py        # exit 1 on any unexplained R-vs-Python difference
 ```
 
@@ -227,32 +228,90 @@ pip install playwright && playwright install chromium
 python tools/drive_ui.py --out /tmp/shots
 ```
 
-Two controls in this spike -- the descending toggle and the rows-per-page
-select -- rendered perfectly, accepted clicks and **did nothing**. Their inputs
-were read inside `reactive.isolate()`, so the effects took no reactive
-dependency on them. All 187 tests passed. Both were obvious on the first click,
-and a third of the same family (a pager still reporting the old page count)
-appeared on the next run.
+**Every UI bug so far has been invisible to the unit tests and obvious on the
+first click:**
 
-**The rule that follows: in a Shiny effect, read every input you want to react
-to OUTSIDE `reactive.isolate()`.** Isolate only the writes. And run
-`tools/drive_ui.py` before believing any UI change works -- it checks ten
-things and exits non-zero.
+* the descending toggle and the rows-per-page select rendered perfectly,
+  accepted clicks and did nothing -- their inputs were read inside
+  `reactive.isolate()`, so the effects took no reactive dependency on them;
+* the pager kept reporting the old page count, same cause;
+* every specimen table holding a BIN-less record rendered as *"boolean value of
+  NA is ambiguous"* -- `value != value` catches float NaN but **raises** on
+  `pd.NA`, which is what `process_specimen_data` blanks `bin_uri` to;
+* the specimen table silently ignored its own column list, because the renderer
+  re-filtered to the BAGS layout.
 
-### Next, in order
+**Two rules follow.** In a Shiny effect, read every input you want to react to
+OUTSIDE `reactive.isolate()` and isolate only the writes. And when writing a
+check for `drive_ui.py`, match against the **table**, not the panel: the
+annotation toolbar holds a flag `<select>` whose options include every flag
+name, so `"synonym" in panel.inner_text()` passes for an annotation that never
+rendered. That false pass cost a round.
 
-- **3.2 shell** — snapshot status bar is already in the spike; add name/email
-  for annotation attribution.
-- **3.3 Data Input page** — countries, continents, dataset/project codes, and
-  the size-check modal. `plan_search` already returns everything the modal
-  needs before anything is materialised.
-- **3.4-3.6 species / BIN / BAGS tabs** — these need whole-result aggregates,
-  not pages, so each needs a size policy of its own. `analyse_bins` and
-  `calculate_bags_grades` are 0.48 s and 0.94 s at 88,000 rows, so a cap
-  somewhere near `WARN_RECORDS` is the obvious starting point.
-- **3.7 specimen table** — mostly done; the six download buttons are not wired.
+Run `tools/drive_ui.py` before believing any UI change works. It checks
+fourteen things across all six screens and exits non-zero.
+
+## Phase 3.2-3.6 — the six screens are in
+
+Data Input, Species, BINs, BAGS A-E, Specimens. `tools/drive_ui.py` checks
+fourteen things across all of them in a real browser and exits non-zero.
+
+### The BAGS screens, and why they are navigators
+
+**Each problem is kept separate, which is the whole point.** Grade C is "this
+species is split across more than one BIN"; grade E is "this BIN holds more
+than one species". In both the unit of work is a single species-BIN problem, so
+a flat table of every grade-C record mixes dozens of unrelated problems.
+
+| Grade | One group per | Caption |
+|---|---|---|
+| A, B, D | species | `Species: X (>10 specimens, single BIN)` |
+| **C** | species x BIN | `Species: X - BIN: Y` |
+| **E** | shared BIN | `Shared BIN: Y (2 species)` |
+
+**E and C are marked in the navigation** and their banners say "work here
+first". The screen shows the list of problems beside one problem's specimens,
+with Previous/Next to walk through them.
+
+The R app renders every group as a collapsed accordion. A navigator is used
+instead because it is what "one problem at a time" actually looks like, and
+because a grade with several hundred groups would otherwise put several
+hundred tables in the DOM at once.
+
+**"Select this group" replaces the selection rather than adding to it.** "Apply
+to selection" acts on whatever is selected, so an accumulating selection would
+mean annotating the second problem silently re-annotates the first.
+
+Non-species-level records ride along by BIN membership -- a genus-only record
+in a grade-E BIN may be the misidentification, or the evidence the BIN is fine.
+
+**One deliberate divergence from R.** R keeps a shared-BIN group only when more
+than one species-level name appears *in the downloaded records*. Grade E here
+grades against the whole snapshot, so a BIN can be genuinely shared while the
+other species is absent from the search. Dropping those hides the records the
+grade exists to flag, so they are kept and the group says why it looks
+innocent.
+
+### The size policy, which is the thing to get right
+
+The specimen table is paged and works at any size. The species, BIN and BAGS
+screens are whole-result aggregates and cannot be paged -- a species' specimen
+count is a fact about every record. They are computed **lazily and once**, on
+first use, and refused above `MAX_RECORDS` with an explanation rather than
+attempted and survived. Searching stays instant either way.
+`core/pipeline.analyse_plan` is the entry point: everything after planning,
+for a caller that already holds a plan.
+
+### Next
+
+- **3.3 Data Input** — countries, continents and dataset/project codes are not
+  wired into the search box yet; only taxa are. The size-check modal can use
+  `plan_search`, which already returns the counts before anything is fetched.
+- **3.7 downloads** — the six export buttons. `io/exports.py` has all seven
+  formats already; they need placing on the screens.
 - **3.8 session save/resume** — `io/session.py` exists; warn if the snapshot id
-  changed.
+  changed, since BIN membership and identifications may have.
+- **Gap analysis** (plan 3.4) — `perform_gap_analysis` is not ported yet.
 
 ## Findings from the real build, worth acting on
 
@@ -316,11 +375,14 @@ surfacing in the UI rather than letting a curator assume otherwise.
 ### Phase 3 — GUI
 - [x] 3.1 spike — **Shiny for Python carries it**; paging is flat at ~47 ms
 - [x] `core/table.py` — paged, sortable, selectable, bulk-annotatable
+- [x] `core/grouping.py` — BAGS split into one group per problem
+- [x] `core/summaries.py` — the species checklist
 - [x] `tools/drive_ui.py` — browser checks, because unit tests missed dead controls
-- [ ] 3.2 shell (status bar done; name/email for attribution not)
-- [ ] 3.3 Data Input page — countries, continents, codes, size-check modal
-- [ ] 3.4 species focus  [ ] 3.5 BIN focus  [ ] 3.6 BAGS A–E
-- [ ] 3.7 specimen table download buttons
+- [x] 3.2 shell — snapshot bar, name for annotation attribution
+- [x] 3.4 species checklist  [x] 3.5 BIN dashboard  [x] 3.6 BAGS A–E
+- [ ] 3.3 Data Input — countries, continents, codes, size-check modal
+- [ ] 3.4 gap analysis against the taxa typed in
+- [ ] 3.7 the six download buttons
 - [ ] 3.8 session save/resume
 
 ### Phases 4–5 — packaging and distribution

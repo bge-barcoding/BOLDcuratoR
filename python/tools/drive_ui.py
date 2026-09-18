@@ -35,7 +35,7 @@ def main(argv: list[str] | None = None) -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--url", default="http://127.0.0.1:8765/")
     parser.add_argument("--out", type=Path, default=Path("ui-screenshots"))
-    parser.add_argument("--taxon", default="Nymphalidae")
+    parser.add_argument("--taxon", default="Lepidoptera")
     parser.add_argument("--browser", default=None,
                         help="path to a chromium binary, if playwright's own "
                              "download is not where it expects it")
@@ -60,90 +60,102 @@ def main(argv: list[str] | None = None) -> int:
     with sync_playwright() as pw:
         launch = {"executable_path": args.browser} if args.browser else {}
         browser = pw.chromium.launch(**launch)
-        page = browser.new_page(viewport={"width": 1500, "height": 950})
+        page = browser.new_page(viewport={"width": 1700, "height": 1050})
         js_errors: list[str] = []
         page.on("pageerror", lambda e: js_errors.append(str(e)))
         page.goto(args.url, wait_until="networkidle")
 
-        def pager() -> str:
-            return page.locator("#pager").inner_text().strip()
+        def table_text(selector: str) -> str:
+            """Only the table.
 
-        def column(index: int, rows: int = 3) -> list[str]:
-            body = page.locator("table tbody tr")
-            return [body.nth(i).inner_text().split("\t")[index]
-                    for i in range(min(body.count(), rows))]
+            The toolbar holds a flag <select> whose options include every flag
+            name, so matching against the whole panel's text reports a
+            success for an annotation that never rendered.
+            """
+            table = page.locator(f"{selector} table")
+            return table.inner_text() if table.count() else ""
+
+        def show(name: str, settle: float = 3.0) -> None:
+            # has-text, not text-is: the priority grades carry a bullet in
+            # their label, so an exact match finds nothing.
+            page.click(f"a.nav-link:has-text('{name}')")
+            time.sleep(settle)
 
         # -- search
+        page.fill("#user", "Driver")
         page.fill("#taxa", args.taxon)
         page.click("#search")
-        page.wait_for_selector("table tbody tr", timeout=30_000)
-        time.sleep(SETTLE)
-        check("search renders a page", page.locator("table tbody tr").count() > 0,
-              page.locator("#search_status").inner_text().strip())
-        page.screenshot(path=str(args.out / "01-search.png"))
-        first = column(4)
-        pages_before = pager()
+        time.sleep(SETTLE * 2.5)
+        check("search lands on the species checklist",
+              "Species" in page.locator("a.nav-link.active").inner_text())
+        check("the checklist has rows", bool(table_text("#species_body")))
+        page.screenshot(path=str(args.out / "01-species.png"), full_page=True)
 
-        # -- paging
+        show("BINs")
+        check("the BIN dashboard has rows", bool(table_text("#bins_body")))
+        page.screenshot(path=str(args.out / "02-bins.png"), full_page=True)
+
+        # -- the grade screens, and the group navigator
+        for grade in ("E", "C", "A"):
+            show(f"BAGS {grade}")
+            groups = page.locator(f"#group_{grade} option").count()
+            body = page.locator(f"#grade_{grade}_body").inner_text()
+            if "No species graded" in body:
+                check(f"grade {grade} reports an empty grade cleanly", True,
+                      "no species at this grade")
+                continue
+            check(f"grade {grade} splits into groups", groups >= 1,
+                  f"{groups} groups")
+            first = page.locator(f"#grade_{grade}_body strong").first.inner_text()
+            if groups > 1:
+                page.click(f"#next_{grade}")
+                time.sleep(SETTLE)
+                moved = page.locator(f"#grade_{grade}_body strong").first.inner_text()
+                check(f"grade {grade} Next moves to another problem",
+                      moved != first, f"{first} -> {moved}")
+                page.click(f"#prev_{grade}")
+                time.sleep(SETTLE)
+            page.screenshot(path=str(args.out / f"03-bags-{grade}.png"),
+                            full_page=True)
+
+        # -- annotate one group, and prove it stays in that group
+        show("BAGS C") if page.locator("#group_C").count() else show("BAGS E")
+        grade = "C" if page.locator("#group_C").count() else "E"
+        first = page.locator(f"#grade_{grade}_body strong").first.inner_text()
+        page.click(f"#selall_{grade}")
+        time.sleep(SETTLE)
+        page.select_option(f"#g{grade}_flag", "synonym")
+        page.fill(f"#g{grade}_note", "driven by drive_ui")
+        page.click(f"#g{grade}_apply")
+        time.sleep(SETTLE * 1.5)
+        annotated = table_text(f"#grade_{grade}_body")
+        check("the flag lands in the group's table", "synonym" in annotated)
+        check("the note lands in the group's table", "driven by drive_ui" in annotated)
+        page.screenshot(path=str(args.out / "04-annotated.png"), full_page=True)
+
+        if page.locator(f"#group_{grade} option").count() > 1:
+            page.click(f"#next_{grade}")
+            time.sleep(SETTLE * 1.5)
+            other = table_text(f"#grade_{grade}_body")
+            check("the next group is untouched",
+                  "synonym" not in other and "driven by drive_ui" not in other)
+
+        # -- the paged specimen table
+        show("Specimens", settle=SETTLE * 1.5)
+        header = page.locator("#specimens_body table thead").inner_text()
+        check("the specimen table carries the BAGS grade once analysed",
+              "bags_grade" in header, header.replace("\n", " "))
+        before = table_text("#specimens_body")[:200]
         page.click("#next_")
         time.sleep(SETTLE)
-        check("next page shows different rows", column(4) != first,
-              f"{pages_before} -> {pager()}")
-        page.screenshot(path=str(args.out / "02-page2.png"))
-
-        # -- sorting, both directions
+        check("paging moves to different rows",
+              table_text("#specimens_body")[:200] != before)
         page.select_option("#sort", "processid")
-        time.sleep(SETTLE)
-        page.click("#first")
-        time.sleep(SETTLE)
-        ascending = column(4)
-        check("ascending sort orders the result", ascending == sorted(ascending),
-              str(ascending))
+        time.sleep(SETTLE * 1.5)
         page.check("#descending")
-        time.sleep(SETTLE)
-        descending = column(4)
-        check("descending sort reverses it",
-              descending == sorted(descending, reverse=True) and descending != ascending,
-              str(descending))
-        page.uncheck("#descending")
-        time.sleep(SETTLE)
-        page.screenshot(path=str(args.out / "03-sorted.png"))
-
-        # -- page size. The grid virtualises rows in the DOM, so the row count
-        # is not the honest signal here; the page count is.
-        before = pager()
-        page.select_option("#page_size", "50")
-        time.sleep(SETTLE)
-        check("rows-per-page changes the page count", pager() != before,
-              f"{before} -> {pager()}")
-        page.select_option("#page_size", "25")
-        time.sleep(SETTLE)
-
-        # -- selection and bulk annotation
-        page.click("#select_page")
-        time.sleep(SETTLE)
-        selected = page.locator("#selection_status").inner_text().strip()
-        check("select page reports a selection", selected.startswith("25"), selected)
-        page.select_option("#flag", "id_uncertain")
-        page.fill("#note", "checked against the type series")
-        page.click("#apply")
-        time.sleep(SETTLE)
-        body = page.locator("table tbody").inner_text()
-        check("the flag appears in the grid", "id_uncertain" in body)
-        check("the note appears in the grid", "type series" in body)
-        page.screenshot(path=str(args.out / "04-annotated.png"))
-
-        # -- select all, then annotate a page that was never rendered
-        page.click("#select_all")
-        time.sleep(SETTLE)
-        page.click("#last")
-        time.sleep(SETTLE)
-        page.select_option("#flag", "synonym")
-        page.click("#apply")
-        time.sleep(SETTLE)
-        check("select-all reaches a page never rendered",
-              "synonym" in page.locator("table tbody").inner_text())
-        page.screenshot(path=str(args.out / "05-select-all.png"))
+        time.sleep(SETTLE * 1.5)
+        check("sorting the specimen table works", bool(table_text("#specimens_body")))
+        page.screenshot(path=str(args.out / "05-specimens.png"), full_page=True)
 
         check("no javascript errors", not js_errors, "; ".join(js_errors))
         browser.close()

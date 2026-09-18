@@ -81,11 +81,18 @@ def build_rows(n: int, rng: random.Random) -> list[list[str]]:
         taxon = rng.choice(TAXA)
         kingdom, phylum, klass, order, family, subfamily, tribe, genus, species = taxon
 
-        # Roughly one BIN per species, but deliberately make one BIN hold two
-        # species so BAGS grade E and BIN discordance have something to find.
+        # Roughly one BIN per species, with two deliberate exceptions so that
+        # every BAGS grade has something to find:
+        #   * Danaus chrysippus shares a BIN with D. plexippus -> grade E, and
+        #     a discordant BIN.
+        #   * Pieris rapae is split across two BINs -> grade C. Without this
+        #     the fixture graded nothing C, so the whole grade-C path -- the
+        #     one curators spend most of their time in -- went untested.
         bin_idx = TAXA.index(taxon)
-        if species in ("Danaus chrysippus",):
-            bin_idx = 0  # shares a BIN with Danaus plexippus
+        if species == "Danaus chrysippus":
+            bin_idx = 0                      # shares with Danaus plexippus
+        elif species == "Pieris rapae" and rng.random() < 0.4:
+            bin_idx = 90                     # a second BIN for the same species
         bin_uri = f"BOLD:AAA{1000 + bin_idx}" if rng.random() > 0.08 else ""
 
         # A minority are genus-level or otherwise unidentified.

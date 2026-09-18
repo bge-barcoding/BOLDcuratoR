@@ -253,6 +253,33 @@ def run_search(
             "Scoring and the results table will be slow."
         )
 
+    return analyse_plan(
+        store, plan,
+        resolution=resolution, taxonomy_groups=groups, missing_codes=missing,
+        geographic_filter=geo, warnings=warnings, limit=limit,
+        auto_select=auto_select,
+    )
+
+
+def analyse_plan(
+    store: SnapshotStore,
+    plan,
+    *,
+    resolution: Resolution | None = None,
+    taxonomy_groups: list[list[str]] | None = None,
+    missing_codes: list[str] | None = None,
+    geographic_filter: list[str] | None = None,
+    warnings: list[str] | None = None,
+    limit: int | None = None,
+    auto_select: bool = True,
+) -> SearchResult:
+    """Everything after planning: fetch, score, grade, analyse, auto-select.
+
+    Split out of :func:`run_search` so a caller that already holds a plan --
+    the GUI, which plans once and pages the specimen table off the same plan --
+    can compute the whole-result summaries without re-resolving the search.
+    """
+    warnings = list(warnings or [])
     frame = fetch_planned(store, plan, limit=limit)
     frame = process_specimen_data(frame)
     frame = score_and_rank(frame)
@@ -286,11 +313,11 @@ def run_search(
         bags_grades=grades,
         bin_analysis=analysis,
         selections=selections,
-        resolution=resolution,
-        estimate=estimate,
-        taxonomy_groups=groups,
-        missing_codes=missing,
-        geographic_filter=geo,
+        resolution=resolution if resolution is not None else Resolution(),
+        estimate=plan.as_estimate(),
+        taxonomy_groups=list(taxonomy_groups or []),
+        missing_codes=list(missing_codes or []),
+        geographic_filter=list(geographic_filter or []),
         snapshot_id=store.info().snapshot_id,
         warnings=warnings,
     )
