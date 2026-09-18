@@ -419,7 +419,13 @@ immediately against a synthetic fixture.
 - [x] 2.5 `parity/compare.py` — row-by-row diff of `quality_score`, `criteria_met`, `rank`, BAGS grade, BIN concordance, auto-selection. **Every difference must be explained by a decision in this plan** (the unified species rule, the `HAS_IMAGE` removal, global grade E); anything unexplained is a bug. Output `parity/REPORT.md`.
 - [ ] 2.6 CI workflow running the Python tests and the parity harness on Linux/macOS/Windows.
 
-**Gate: do not start Phase 3 until `parity/REPORT.md` is clean.**
+**Gate 1: do not start Phase 3 until `parity/REPORT.md` is clean.** Met
+2026-09-18.
+
+**Gate 2: do not start Phase 3 until the benchmark against the real snapshot is
+acceptable.** Not met as of 2026-09-18 — a 183-record search took 13.7 s. Two
+bugs are fixed and await re-measurement; BIN expansion remains a full table
+scan. See `python/PROGRESS.md`.
 
 ### Phase 3 — GUI
 

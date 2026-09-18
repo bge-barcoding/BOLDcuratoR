@@ -247,7 +247,21 @@ def run_search(
     frame = process_specimen_data(frame)
     frame = score_and_rank(frame)
 
-    bin_species = store.connection.execute("SELECT * FROM bin_species").df()
+    # Only the BINs this result actually touches. Loading the whole
+    # bin_species table cost seconds and gigabytes on EVERY search, however
+    # small -- it dominated a 183-record search in the 2026-09-11 benchmark.
+    # bin_species is sorted by bin_uri, so an IN predicate prunes well.
+    result_bins = sorted({
+        b for b in to_text(column_or_missing(frame, "bin_uri")).str.strip() if b
+    })
+    if result_bins:
+        placeholders = ", ".join("?" for _ in result_bins)
+        bin_species = store.connection.execute(
+            f"SELECT * FROM bin_species WHERE bin_uri IN ({placeholders})",
+            result_bins,
+        ).df()
+    else:
+        bin_species = None
     grades = bags.calculate_bags_grades(frame, bin_species=bin_species)
     if len(grades):
         frame = frame.merge(

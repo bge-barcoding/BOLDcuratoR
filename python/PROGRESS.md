@@ -38,27 +38,73 @@ levers are closed.
 
 ---
 
-## Next task: qualify the snapshot, then build the GUI
+## Next task: performance, THEN the GUI
 
-Everything verified so far is *correctness* — 152 tests against a generated
-fixture, plus the R parity harness over a 115-row fixture. **Nothing has run
-against the real 20 M-record snapshot**, so the central claim (BIN expansion as
-one sub-second query) is unmeasured, and `DOWNLOAD_LIMITS` was set from
-guesswork.
+The snapshot was benchmarked on 2026-09-18 (full table in `README.md`). The
+result: **taxon resolve and the size pre-check are excellent; everything after
+them was too slow, and the GUI should not start until that is resolved.** A
+13.7-second wait for a 183-record search is not a usable app.
+
+### Fixed this session, but UNMEASURED against real data
+
+Both were outright bugs, found only because the benchmark existed:
+
+1. **`SELECT * FROM bin_species` on every search** (`core/pipeline.py`) — the
+   whole table into pandas regardless of result size, dominating a 183-record
+   search. Now fetches only the BINs the result touches, which prunes well
+   because `bin_species` is sorted by `bin_uri`.
+2. **`ORDER BY` inside `iter_sequences`** (`data/queries.py`) — a blocking sort
+   over a 20 M-row semi-join, so nothing streamed and memory peaked at 15.5 GB
+   fetching 183 sequences. Removed; no caller needs ordered output.
+
+**First task next session: pull and re-run the benchmark.** These two fixes
+should account for most of the pipeline and sequence cost. Do not design
+anything further until the new numbers are in — the point of the last session
+was that guessing at performance is how we got here.
 
 ```powershell
-pip install -e ".[dev]"
 python -m boldcurator.cli benchmark `
     --snapshot "C:\Users\benjp\Downloads\BOLD_Public_11-Sep-2026\bold_snapshot_2026-09-11.duckdb" `
     --export
 ```
 
-Record the output in `README.md` under "Measured build figures". Those numbers
-set the size-check thresholds the GUI must enforce and decide how many rows can
-go in a table at all. **Start Phase 3 once they are in.**
+### Open: BIN expansion is a full table scan
 
-A `SizeLimitExceeded` refusal is reported rather than raised — whether the
-guards suit real data is part of what is being measured.
+~2.7 s floor even for 183 rows, 23.9 s for Lepidoptera. `specimen` is sorted
+taxonomically, so the `bin_uri IN (…)` half of the expansion cannot use zone
+maps and scans all 20 M rows. The taxonomic sort makes the *seed* fast (estimate
+is 0.125 s) but does nothing for the expansion.
+
+It is still ~100x better than the R app's per-50-BIN HTTP loop, so this is a
+"not as good as designed", not a regression.
+
+**If it is still the bottleneck after re-measuring**, the fix is a
+`bin_index(bin_uri, sid)` table sorted by `bin_uri` — the same shape as
+`specimen_recordset`, which already works this way. Expansion then becomes a
+pruned range read on `bin_index` followed by a hash semi-join on an integer
+`sid` column (~160 MB to scan) instead of a 400 MB string column. Cost: ~500 MB
+of snapshot and a rebuild. **The staging file has been deleted, so a rebuild
+means a full 24-minute re-ingest** — which is exactly why this waits for
+evidence rather than being done speculatively.
+
+### Also worth fixing
+
+`search_specimens` has **no size guard** — only `run_search` enforces
+`DOWNLOAD_LIMITS`. That is why `Lepidoptera` materialised 2,095,427 rows (9.8 GB
+RSS) in the benchmark without complaint. Either push the guard down into
+`search_specimens` or make the benchmark opt in explicitly.
+
+### Then: Phase 3, the GUI
+
+Unblocked once the numbers are acceptable. Start with the spike (plan 3.1):
+50,000 rows in a Shiny for Python `DataGrid` with multi-row selection and a
+bulk-annotation toolbar. If it cannot carry it, swap `ui/` to NiceGUI + AG Grid
+— nothing below `ui/` changes, and a test enforces that.
+
+The benchmark also answers a GUI design question directly: `Nymphalidae`
+returns 89,479 rows and `Lepidoptera` 2.1 million. **No table widget should be
+handed those**, so the UI needs server-side paging or a hard display cap from
+the start, driven by the `estimate` pre-check that already runs in 0.1–0.5 s.
 
 ## Findings from the real build, worth acting on
 

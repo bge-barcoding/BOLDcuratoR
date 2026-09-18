@@ -288,10 +288,15 @@ def iter_sequences(
     ids = pd.DataFrame({"processid": list(dict.fromkeys(processids))})
     store.connection.register("_wanted_ids", ids)
     try:
+        # No ORDER BY. A sort is a blocking operator: it materialises the
+        # entire join result before yielding a single row, which defeats the
+        # streaming this function exists for and made the docstring's
+        # "constant memory" false. Fetching 183 sequences took 8.7 s and
+        # pushed RSS to 15.5 GB in the 2026-09-11 benchmark. No caller needs
+        # ordered output -- the FASTA writer looks headers up by processid.
         cursor = store.connection.execute(
             "SELECT q.processid, q.nuc FROM sequence q "
-            "SEMI JOIN _wanted_ids w ON w.processid = q.processid "
-            "ORDER BY q.processid"
+            "SEMI JOIN _wanted_ids w ON w.processid = q.processid"
         )
         while True:
             rows = cursor.fetchmany(chunk_size)

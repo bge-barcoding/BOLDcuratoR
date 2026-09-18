@@ -162,10 +162,50 @@ BIN-only or identified no finer than genus — normal, not a defect. It does mea
 over a four-letter alphabet compresses hard), so the download is comfortable and
 the metadata/sequence split is not needed.
 
-## Testing before the GUI
+## Benchmark — measured 2026-09-18, and the verdict
 
-The build is done. What is *not* yet established is how the query layer behaves
-at 20 M records, and those numbers set the thresholds the UI has to enforce.
+Run against the full 7.95 GB snapshot (20,164,595 records), Windows, 32 GB.
+
+| Step | Seconds | RSS MB | Result |
+|---|---|---|---|
+| open snapshot | 0.016 | 108 | |
+| resolve `Danaus plexippus` | 0.000 | 113 | species, 182 records |
+| estimate `Danaus plexippus` | 0.125 | 354 | seed 182 → 183 expanded |
+| search+expand `Danaus plexippus` | **2.671** | 2894 | 183 rows |
+| resolve `Nymphalidae` | 0.000 | 2896 | family, 87,949 records |
+| estimate `Nymphalidae` | 0.172 | 2925 | seed 87,949 / 5,347 BINs → 89,479 |
+| search+expand `Nymphalidae` | 9.516 | 3180 | 89,479 rows |
+| resolve `Lepidoptera` | 0.016 | 3181 | order, 2,094,602 records |
+| estimate `Lepidoptera` | 0.484 | 3283 | → 2,095,427 expanded |
+| search+expand `Lepidoptera` | 23.891 | 9782 | 2,095,427 rows |
+| full pipeline `Danaus plexippus` | **13.704** | 9614 | 183 records |
+| stream 183 sequences | **8.734** | **15506** | 183 sequences |
+| export all formats | 18.593 | 15541 | 6 files |
+
+**Verdict: resolve and estimate are excellent; the rest was not ready.** Taxon
+resolution is effectively instant (0–16 ms against a 546,861-row lookup) and the
+size pre-check costs 0.1–0.5 s, so a search's cost is known before anything is
+materialised — both design goals met.
+
+Everything after that was too slow, and two causes were outright bugs:
+
+1. **`SELECT * FROM bin_species` ran on every search** — the whole table into
+   pandas regardless of result size. That is most of 13.7 s for a *183-record*
+   search. Now fetches only the BINs the result touches. **Fixed.**
+2. **`iter_sequences` had an `ORDER BY`** on the output of a semi-join over
+   20 M rows. A sort is a blocking operator: it materialises the entire result
+   before yielding a row, which defeats the streaming the function exists for
+   and made its "constant memory" docstring false — 8.7 s and 15.5 GB to fetch
+   183 sequences. No caller needs ordered output. **Fixed.**
+3. **BIN expansion is a full table scan** — ~2.7 s floor, because `specimen` is
+   sorted taxonomically so `bin_uri IN (…)` cannot use zone maps. Still open;
+   see `PROGRESS.md`. It is a ~100× improvement on the R app's HTTP loop but
+   misses the sub-second target.
+
+**Re-run the benchmark after pulling** — the two fixes are unmeasured against
+real data, and the numbers decide whether a schema change is needed.
+
+## Testing before the GUI
 
 ```sh
 pip install -e ".[dev]"
@@ -174,38 +214,26 @@ python -m pytest tests/ -q        # correctness, against a generated fixture
 python parity/compare.py          # R-vs-Python parity; exit 1 on any surprise
 
 # the one that needs the real snapshot
-python -m boldcurator.cli benchmark --snapshot /path/to/bold_snapshot_2026-09-11.duckdb
+python -m boldcurator.cli benchmark --snapshot /path/to/bold_snapshot_2026-09-11.duckdb --export
 ```
 
-`benchmark` times each stage separately — opening the snapshot, taxon resolve,
-the size pre-check, BIN-expanded search at species/family/order scale, the full
-scoring pipeline, sequence streaming and every export format — and reports rows
-and peak RSS alongside. Install `psutil` (`pip install -e ".[bench]"`) for the
-memory column; without it the command still runs and says so.
+`benchmark` times each stage separately and reports rows and peak RSS. Install
+`psutil` (`pip install -e ".[bench]"`) for the memory column; without it the
+command still runs and says so.
 
-What the numbers should show:
+| Measure | Target | 2026-09-18 |
+|---|---|---|
+| taxon resolve | < 1 s | **0.000–0.016 s** ✓ |
+| size pre-check | < 1 s | **0.125–0.484 s** ✓ |
+| BIN-expanded search | sub-second | 2.7 s (183 rows) ✗ |
+| full pipeline, small result | ~1 s | 13.7 s ✗ — fixed, unmeasured |
+| sequence streaming | flat memory | 15.5 GB ✗ — fixed, unmeasured |
 
-| Measure | Target |
-|---|---|
-| taxon resolve | < 1 s |
-| BIN-expanded search | sub-second for the query itself |
-| full pipeline, ~50,000 rows | seconds — the R row loop takes ~75 s |
-| sequence streaming | flat memory regardless of count |
-
-A `SizeLimitExceeded` refusal is **reported, not raised** — `DOWNLOAD_LIMITS`
-was set from guesswork, and whether it suits real data is one of the things the
-benchmark measures. `--no-limits` pushes past it deliberately.
-
-Useful variations:
-
-```sh
-# a specific clade, and time the exports too
-python -m boldcurator.cli benchmark --snapshot <file> --taxon Carabidae --export
-
-# one ad-hoc search end to end
-python -m boldcurator.cli search --snapshot <file> \
-    --taxa "Nymphalidae" --continent Europe --out ./results
-```
+A `SizeLimitExceeded` refusal is **reported, not raised**. Note `Lepidoptera`
+did *not* trip the guard: 2,095,427 expanded records against a `MAX_RECORDS` of
+250,000, because `--no-limits` is off only for `run_search` — the raw
+`search_specimens` path the benchmark uses has no guard. That is worth
+revisiting.
 
 ## Testing without the real package
 
