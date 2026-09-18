@@ -31,14 +31,22 @@ class SnapshotInfo:
     marker_filter: str
     sequences_included: bool
     built_at: str
+    partial_build: bool = False
+    row_limit: str = ""
 
     def describe(self) -> str:
         marker = self.marker_filter or "all markers"
         seq = "with sequences" if self.sequences_included else "no sequences"
-        return (
+        text = (
             f"snapshot {self.snapshot_id} -- {self.row_count:,} records "
             f"({marker}, {seq}), {self.bin_count:,} BINs, built {self.built_at}"
         )
+        if self.partial_build:
+            text += (
+                f"\n  PARTIAL BUILD (--limit {self.row_limit or '?'}) -- a trial "
+                "artefact, not a complete snapshot. Do not use for curation."
+            )
+        return text
 
 
 class SnapshotStore:
@@ -119,6 +127,8 @@ class SnapshotStore:
             marker_filter=m.get("marker_filter", ""),
             sequences_included=m.get("sequences_included", "false") == "true",
             built_at=m.get("built_at", ""),
+            partial_build=m.get("partial_build", "false") == "true",
+            row_limit=m.get("row_limit", ""),
         )
 
     @property

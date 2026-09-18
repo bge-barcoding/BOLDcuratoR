@@ -16,17 +16,48 @@ GUI yet — that is Phase 3, gated on the R-vs-Python parity harness passing.
 ## Building a snapshot
 
 You need the BOLD public data package (`BOLD_Public.<date>.tsv.gz`, ~3 GB
-compressed, login-gated at
-`bench.boldsystems.org/index.php/datapackage`).
+compressed, login-gated at `bench.boldsystems.org/index.php/datapackage`).
+Either the `.gz` or the extracted `.tsv` works; the extracted one ingests 3-4x
+faster, because a gzip stream cannot be read in parallel.
+
+### 1. Check the columns first (seconds)
+
+```sh
+python tools/build_snapshot.py --tsv /path/to/BOLD_Public.2026-09-11.tsv --dry-run
+```
+
+This reads only the header and reports what would be kept, what is absent, and
+whether a build would run at all. It costs a fraction of a second even on a
+30 GB file, so run it before committing to an hour of ingest. Exit status is 1
+if a required column is missing.
+
+### 2. Trial build (optional, minutes)
+
+```sh
+python tools/build_snapshot.py --tsv <file> --out trial.duckdb --limit 100000
+python tools/verify_snapshot.py --snapshot trial.duckdb
+```
+
+`--limit` stops after N rows. The result is recorded in the snapshot as a
+**partial build**, so `verify` and `boldcurator info` both say so and it cannot
+quietly be mistaken for the real thing. Verification passes with warnings --
+reference taxa that a partial or taxonomically scoped snapshot legitimately
+lacks are warnings, not failures.
+
+### 3. Full build (30-60 minutes)
 
 ```sh
 python tools/build_snapshot.py \
-    --tsv /path/to/BOLD_Public.2026-09-01.tsv.gz \
-    --out /path/to/bold_snapshot_2026-09-01.duckdb \
+    --tsv /path/to/BOLD_Public.2026-09-11.tsv \
+    --out /path/to/bold_snapshot_2026-09-11.duckdb \
     --temp-dir /path/to/fast/local/scratch
 
-python tools/verify_snapshot.py --snapshot /path/to/bold_snapshot_2026-09-01.duckdb
+python tools/verify_snapshot.py --snapshot /path/to/bold_snapshot_2026-09-11.duckdb
 ```
+
+> **On Windows / PowerShell**, quote each path and close every quote. An
+> unclosed quote makes PowerShell wait silently for more input (the `>>`
+> prompt) rather than run anything, which looks exactly like a hang.
 
 Defaults keep **COI-5P only, with sequences**. BIN, BAGS and the 500 bp
 `SEQ_QUALITY` threshold all assume COI-5P, so other markers add size without
@@ -37,14 +68,15 @@ Useful options:
 
 | Option | Why |
 |---|---|
+| `--dry-run` | Header check only; no output file. Run this first |
+| `--limit N` | Stop after N rows. Marks the result as a partial build |
 | `--memory-limit`, `--threads` | `8GB` / `4` suits a 16 GB box; drop to `6GB` / `2` if it is also doing other work |
-| `--temp-dir` | Put DuckDB's scratch on **local** disk — expect ~35 GB peak. On network storage the build takes 3–5× longer |
-| `--limit N` | Stop after N rows, to test the pipeline without a full build |
+| `--temp-dir` | Put DuckDB's scratch on **local** disk -- expect ~35 GB peak. On network storage the build takes 3-5x longer |
 | `--no-hash` | Skip the source sha256, saving one pass over the file |
+| `--no-progress` | Suppress DuckDB's progress bar |
 
-Expect roughly 30–60 min, ~11 GB peak RSS and ~60 GB free disk on 16 GB /
-8 vCPU / NVMe. If the builder has the disk, `gunzip` the package first — a gzip
-stream cannot be read in parallel, so a plain TSV ingests 3–4× faster.
+Expect roughly 30-60 min, ~11 GB peak RSS and ~60 GB free disk on 16 GB /
+8 vCPU / NVMe. The ingest step is the long one and reports progress as it goes.
 
 **Verify from a fresh process before distributing anything.** A leftover
 write-ahead log makes a DuckDB file unopenable read-only, and the process that
