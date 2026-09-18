@@ -2,8 +2,10 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
-build/
-dist/
+# Anchored to the repo root on purpose: an unanchored `build/` also matches
+# src/boldcurator/build/, which is source, not an artefact.
+/build/
+/dist/
 .venv/
 *.duckdb
 *.duckdb.wal
