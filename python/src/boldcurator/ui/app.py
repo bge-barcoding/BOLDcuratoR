@@ -507,57 +507,58 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
                 # species) -- "problem" told a curator neither.
                 unit = "species" if grade in SPECIES_GRADES else "BIN"
                 plural_unit = "species" if unit == "species" else "BINs"
-                return ui.row(
-                    ui.column(4, ui.div(
-                        ui.div(f"{len(groups):,} "
-                               f"{unit if len(groups) == 1 else plural_unit} "
-                               "to work through", class_="small text-muted mb-1"),
+                # The navigator (which problem) sits in one compact row above
+                # the table, not in a sidebar column beside it -- the table is
+                # the thing a curator actually works in, and a fixed-width
+                # sidebar was taking a third of the tab for it permanently,
+                # whatever the screen width. A dropdown loses nothing a tall
+                # listbox had: every problem is still one click away.
+                return ui.div(
+                    ui.div(
+                        ui.tags.span(f"{len(groups):,} "
+                                     f"{unit if len(groups) == 1 else plural_unit} "
+                                     "to work through", class_="small text-muted"),
                         ui.input_select(
                             f"group_{grade}", None,
                             choices={str(i): f"{g.caption}  ({g.specimen_count})"
                                      for i, g in enumerate(groups)},
-                            selected=str(index), size=min(20, max(6, len(groups))),
-                            width="100%"),
-                    )),
-                    ui.column(8, ui.div(
+                            selected=str(index), width="420px"),
+                        ui.input_action_button(f"prev_{grade}", "‹ Previous",
+                                               class_="btn-sm"),
+                        ui.tags.span(f"{index + 1} of {len(groups):,}",
+                                     class_="small text-muted"),
+                        ui.input_action_button(f"next_{grade}", "Next ›",
+                                               class_="btn-sm"),
+                        style="display:flex;align-items:center;gap:10px;"
+                              "flex-wrap:wrap;margin-bottom:8px;",
+                    ),
+                    ui.div(ui.tags.strong(group.caption),
+                           ui.tags.span(f"  ·  {group.specimen_count} specimens",
+                                        class_="text-muted small"),
+                           class_="mb-1"),
+                    ui.div(group.note, class_="alert alert-info py-1 px-2 small")
+                    if group.note else ui.div(),
+                    ui.div(
                         ui.div(
-                            ui.input_action_button(f"prev_{grade}", "‹ Previous",
+                            ui.input_action_button(
+                                f"selall_{grade}", "Check this group",
+                                class_="btn-sm"),
+                            ui.input_action_button(f"clear_{grade}",
+                                                   "Clear checked",
                                                    class_="btn-sm"),
-                            ui.tags.span(f"  {index + 1} of {len(groups):,}  ",
-                                         class_="small text-muted"),
-                            ui.input_action_button(f"next_{grade}", "Next ›",
-                                                   class_="btn-sm"),
-                            style="display:flex;align-items:center;gap:8px;"
-                                  "margin-bottom:6px;",
+                            ui.div(f"{len(state.annotations.working):,} "
+                                   "checked",
+                                   class_="small text-muted pt-1"),
+                            style="display:flex;flex-direction:column;gap:4px;",
                         ),
-                        ui.div(ui.tags.strong(group.caption),
-                               ui.tags.span(f"  ·  {group.specimen_count} specimens",
-                                            class_="text-muted small"),
-                               class_="mb-1"),
-                        ui.div(group.note, class_="alert alert-info py-1 px-2 small")
-                        if group.note else ui.div(),
-                        ui.div(
-                            ui.div(
-                                ui.input_action_button(
-                                    f"selall_{grade}", "Check this group",
-                                    class_="btn-sm"),
-                                ui.input_action_button(f"clear_{grade}",
-                                                       "Clear checked",
-                                                       class_="btn-sm"),
-                                ui.div(f"{len(state.annotations.working):,} "
-                                       "checked",
-                                       class_="small text-muted pt-1"),
-                                style="display:flex;flex-direction:column;gap:4px;",
-                            ),
-                            *_annotation_controls(f"g{grade}"),
-                            style="display:flex;align-items:end;gap:10px;"
-                                  "flex-wrap:wrap;margin-bottom:10px;padding:8px;"
-                                  "background:#f8f9fa;border:1px solid #dee2e6;"
-                                  "border-radius:5px;",
-                        ),
-                        ui.HTML(_group_html(rows, sort_input="group_sort_click",
-                                            sort_state=group_sort.get())),
-                    )),
+                        *_annotation_controls(f"g{grade}"),
+                        style="display:flex;align-items:end;gap:10px;"
+                              "flex-wrap:wrap;margin-bottom:10px;padding:8px;"
+                              "background:#f8f9fa;border:1px solid #dee2e6;"
+                              "border-radius:5px;",
+                    ),
+                    ui.HTML(_group_html(rows, sort_input="group_sort_click",
+                                        sort_state=group_sort.get())),
                 )
             return _needs_analysis(body)
 
@@ -1028,37 +1029,84 @@ def _escape(value: object) -> str:
 SORT_HEADER_CLASS = "bc-sort-th"
 
 
+#: Pixel width assigned to each frozen column, so its offset from the left
+#: edge (and every later frozen column's) can be computed without a browser
+#: -- the annotation columns a curator's eye and mouse live in while everything
+#: else scrolls out from under them.
+STICKY_COLUMN_WIDTHS: dict[str, int] = {
+    "selected": 44, "checked": 44, "flag": 90, "updated_id": 140,
+    "curator_notes": 160,
+}
+
+
+def _sticky_offsets(columns, sticky: frozenset[str]) -> dict[str, tuple[int, int]]:
+    """``column -> (left_offset_px, width_px)`` for the columns to freeze."""
+    offsets: dict[str, tuple[int, int]] = {}
+    running = 0
+    for column in columns:
+        if column in sticky:
+            width = STICKY_COLUMN_WIDTHS.get(column, 120)
+            offsets[column] = (running, width)
+            running += width
+    return offsets
+
+
+def _sticky_style(offset: int, width: int, *, header: bool) -> str:
+    # z-index 3 keeps a frozen header cell above a frozen body cell, which is
+    # itself above a plain cell scrolling underneath both -- otherwise a wide
+    # column's text bleeds through the "frozen" pane while scrolling.
+    top = "top:0;" if header else ""
+    z = 3 if header else 1
+    return (f"position:sticky;left:{offset}px;{top}z-index:{z};background:#fff;"
+            f"width:{width}px;min-width:{width}px;max-width:{width}px;")
+
+
 def _header_cell(column: str, labels: dict[str, str], *, sort_input: str | None,
-                 sortable: frozenset[str], sort_state: tuple[str | None, bool]) -> str:
+                 sortable: frozenset[str], sort_state: tuple[str | None, bool],
+                 sticky: tuple[int, int] | None) -> str:
     label = _escape(labels.get(column, column))
-    if not sort_input or column not in sortable:
+    can_sort = bool(sort_input) and column in sortable
+    style = _sticky_style(*sticky, header=True) if sticky else ""
+    if can_sort:
+        style += "cursor:pointer;user-select:none;"
+    if not style:
         return f"<th>{label}</th>"
-    arrow = ""
-    if sort_state[0] == column:
-        arrow = " ▼" if sort_state[1] else " ▲"
-    return (f"<th class='{SORT_HEADER_CLASS}' data-sort-input='{sort_input}' "
-            f"data-sort-col='{_escape(column)}' "
-            "style='cursor:pointer;user-select:none;' title='Click to sort'>"
-            f"{label}{arrow}</th>")
+    attrs = f" style='{style}'"
+    if can_sort:
+        arrow = " ▼" if sort_state[0] == column and sort_state[1] else \
+                (" ▲" if sort_state[0] == column else "")
+        attrs = (f" class='{SORT_HEADER_CLASS}' data-sort-input='{sort_input}' "
+                f"data-sort-col='{_escape(column)}'{attrs} title='Click to sort'")
+        label += arrow
+    return f"<th{attrs}>{label}</th>"
 
 
 def _table(frame: pd.DataFrame, labels: dict[str, str] | None = None,
            cell=None, limit: int = 500, *, sort_input: str | None = None,
            sortable: frozenset[str] = frozenset(),
-           sort_state: tuple[str | None, bool] = (None, False)) -> str:
+           sort_state: tuple[str | None, bool] = (None, False),
+           sticky: frozenset[str] = frozenset()) -> str:
     """Render one table.
 
     ``sort_input`` names the Shiny input a header click posts its column name
     to (``None`` renders plain, unclickable headers); ``sortable`` is which
     columns accept a click; ``sort_state`` is ``(column, descending)``, so the
     current sort carries its own arrow.
+
+    ``sticky`` freezes those columns (in whatever order they appear) to the
+    left edge while the rest of a wide table scrolls underneath -- see
+    ``STICKY_COLUMN_WIDTHS``. Every cell renderer in this module happens to
+    return a bare ``<td>...`` with no attributes of its own, which is what
+    lets this inject the sticky style by string surgery instead of threading
+    it through every ``cell()`` callback.
     """
     if frame is None or len(frame) == 0:
         return "<p class='text-muted'>Nothing to show.</p>"
     labels = labels or {}
     shown = frame.head(limit)
+    offsets = _sticky_offsets(shown.columns, sticky)
     head = "".join(_header_cell(c, labels, sort_input=sort_input, sortable=sortable,
-                                sort_state=sort_state)
+                                sort_state=sort_state, sticky=offsets.get(c))
                    for c in shown.columns)
     body = []
     for _, row in shown.iterrows():
@@ -1067,14 +1115,19 @@ def _table(frame: pd.DataFrame, labels: dict[str, str] | None = None,
             # ``row`` too, not just the cell's own value -- a checkbox needs
             # the record's processid, which lives in a different column.
             rendered = cell(column, row[column], row) if cell else None
-            cells.append(rendered if rendered is not None
-                         else f"<td>{_escape(row[column])}</td>")
+            rendered = rendered if rendered is not None \
+                else f"<td>{_escape(row[column])}</td>"
+            if column in offsets and rendered.startswith("<td>"):
+                style = _sticky_style(*offsets[column], header=False)
+                rendered = f"<td style='{style}'>" + rendered[len('<td>'):]
+            cells.append(rendered)
         body.append("<tr>" + "".join(cells) + "</tr>")
     more = ("" if len(frame) <= limit else
             f"<p class='text-muted small'>Showing {limit:,} of {len(frame):,} rows.</p>")
     return (
         "<div style='max-height:62vh;overflow:auto;'>"
-        "<table class='table table-sm table-hover' style='font-size:13px;'>"
+        "<table class='table table-sm table-hover' style='font-size:13px;"
+        "border-collapse:separate;'>"
         f"<thead style='position:sticky;top:0;background:#fff;'><tr>{head}</tr></thead>"
         f"<tbody>{''.join(body)}</tbody></table></div>{more}"
     )
@@ -1212,7 +1265,8 @@ def _group_html(frame: pd.DataFrame, columns: list[str] | None = None,
             return _link_cell(value, bold_species_url(str(value)))
         return None
     return _table(shown, GROUP_LABELS, cell=cell, limit=limit, sort_input=sort_input,
-                 sortable=sortable, sort_state=sort_state)
+                 sortable=sortable, sort_state=sort_state,
+                 sticky=frozenset(STICKY_COLUMN_WIDTHS))
 
 
 def run(snapshot: str | Path, *, host: str = "127.0.0.1", port: int = 8000,

@@ -6,12 +6,15 @@ Branch: `claude/wonderful-newton-qw7llz`. Plan:
 **State: Phases 0–2 complete and fast. Phase 3 has all six screens working,
 the eight downloads are wired, record selection is per-row (not just
 whole-group), auto-selection runs on a fresh search, and a real grade-E
-grouping bug is fixed. 233 tests pass, the parity gate is green.**
+grouping bug is fixed. Every table sorts by clicking its column headers,
+links out to the BOLD portal, and keeps its annotation columns frozen while
+scrolling. 238 tests pass, the parity gate is green.**
 
-## Open issues from curator feedback (in progress)
+## Open issues from curator feedback -- all six resolved
 
-Reported after the previous session's fixes landed. Fixing in order, one
-commit per item where the change is self-contained.
+Reported after the previous session's fixes landed; fixed one at a time, one
+commit per item, each verified with new unit tests and a live browser run
+(`tools/drive_ui.py`) before moving to the next.
 
 1. [x] **"Clear" clears the representative selection too.** Fixed --
    `Annotations` now has two stores: `selected` (the persistent representative
@@ -58,10 +61,24 @@ commit per item where the change is self-contained.
    the matching BOLD portal page in a new tab (`target='_blank'
    rel='noopener noreferrer'`). Confirmed live -- 252 working links rendered
    on one specimens-table page alone.
-5. [ ] **No sticky columns on wide tables.** selected/flag/curator_notes/
-   updated_id should stay visible while the rest scrolls sideways.
-6. [ ] **BAGS tabs waste horizontal space.** The specimen table under the
-   group list should use the tab's full width.
+5. [x] **No sticky columns on wide tables.** Fixed -- `selected`, `checked`,
+   `flag`, `updated_id` and `curator_notes` now freeze to the left edge
+   (`ui/app.py::STICKY_COLUMN_WIDTHS` gives each a fixed pixel width so its
+   offset is computable without a browser) while the rest of a row scrolls
+   underneath. `border-collapse:separate` had to go on the table too --
+   `position:sticky` on a `<td>`/`<th>` silently does nothing under Bootstrap's
+   default `collapse`. Confirmed live: scrolling the specimen table 300px
+   moves the Species header by exactly 300px while the first (sticky) cell
+   stays within 2px of its original position (a vertical scrollbar appearing
+   changes the container's own width slightly; the column itself does not
+   move with the scroll).
+6. [x] **BAGS tabs waste horizontal space.** Fixed -- the group navigator
+   (which problem) is now one compact row (a normal dropdown plus Previous/
+   Next, ~420px) above the table instead of a permanent 4-of-12-column
+   sidebar beside it; the table takes the tab's full width below. Nothing is
+   lost from the old tall listbox -- every problem is still one click away in
+   the dropdown. Confirmed live: the table renders at ~1143px wide against a
+   ~420px navigator, in a 1400px viewport.
 
 ---
 
@@ -122,7 +139,7 @@ to learn" below for why that matters here specifically.
 cd C:\GitHub\BOLDcurator\python
 git pull
 pip install -e ".[dev,gui]"
-python -m pytest tests/ -q          # 233 passing
+python -m pytest tests/ -q          # 238 passing
 python parity/compare.py            # PASS
 
 python -m boldcurator.cli gui --snapshot "<the reordered snapshot>"

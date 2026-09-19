@@ -174,6 +174,32 @@ def test_processid_bin_and_species_link_out_to_the_bold_portal():
     assert "GBMHO3680-19</a>" in html
 
 
+def test_sticky_columns_freeze_to_the_left_edge_in_column_order():
+    """selected/checked/flag/updated_id/curator_notes stay put while the rest
+
+    of a wide table scrolls sideways underneath them.
+    """
+    import pandas as pd
+
+    from boldcurator.ui.app import STICKY_COLUMN_WIDTHS, _group_html
+
+    frame = pd.DataFrame({
+        "selected": [True], "checked": [False], "flag": ["misidentification"],
+        "updated_id": ["Danaus plexippus"], "curator_notes": ["checked"],
+        "processid": ["P1"], "species": ["Danaus plexippus"],
+    })
+    html = _group_html(frame)
+    header = html.split("<tbody>")[0]
+
+    running = 0
+    for column in ("selected", "checked", "flag", "updated_id", "curator_notes"):
+        width = STICKY_COLUMN_WIDTHS[column]
+        assert f"left:{running}px" in html, f"{column} should sit at {running}px"
+        running += width
+    # a column that isn't one of the five never gets a sticky offset
+    assert "position:sticky" not in header.split("Process ID")[1].split("</th>")[0]
+
+
 def test_an_empty_frame_renders_a_message_not_a_broken_table():
     import pandas as pd
 
