@@ -3,40 +3,41 @@
 Branch: `claude/wonderful-newton-qw7llz`. Plan:
 [`../docs/python-app-plan.md`](../docs/python-app-plan.md).
 
-**State: Phases 0–2 complete and fast. Phase 3 has all six screens working,
-the eight downloads are wired, record selection is per-row (not just
-whole-group), auto-selection runs on a fresh search, and a real grade-E
-grouping bug is fixed. Every table sorts by clicking its column headers
-(including the five annotation columns), links out to the BOLD portal, keeps
-its annotation columns frozen and pinned to the top while scrolling, and
-"Apply to checked" is scoped to the current BAGS group. Gap analysis is
-wired on the Species screen, and the CC-BY-SA 4.0 attribution requirement is
-in the app and every export. Two full rounds of curator-reported bugs
-(9 issues) are fixed and verified live. 255 tests pass, the parity gate is
-green.**
+**State: Phases 0–2 complete and fast. Phase 3 is entirely done** — all six
+screens working, the eight downloads wired, record selection per-row,
+auto-selection on a fresh search, a real grade-E grouping bug fixed, every
+table sortable by clicking its headers (including the five annotation
+columns) and linking out to the BOLD portal, annotation columns frozen and
+pinned while scrolling, "Apply to checked" scoped to the current BAGS group,
+gap analysis on the Species screen, the CC-BY-SA 4.0 attribution requirement
+in the app and every export, and **session save/resume wired end to end**.
+Two full rounds of curator-reported bugs (9 issues) are fixed and verified
+live. 264 tests pass, the parity gate is green. What's left is packaging
+(Phase 4) and distribution (Phase 5) -- getting this in front of curators.
 
 ## NEXT SESSION — START HERE, in priority order
 
 No open curator-reported bugs right now — both feedback rounds are closed
 (see the two "Open issues" sections below for what was wrong and how each was
-fixed, if a similar bug resurfaces). Phase 0 is now fully closed and gap
-analysis is done, so what's left is:
+fixed, if a similar bug resurfaces). Phase 3 is now entirely done, so what's
+left is packaging and distribution -- everything between here and a curator
+double-clicking an installer:
 
-1. **Session save/resume (plan 3.8) — not wired.** `io/session.py` exists and
-   is tested (query + processids + annotations, not the whole frame); it just
-   needs Save/Load buttons wired to `AppState`. **Warn on resume if the
-   snapshot id changed** -- BIN membership and identifications may have moved
-   under the saved work. The last item standing between here and "Phase 3 is
-   entirely done."
-2. **CI workflow (plan 2.6) — still manual.** 255 tests and the parity
+1. **CI workflow (plan 2.6) — still manual.** 264 tests and the parity
    harness run only when someone remembers to. A GitHub Actions matrix
    (Linux/macOS/Windows) that installs, runs pytest and runs
    `parity/compare.py` needs no real snapshot: `conftest.py` builds the
    fixture, and `tests/make_fake_package.py` generates the source. Worth
    doing before the GUI grows further -- every session so far has shipped a
    real bug that only a browser run caught (see "the rules this session cost
-   the most to learn" below); CI at least keeps the 255 non-visual tests from
+   the most to learn" below); CI at least keeps the 264 non-visual tests from
    silently regressing.
+2. **Packaging (Phase 4) and data loading (Phase 5.1-5.2) — not started.**
+   Two related pieces of work: how the app itself is installed (PyInstaller/
+   Briefcase, signing), and how a user without the file already on disk gets
+   the snapshot onto their machine (Zenodo download vs. manual TSV import).
+   See the new "Packaging and data loading" section below for what's decided
+   and what's still open.
 3. **Also open, not urgent:**
    - The R app (not this rewrite) rejects 4% of real BOLD dataset codes --
      `mod_data_import_utils.R:50`'s `^DS-[A-Z0-9]+$` pattern; 544 of 13,706
@@ -47,11 +48,53 @@ analysis is done, so what's left is:
      subset) -- ~0.4 s a pass, not worth fixing without a curator waiting on
      it.
 
-Before starting any of the above: `python -m pytest tests/ -q` (255 passing)
+Before starting any of the above: `python -m pytest tests/ -q` (264 passing)
 and `python parity/compare.py` (PASS) from a clean checkout, per "First, 60
 seconds of setup" below -- and drive any UI change through
 `tools/drive_ui.py` before believing it works, per "the rules this session
 cost the most to learn."
+
+## Session save/resume (plan 3.8) -- resolved
+
+1. [x] **Wired end to end.** `io/session.py`'s `SessionStore`/`resume()` already
+existed and were tested in isolation; nothing there needed to change. What
+was missing was the GUI wiring and a way to rebuild a *working* search from
+a saved processid list, not just a rehydrated frame:
+
+- `data/queries.plan_from_processids` resolves a saved session's processids
+  back to `rowid`s **in the current snapshot** and returns a `SearchPlan`,
+  plus whatever processids no longer resolve (retracted/reassigned records,
+  reported not dropped). Routing a resume through a real `SearchPlan` means
+  it goes through the exact same `SpecimenTable`/`analyse_plan` path a live
+  search does -- paging, sorting, BAGS grouping all work identically on a
+  resumed session, rather than needing a second code path.
+- `AppState.save_session`/`resume_session` (`ui/state.py`) sit beside
+  `run_search`: save reads the already-analysed result (so it costs nothing
+  extra once a summary screen has been opened, and refuses -- same as every
+  other summary screen -- above the analysis size limit); resume rebuilds
+  the plan, swaps in the saved `Annotations`, and reports both a changed
+  snapshot id and any missing processids as warnings, never silently.
+- The GUI (`ui/app.py`, Data Input tab) gets a compact Session panel: a name
+  field, Save/Load/Delete buttons and a dropdown of saved sessions. Saving
+  under a name already used updates that entry in place (the session id is
+  the slugified name), matching `SessionStore.save()`'s own upsert
+  semantics, so repeated saves don't pile up duplicates.
+- Sessions are stored per-user by default at `~/.boldcurator/sessions.sqlite`
+  (`config/constants.DEFAULT_SESSIONS_PATH`) -- not next to the snapshot,
+  which may be shared/read-only -- overridable via `boldcurator gui
+  --sessions <path>`.
+
+New tests: `tests/test_session_resume.py` (9 cases: `plan_from_processids`
+found/missing/empty, save-without-a-search refusal, a full save→resume round
+trip confirming the resumed plan pages correctly and annotations survive,
+missing-processid and changed-snapshot-id warnings, the analysis-size-limit
+refusal, and same-name-updates-in-place). Verified live with an ad-hoc
+Playwright script: save, the session appearing in the dropdown, resuming
+after running a different search in between (confirms it restores the
+*saved* result, not whatever is currently on screen), the representative
+pick made before saving surviving the round trip, and delete removing it
+from the dropdown -- all six checks passed, and the existing
+`tools/drive_ui.py` suite (29 checks) still passes unchanged.
 
 ## Gap analysis and Phase 0 closure -- both resolved
 
@@ -268,7 +311,7 @@ to learn" below for why that matters here specifically.
 cd C:\GitHub\BOLDcurator\python
 git pull
 pip install -e ".[dev,gui]"
-python -m pytest tests/ -q          # 255 passing
+python -m pytest tests/ -q          # 264 passing
 python parity/compare.py            # PASS
 
 python -m boldcurator.cli gui --snapshot "<the reordered snapshot>"
@@ -705,7 +748,7 @@ surfacing in the UI rather than letting a curator assume otherwise.
 - [x] BAGS screens: full-width specimen table, compact navigator row instead
       of a permanent sidebar column
 - [x] 3.4 gap analysis against the taxa typed in
-- [ ] 3.8 session save/resume
+- [x] 3.8 session save/resume
 
 ### Phases 4–5 — packaging and distribution
 - [ ] not started; compression (above) lands in 5.1
