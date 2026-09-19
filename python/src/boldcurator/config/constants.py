@@ -252,6 +252,29 @@ DOWNLOAD_LIMITS: dict[str, int] = {
     "MAX_RECORDS": 250_000,
     "MAX_BINS": 25_000,
 }
+
+# --------------------------------------------------------------------------
+# Data licence -- plan item 0.3
+# --------------------------------------------------------------------------
+
+#: The BOLD public data package this snapshot is built from is itself
+#: CC BY-SA 4.0 (``docs/python-app-plan.md:13``). That licence requires both
+#: attribution *and* that any redistributed or adapted dataset carry the same
+#: licence, so both this app's own exports and whatever a curator does with a
+#: download afterwards are covered -- not just this app's own use of the data.
+#: Lives here, not in ``ui/``, so ``io.exports`` (which stamps it onto every
+#: text export) does not have to depend on the GUI layer to say it.
+CC_BY_SA_URL = "https://creativecommons.org/licenses/by-sa/4.0/"
+
+BOLD_ATTRIBUTION_TEXT = (
+    "Specimen data is drawn from the Barcode of Life Data System (BOLD, "
+    "boldsystems.org) and is licensed under Creative Commons "
+    "Attribution-ShareAlike 4.0 International (CC BY-SA 4.0). Attribute BOLD "
+    "Systems in any use, publication or redistribution of this data "
+    "(including exports from this app), and share any redistributed or "
+    "adapted dataset under the same licence."
+)
+
 # --------------------------------------------------------------------------
 # Geography
 # --------------------------------------------------------------------------

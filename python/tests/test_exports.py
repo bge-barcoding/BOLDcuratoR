@@ -82,6 +82,19 @@ def test_exports_carry_provenance_and_the_scoring_warning(tmp_path):
     assert "NOT comparable" in text
 
 
+def test_exports_carry_the_cc_by_sa_attribution(tmp_path):
+    """Plan item 0.3: the source data package is CC BY-SA 4.0, which requires
+
+    attribution on redistribution -- an export from this app is exactly that.
+    """
+    tsv = exports.write_tsv(_frame(), tmp_path / "p.tsv", snapshot_id="x")
+    csv_path = exports.write_csv(_frame(), tmp_path / "p.csv", snapshot_id="x")
+    for path in (tsv, csv_path):
+        text = path.read_text(encoding="utf-8")
+        assert "CC BY-SA 4.0" in text
+        assert "Barcode of Life Data System" in text
+
+
 def test_fasta_header_falls_back_through_identification_then_species():
     assert exports.fasta_header(
         pd.Series({"processid": "P1", "identification": "Danaus plexippus"})
@@ -145,6 +158,8 @@ def test_bin_analysis_workbook_has_three_populated_sheets(store, tmp_path):
     assert set(sheets) == {"Summary", "Content", "Statistics"}
     # R's version leaves Summary and Statistics empty; both carry data here.
     assert all(len(frame) > 0 for frame in sheets.values())
+    summary_text = sheets["Summary"].to_string()
+    assert "CC BY-SA 4.0" in summary_text
 
 
 def test_unknown_flag_is_refused():

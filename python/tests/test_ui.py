@@ -19,6 +19,21 @@ def test_the_app_object_builds(fixture_snapshot):
     assert isinstance(app, shiny.App)
 
 
+def test_the_cc_by_sa_attribution_is_on_the_page(fixture_snapshot):
+    """Plan item 0.3: the CC BY-SA 4.0 requirement goes in the app's about
+
+    text, not only in exports (see test_exports.py for those).
+    """
+    from boldcurator.ui.app import create_app
+    from boldcurator.ui.format import CC_BY_SA_URL
+
+    app = create_app(fixture_snapshot)
+    html = app.ui["html"]
+    assert "CC BY-SA 4.0" in html
+    assert "Barcode of Life Data System" in html
+    assert CC_BY_SA_URL in html
+
+
 def test_the_preview_columns_all_exist_in_a_real_page(store):
     """A preview column no page carries renders as a silently missing one.
 

@@ -28,6 +28,7 @@ from typing import Iterable, Iterator
 
 import pandas as pd
 
+from ..config.constants import BOLD_ATTRIBUTION_TEXT
 from ..core.species import column_or_missing, is_empty, to_text
 from .annotations import Annotations, merge_annotations
 
@@ -58,6 +59,12 @@ def _provenance(snapshot_id: str) -> list[str]:
     the maximum is 15 rather than 16 because the image criterion is gone, and
     BAGS grade E is evaluated against the whole snapshot rather than only the
     records that happened to be downloaded.
+
+    The licence line is not decoration: the BOLD data package this snapshot
+    is built from is CC BY-SA 4.0, which requires attribution *and* that a
+    redistributed or adapted dataset carry the same licence -- this export
+    is exactly that redistribution, so it says so on its way out the door,
+    not only in the app a curator downloaded it from.
     """
     return [
         f"# BOLDcuratoR (Python) export -- {_dt.datetime.now().isoformat(timespec='seconds')}",
@@ -65,6 +72,7 @@ def _provenance(snapshot_id: str) -> list[str]:
         "# scoring: 15 criteria, no HAS_IMAGE -- scores are NOT comparable with "
         "the R Shiny app (max 16)",
         "# BAGS grade E evaluated against the full snapshot, not only these records",
+        f"# {BOLD_ATTRIBUTION_TEXT}",
     ]
 
 
@@ -218,6 +226,7 @@ def write_bin_analysis_xlsx(
     summary_frame = pd.DataFrame(
         [{"metric": k, "value": v} for k, v in summary.items()]
         + [{"metric": "snapshot_id", "value": snapshot_id}]
+        + [{"metric": "data licence", "value": BOLD_ATTRIBUTION_TEXT}]
     )
     if len(content):
         stats = pd.DataFrame(

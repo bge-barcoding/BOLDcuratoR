@@ -40,8 +40,13 @@ from ..io import exports as export_io
 from ..io.annotations import merge_annotations
 from .format import (
     BIN_LABELS,
+    BOLD_ATTRIBUTION_SHORT,
+    BOLD_ATTRIBUTION_TEXT,
+    CC_BY_SA_URL,
     CHECKLIST_LABELS,
     CONCORDANCE_COLOURS,
+    GAP_LABELS,
+    GAP_STATUS_COLOURS,
     GRADE_COLOURS,
     GROUP_COLUMNS,
     GROUP_LABELS,
@@ -239,6 +244,9 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
                 f"{info.bin_count:,} BINs · offline, no BOLD API",
                 class_="text-muted small",
             ),
+            ui.tags.a(BOLD_ATTRIBUTION_SHORT, href=CC_BY_SA_URL, target="_blank",
+                     rel="noopener noreferrer", class_="small",
+                     title=BOLD_ATTRIBUTION_TEXT),
             ui.div(
                 ui.input_text("user", None, placeholder="Your name (for annotations)",
                               width="240px"),
@@ -287,6 +295,13 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
                 ),
                 ui.output_ui("estimate_box"),
                 ui.output_ui("search_summary"),
+                ui.div(
+                    BOLD_ATTRIBUTION_TEXT + " ",
+                    ui.tags.a("Full licence text.", href=CC_BY_SA_URL,
+                             target="_blank", rel="noopener noreferrer"),
+                    class_="small text-muted", style="margin-top:18px;"
+                          "max-width:900px;",
+                ),
                 value="input",
             ),
             ui.nav_panel("Species", ui.output_ui("species_body"), value="species"),
@@ -308,12 +323,13 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
         group_index: dict[str, reactive.Value] = {
             g: reactive.Value(0) for g in GRADES
         }
-        #: Click-a-header sort state for the three in-memory tables (species
-        #: checklist, BIN dashboard, one BAGS group at a time) -- (column,
-        #: descending). The specimen table sorts differently (server-side, via
-        #: SpecimenTable.sort_by) because it is never materialised whole; see
-        #: _spec_sort_click below.
+        #: Click-a-header sort state for the in-memory tables (species
+        #: checklist, gap analysis, BIN dashboard, one BAGS group at a time)
+        #: -- (column, descending). The specimen table sorts differently
+        #: (server-side, via SpecimenTable.sort_by) because it is never
+        #: materialised whole; see _spec_sort_click below.
         checklist_sort = reactive.Value(("", False))
+        gap_sort = reactive.Value(("", False))
         bins_sort = reactive.Value(("", False))
         group_sort = reactive.Value(("", False))
 
@@ -339,6 +355,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
                 touch()
 
         for _input_id, _state in (("checklist_sort_click", checklist_sort),
+                                  ("gap_sort_click", gap_sort),
                                   ("bins_sort_click", bins_sort),
                                   ("group_sort_click", group_sort)):
             _register_memory_sort(_input_id, _state)
@@ -482,12 +499,39 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
             def body(search):
                 checklist = _sorted_by(search.checklist(store), checklist_sort)
                 counts = search.grade_counts(store)
+                gaps = search.gap_analysis(store)
+                # Gap analysis only has something to say when taxa were
+                # actually typed -- a dataset/project-code-only search has no
+                # "did the search find what I typed" question to answer.
+                gap_section = ui.div()
+                if len(gaps):
+                    found = int((gaps["status"] == "Found").sum())
+                    missing = int((gaps["status"] == "Missing").sum())
+                    gap_section = ui.div(
+                        ui.tags.strong("Gap analysis"),
+                        ui.tags.span(
+                            "  — every taxon typed, matched against synonyms "
+                            "too, and whether the search actually found it",
+                            style="opacity:.9;"),
+                        ui.div(
+                            value_box(f"{found:,}", "Found", "#28a745"),
+                            value_box(f"{missing:,}", "Missing", "#dc3545"),
+                            style="display:flex;gap:10px;margin:10px 0 12px;"
+                                  "flex-wrap:wrap;",
+                        ),
+                        ui.HTML(_gap_html(_sorted_by(gaps, gap_sort),
+                                          sort_state=gap_sort.get())),
+                        style="background:#f8f9fa;border:1px solid #dee2e6;"
+                              "border-radius:5px;padding:10px 14px;"
+                              "margin-bottom:16px;",
+                    )
                 return ui.div(
                     ui.div(
                         *[value_box(f"{counts.get(g, 0):,}", f"Grade {g}",
                                     GRADE_COLOURS[g]) for g in GRADES],
                         style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap;",
                     ),
+                    gap_section,
                     ui.HTML(_checklist_html(checklist, sort_state=checklist_sort.get())),
                 )
             return _needs_analysis(body)
@@ -1246,6 +1290,19 @@ def _bins_html(frame: pd.DataFrame, *,
             return _link_cell(value, bold_bin_url(str(value)))
         return None
     return _table(frame, BIN_LABELS, cell, sort_input="bins_sort_click",
+                 sortable=frozenset(frame.columns) if len(frame) else frozenset(),
+                 sort_state=sort_state)
+
+
+def _gap_html(frame: pd.DataFrame, *,
+             sort_state: tuple[str | None, bool] = (None, False)) -> str:
+    def cell(column, value, row):
+        if column == "status" and not _is_missing(value) and value:
+            return _chip(value, GAP_STATUS_COLOURS.get(str(value), "#adb5bd"))
+        if column == "matched_species" and not _is_missing(value) and value:
+            return _link_cell(value, bold_species_url(str(value)))
+        return None
+    return _table(frame, GAP_LABELS, cell, sort_input="gap_sort_click",
                  sortable=frozenset(frame.columns) if len(frame) else frozenset(),
                  sort_state=sort_state)
 

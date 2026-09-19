@@ -13,9 +13,20 @@ import pandas as pd
 
 from shiny import ui
 
+from ..config.constants import BOLD_ATTRIBUTION_TEXT, CC_BY_SA_URL
+
+__all__ = [
+    "BOLD_ATTRIBUTION_TEXT", "CC_BY_SA_URL", "BOLD_ATTRIBUTION_SHORT",
+]
+
 #: The public BOLD portal -- no API key, no login, works from an offline
 #: snapshot's data because it is just a link, not a fetch.
 BOLD_PORTAL = "https://portal.boldsystems.org"
+
+#: The short form for the header bar; ``BOLD_ATTRIBUTION_TEXT`` (the full
+#: wording) lives in ``config.constants`` so ``io.exports`` can stamp it onto
+#: exports without depending on the GUI layer.
+BOLD_ATTRIBUTION_SHORT = "Data: BOLD Systems, CC BY-SA 4.0"
 
 
 def bold_record_url(processid: str) -> str:
@@ -53,6 +64,8 @@ GRADE_COLOURS: dict[str, str] = {
 
 CONCORDANCE_COLOURS = {"Concordant": "#28a745", "Discordant": "#dc3545"}
 
+GAP_STATUS_COLOURS = {"Found": "#28a745", "Missing": "#dc3545"}
+
 #: The columns a curator works with, in the order the R app shows them:
 #: annotations first, because that is what they are here to change.
 #: ``selected`` and ``checked`` are two different checkboxes -- see
@@ -86,6 +99,12 @@ BIN_LABELS = {
     "bin_uri": "BIN", "total_records": "Records", "unique_species": "Species",
     "species_list": "Species list", "countries": "Countries",
     "concordance": "Concordance", "bin_coverage": "Share of result",
+}
+
+GAP_LABELS = {
+    "input_taxon": "Taxon typed", "status": "Status",
+    "matched_species": "Matched species", "specimen_count": "Specimens",
+    "notes": "Notes",
 }
 
 
