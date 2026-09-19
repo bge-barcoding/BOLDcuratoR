@@ -6,6 +6,8 @@ __pycache__/
 # src/boldcurator/build/, which is source, not an artefact.
 /build/
 /dist/
+# PyInstaller writes this to the cwd it's run from, not /build/ or /dist/.
+*.spec
 .venv/
 *.duckdb
 *.duckdb.wal
