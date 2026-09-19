@@ -8,6 +8,35 @@ the eight downloads are wired, record selection is per-row (not just
 whole-group), auto-selection runs on a fresh search, and a real grade-E
 grouping bug is fixed. 233 tests pass, the parity gate is green.**
 
+## Open issues from curator feedback (in progress)
+
+Reported after the previous session's fixes landed. Fixing in order, one
+commit per item where the change is self-contained.
+
+1. [ ] **"Clear" clears the representative selection too.** There are really
+   two different "selected" states sharing one checkbox: the *representative*
+   pick (auto-selected best per BIN x country, what "Download Selected"
+   exports, meant to persist) and a *working* selection (temporary, for
+   choosing which rows to flag/note/update in bulk). R never conflated them --
+   its only per-row "selected" checkbox *is* the representative pick, and
+   flag/note/updated-ID are separate per-row inline inputs, not a bulk-apply
+   button at all. This app's bulk "Apply to selection" is a Python-side
+   substitute for that (a static HTML table can't easily carry live per-cell
+   inputs), so it needs its own, separate, clearable selection rather than
+   reusing the representative one.
+2. [ ] **Sort is a dropdown, not click-the-column-header.** Only exists on the
+   Specimens tab; BAGS group tables aren't sortable at all.
+3. [ ] **BAGS "problems to work through" should say species/BINs.** A/B/D
+   group by species, C/E by BIN -- the generic "problem" hides which.
+4. [ ] **No linkouts to BOLD.** processid, BIN and species should each open
+   the matching BOLD portal page in a new tab.
+5. [ ] **No sticky columns on wide tables.** selected/flag/curator_notes/
+   updated_id should stay visible while the rest scrolls sideways.
+6. [ ] **BAGS tabs waste horizontal space.** The specimen table under the
+   group list should use the tab's full width.
+
+---
+
 ---
 
 # START HERE TOMORROW
