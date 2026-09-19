@@ -204,6 +204,45 @@ def main(argv: list[str] | None = None) -> int:
             check("clicking a column header sorts a BAGS group table", False,
                   "no sortable header found")
 
+        # -- a checked/unchecked row must not reset the table's scroll
+        # position, and the Rep./Check/Flag/Updated ID/Notes headers must
+        # stay pinned to the top while scrolled, exactly like every other
+        # header. Dispatching the click via JS on a checkbox already inside
+        # the scrolled viewport (rather than page.click(), which scrolls an
+        # off-screen element into view first) is what actually exercises
+        # this -- a real curator only ever clicks what they can already see.
+        show("Specimens", settle=SETTLE)
+        scroll_div = page.locator("#specimens_body div.bc-scroll")
+        scroll_div.evaluate("el => { el.scrollTop = 300; }")
+        time.sleep(0.3)
+        rep_header_y = page.locator(
+            "#specimens_body thead th", has_text="Rep.").bounding_box()["y"]
+        container_top_y = scroll_div.bounding_box()["y"]
+        check("the Rep. header stays pinned to the top while scrolled",
+              abs(rep_header_y - container_top_y) < 5,
+              f"header y={rep_header_y}, container top y={container_top_y}")
+
+        scroll_before = scroll_div.evaluate("el => el.scrollTop")
+        clicked = scroll_div.evaluate("""
+            (el) => {
+                const rect = el.getBoundingClientRect();
+                const box = Array.from(el.querySelectorAll('.bc-row-check'))
+                    .find(b => {
+                        const r = b.getBoundingClientRect();
+                        return r.top >= rect.top && r.bottom <= rect.bottom;
+                    });
+                if (!box) return false;
+                box.click();
+                return true;
+            }
+        """)
+        time.sleep(SETTLE)
+        scroll_after = page.locator("#specimens_body div.bc-scroll").evaluate(
+            "el => el.scrollTop")
+        check("checking a visible row does not reset the table's scroll position",
+              clicked and scroll_before > 0 and scroll_after == scroll_before,
+              f"{scroll_before} -> {scroll_after}")
+
         # -- clearing the checked/working selection must not touch the
         # representative pick (auto-selected best per BIN x country) -- see
         # io.annotations's module docstring for why the two are separate.

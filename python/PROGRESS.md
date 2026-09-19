@@ -14,18 +14,26 @@ scrolling. 238 tests pass, the parity gate is green.**
 
 Found using the round-1 fixes. Fixing one at a time, one commit per item.
 
-1. [ ] **The Rep./Check/Flag/Updated ID/Notes column headings scroll away
-   vertically**, unlike the other headings, which stay pinned. Likely cause:
-   `position:sticky` was only ever applied to the `<thead>` element for
-   top-pinning (unreliable across browsers for `<thead>`/`<tr>`) while the
-   five frozen-left columns' own `<th>` additionally set `position:sticky`
-   for `left` -- two different sticky mechanisms on the same header row.
-   **Also:** checking a row snaps the table's scroll back to the top: every
-   interaction re-renders the whole table as one HTML string
-   (`ui.HTML(...)`), which replaces the scrolling `<div>` and any browser
-   loses scroll position on a replaced element. Likely the same underlying
-   cause as the header issue, or fixable the same way (JS-side scroll
-   save/restore keyed to the output's DOM id).
+1. [x] **The Rep./Check/Flag/Updated ID/Notes column headings scroll away
+   vertically**, unlike the other headings, which stay pinned. Fixed --
+   `position:sticky` was only ever set on the `<thead>` element itself for
+   top-pinning, which browsers do not reliably honour (`<thead>` is
+   `display:table-header-group`, not a table cell, and sticky is specified to
+   work on cells); the five frozen-left headers separately set their own
+   `position:sticky` for `left`, so only those five had cell-level sticky at
+   all, and it never included `top`. Every `<th>` now sets its own
+   `position:sticky;top:0` individually (`ui/app.py::_header_style`); the
+   five frozen ones add `left:...px` to the same declaration.
+   **Also fixed:** checking/unchecking a row snapped the table's scroll back
+   to the top, because every interaction re-renders the whole table as one
+   HTML string and Shiny's `.html()` replacement (like any DOM replacement)
+   throws away scroll position. A `shiny:value` listener (jQuery-only custom
+   event -- it never reaches a plain `addEventListener`) now saves the old
+   scroll position and a one-shot `MutationObserver` restores it onto the
+   replacement once it actually lands. Verified live in `tools/drive_ui.py`
+   with clicks dispatched via JS on a checkbox already inside the scrolled
+   viewport -- `page.click()` on an off-screen element scrolls it into view
+   first, which would have hidden this exact bug from the test.
 2. [ ] **"Apply to checked" reaches across groups/BINs/species.** Checking a
    few rows in one BAGS group, moving to another group, checking more there
    without clearing first, then applying, touches both groups' checked

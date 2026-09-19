@@ -196,8 +196,30 @@ def test_sticky_columns_freeze_to_the_left_edge_in_column_order():
         width = STICKY_COLUMN_WIDTHS[column]
         assert f"left:{running}px" in html, f"{column} should sit at {running}px"
         running += width
-    # a column that isn't one of the five never gets a sticky offset
-    assert "position:sticky" not in header.split("Process ID")[1].split("</th>")[0]
+    # every header cell stays pinned to the top (see test below), but a
+    # column that isn't one of the five never gets a *left* offset
+    other_header_cell = header.split("Process ID")[1].split("</th>")[0]
+    assert "left:" not in other_header_cell
+
+
+def test_every_header_cell_stays_pinned_to_the_top_not_just_the_thead():
+    """The bug: only the five frozen-left headers had their own
+
+    ``position:sticky``; the rest relied on ``<thead>``'s, which browsers do
+    not reliably honour (``<thead>`` is ``display:table-header-group``, not a
+    table cell). Every ``<th>`` now carries its own top-sticky style.
+    """
+    import pandas as pd
+
+    from boldcurator.ui.app import _group_html
+
+    frame = pd.DataFrame({"processid": ["P1"], "species": ["Danaus plexippus"]})
+    html = _group_html(frame)
+    header = html.split("<tbody>")[0]
+    assert "<thead><tr>" in header, "sticky belongs on the cells, not <thead>"
+    for column_label in ("Process ID", "Species"):
+        cell = header.split(column_label)[0].split("<th")[-1]
+        assert "position:sticky" in cell and "top:0" in cell
 
 
 def test_an_empty_frame_renders_a_message_not_a_broken_table():
@@ -246,7 +268,8 @@ def test_a_column_left_out_of_sortable_renders_a_plain_header():
     frame = pd.DataFrame({"selected": [True], "species": ["A"]})
     html = _table(frame, sort_input="my_sort", sortable=frozenset({"species"}))
     header = html.split("<tbody>")[0]
-    assert "<th>selected</th>" in header, "excluded column must render plain"
+    excluded_cell = header.split("selected")[0].split("<th")[-1]
+    assert "cursor:pointer" not in excluded_cell, "excluded column must not be clickable"
     assert header.count(f"class='{SORT_HEADER_CLASS}'") == 1
 
 

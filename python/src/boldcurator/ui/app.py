@@ -194,6 +194,43 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
                         {{priority: 'event'}});
                 }}
             }});
+            // A table re-renders as one HTML string on every interaction
+            // (paging, checking a row, sorting...), which replaces its
+            // scrolling <div> wholesale -- and a browser has no scroll
+            // position to carry over to a brand new element. 'shiny:value'
+            // fires just *before* Shiny swaps in the new content, which is
+            // the last moment the old scroll position can still be read; a
+            // one-shot MutationObserver then restores it onto the
+            // replacement as soon as it actually lands, however long that
+            // takes.
+            //
+            // 'shiny:value' is a jQuery-only custom event -- Shiny triggers
+            // it with a jQuery Event object, which (unlike 'change'/'click')
+            // never reaches a plain document.addEventListener. It has to be
+            // bound through jQuery, which Shiny already loads globally.
+            $(document).on('shiny:value', function(e) {{
+                var container = e.target;
+                if (!container || !container.querySelector) return;
+                var old = container.querySelector('.{SCROLL_CLASS}');
+                if (!old) return;
+                var saved = {{top: old.scrollTop, left: old.scrollLeft}};
+                // jQuery's .html() empties the container and then inserts the
+                // new markup as two separate mutations, sometimes delivered
+                // as two separate MutationObserver callbacks -- disconnecting
+                // on the first (the empty, which finds no .bc-scroll yet)
+                // would miss the second, which is the one that matters. Only
+                // disconnect once the replacement has actually been found.
+                var observer = new MutationObserver(function() {{
+                    var el = container.querySelector('.{SCROLL_CLASS}');
+                    if (el) {{
+                        el.scrollTop = saved.top;
+                        el.scrollLeft = saved.left;
+                        observer.disconnect();
+                    }}
+                }});
+                observer.observe(container, {{childList: true, subtree: true}});
+                setTimeout(function() {{ observer.disconnect(); }}, 3000);
+            }});
         """),
         ui.div(
             ui.tags.h4("BOLDcurator", style="margin:0;"),
@@ -1028,6 +1065,12 @@ def _escape(value: object) -> str:
 #: exactly the reason the row checkboxes are delegated the same way.
 SORT_HEADER_CLASS = "bc-sort-th"
 
+#: The class a table's scrolling wrapper carries, so the page-load script can
+#: find it again after a re-render and restore the scroll position that
+#: re-render would otherwise have thrown away (see the ``shiny:value``
+#: listener in ``create_app``).
+SCROLL_CLASS = "bc-scroll"
+
 
 #: Pixel width assigned to each frozen column, so its offset from the left
 #: edge (and every later frozen column's) can be computed without a browser
@@ -1051,14 +1094,26 @@ def _sticky_offsets(columns, sticky: frozenset[str]) -> dict[str, tuple[int, int
     return offsets
 
 
-def _sticky_style(offset: int, width: int, *, header: bool) -> str:
-    # z-index 3 keeps a frozen header cell above a frozen body cell, which is
-    # itself above a plain cell scrolling underneath both -- otherwise a wide
-    # column's text bleeds through the "frozen" pane while scrolling.
-    top = "top:0;" if header else ""
-    z = 3 if header else 1
-    return (f"position:sticky;left:{offset}px;{top}z-index:{z};background:#fff;"
+def _sticky_style(offset: int, width: int) -> str:
+    # z-index 1 for a frozen body cell, above a plain cell scrolling
+    # underneath it -- otherwise a wide column's text bleeds through the
+    # "frozen" pane while scrolling.
+    return (f"position:sticky;left:{offset}px;z-index:1;background:#fff;"
             f"width:{width}px;min-width:{width}px;max-width:{width}px;")
+
+
+def _header_style(sticky: tuple[int, int] | None) -> str:
+    # position:sticky goes on every header cell individually, not on <thead>:
+    # <thead> has display:table-header-group, and sticky positioning on that
+    # (or on <tr>) is unreliable across browsers -- a <th> is a table cell,
+    # exactly what sticky is specified to work on. z-index 3 keeps a frozen
+    # (top AND left) corner cell above a plain header cell (z-index 2), which
+    # is itself above a frozen body cell (z-index 1) scrolling underneath both.
+    if sticky:
+        offset, width = sticky
+        return (f"position:sticky;top:0;left:{offset}px;z-index:3;background:#fff;"
+                f"width:{width}px;min-width:{width}px;max-width:{width}px;")
+    return "position:sticky;top:0;z-index:2;background:#fff;"
 
 
 def _header_cell(column: str, labels: dict[str, str], *, sort_input: str | None,
@@ -1066,11 +1121,9 @@ def _header_cell(column: str, labels: dict[str, str], *, sort_input: str | None,
                  sticky: tuple[int, int] | None) -> str:
     label = _escape(labels.get(column, column))
     can_sort = bool(sort_input) and column in sortable
-    style = _sticky_style(*sticky, header=True) if sticky else ""
+    style = _header_style(sticky)
     if can_sort:
         style += "cursor:pointer;user-select:none;"
-    if not style:
-        return f"<th>{label}</th>"
     attrs = f" style='{style}'"
     if can_sort:
         arrow = " ▼" if sort_state[0] == column and sort_state[1] else \
@@ -1118,17 +1171,17 @@ def _table(frame: pd.DataFrame, labels: dict[str, str] | None = None,
             rendered = rendered if rendered is not None \
                 else f"<td>{_escape(row[column])}</td>"
             if column in offsets and rendered.startswith("<td>"):
-                style = _sticky_style(*offsets[column], header=False)
+                style = _sticky_style(*offsets[column])
                 rendered = f"<td style='{style}'>" + rendered[len('<td>'):]
             cells.append(rendered)
         body.append("<tr>" + "".join(cells) + "</tr>")
     more = ("" if len(frame) <= limit else
             f"<p class='text-muted small'>Showing {limit:,} of {len(frame):,} rows.</p>")
     return (
-        "<div style='max-height:62vh;overflow:auto;'>"
+        f"<div class='{SCROLL_CLASS}' style='max-height:62vh;overflow:auto;'>"
         "<table class='table table-sm table-hover' style='font-size:13px;"
         "border-collapse:separate;'>"
-        f"<thead style='position:sticky;top:0;background:#fff;'><tr>{head}</tr></thead>"
+        f"<thead><tr>{head}</tr></thead>"
         f"<tbody>{''.join(body)}</tbody></table></div>{more}"
     )
 
