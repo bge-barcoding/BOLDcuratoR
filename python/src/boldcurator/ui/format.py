@@ -90,16 +90,22 @@ GROUP_LABELS = {
     "inst": "Institution",
 }
 
+#: ``mean_quality_score`` is a real column of ``build_species_checklist``'s
+#: output but has no entry here -- round 3, item 4 dropped it from the
+#: on-screen checklist and the xlsx export as noise nobody asked to see, not
+#: from the underlying data (other callers, e.g. tests, still get it).
 CHECKLIST_LABELS = {
     "species": "Species", "specimen_count": "Specimens", "bin_count": "BINs",
     "bin_uris": "BIN URIs", "bags_grade": "BAGS", "countries": "Countries",
-    "mean_quality_score": "Mean quality",
 }
 
+#: ``bin_coverage`` -- likewise a real column of ``analyse_bins``'s output,
+#: still in the BIN analysis xlsx download, but dropped from the on-screen
+#: dashboard (round 3, item 5).
 BIN_LABELS = {
     "bin_uri": "BIN", "total_records": "Records", "unique_species": "Species",
     "species_list": "Species list", "countries": "Countries",
-    "concordance": "Concordance", "bin_coverage": "Share of result",
+    "concordance": "Concordance",
 }
 
 GAP_LABELS = {

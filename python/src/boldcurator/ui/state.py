@@ -260,6 +260,23 @@ class SearchState:
         return export_io.write_bin_analysis_xlsx(analysis, path,
                                                   snapshot_id=result.snapshot_id)
 
+    def export_species_analysis(self, store: SnapshotStore, path) -> "Path | None":
+        """The species checklist and gap analysis, one workbook (round 3,
+
+        items 3-4). Refused only when there is no checklist at all -- gap
+        analysis can legitimately be empty (no taxa typed, a dataset/project-
+        code-only search) while the checklist still has something to show.
+        """
+        from ..io import exports as export_io
+
+        checklist = self.checklist(store)
+        if len(checklist) == 0:
+            return None
+        gaps = self.gap_analysis(store)
+        snapshot_id = self.analysis(store).snapshot_id
+        return export_io.write_species_analysis_xlsx(
+            checklist, gaps, path, snapshot_id=snapshot_id)
+
 
 class AppState:
     """Everything the session holds between clicks."""

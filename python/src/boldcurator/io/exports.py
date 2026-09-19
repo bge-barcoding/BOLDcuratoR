@@ -251,6 +251,40 @@ def write_bin_analysis_xlsx(
     return path
 
 
+def write_species_analysis_xlsx(
+    checklist: pd.DataFrame,
+    gaps: pd.DataFrame,
+    path: Path,
+    *,
+    snapshot_id: str = "",
+) -> Path:
+    """The species checklist and gap analysis, one workbook (plan round 3,
+
+    items 3-4) -- both are whole-result summaries of the Species screen, so
+    a curator downloading one is likely to want the other alongside it.
+    ``mean_quality_score`` is dropped from the checklist sheet: it is not
+    shown on screen any more (round 3, item 4), and a fresh export's column
+    set has no download-format compatibility to preserve the way the older,
+    already-shipped TSV/BIN exports do.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    checklist_out = checklist.drop(columns=["mean_quality_score"], errors="ignore")
+    summary_frame = pd.DataFrame([
+        {"metric": "species", "value": len(checklist)},
+        {"metric": "taxa typed", "value": len(gaps)},
+        {"metric": "snapshot_id", "value": snapshot_id},
+        {"metric": "data licence", "value": BOLD_ATTRIBUTION_TEXT},
+    ])
+
+    with pd.ExcelWriter(path, engine="openpyxl") as writer:
+        summary_frame.to_excel(writer, sheet_name="Summary", index=False)
+        checklist_out.to_excel(writer, sheet_name="Species checklist", index=False)
+        gaps.to_excel(writer, sheet_name="Gap analysis", index=False)
+    return path
+
+
 # --------------------------------------------------------------------------
 # The whole set
 # --------------------------------------------------------------------------

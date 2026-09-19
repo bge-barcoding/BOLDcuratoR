@@ -611,7 +611,16 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         @render.ui
         def species_body():
             def body(search):
-                checklist = _sorted_by(search.checklist(store), checklist_sort)
+                # Round 3, item 4: mean quality isn't something a curator
+                # scanning the checklist needs -- dropped from the on-screen
+                # table (and the xlsx export, SearchState.export_species_analysis)
+                # rather than the underlying build_species_checklist frame,
+                # which other callers (tests, a future consumer) may still
+                # want it from.
+                checklist = _sorted_by(
+                    search.checklist(store).drop(columns=["mean_quality_score"],
+                                                 errors="ignore"),
+                    checklist_sort)
                 counts = search.grade_counts(store)
                 gaps = search.gap_analysis(store)
                 # Gap analysis only has something to say when taxa were
@@ -646,6 +655,9 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                         style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap;",
                     ),
                     gap_section,
+                    ui.download_button("dl_species_analysis",
+                                       "Download species analysis (xlsx)",
+                                       class_="btn-sm mb-2"),
                     ui.HTML(_checklist_html(checklist, sort_state=checklist_sort.get())),
                 )
             return _needs_analysis(body)
@@ -658,7 +670,13 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             def body(search):
                 analysis = search.analysis(store).bin_analysis
                 summary = analysis["summary"]
-                content = _sorted_by(analysis["content"], bins_sort)
+                # Round 3, item 5: "share of result" isn't something a
+                # curator scanning the BIN dashboard needs -- dropped from
+                # the on-screen table only; the BIN analysis xlsx download
+                # (analysis["content"] itself) is unchanged.
+                content = _sorted_by(
+                    analysis["content"].drop(columns=["bin_coverage"], errors="ignore"),
+                    bins_sort)
                 return ui.div(
                     ui.div(
                         value_box(f"{summary['total_bins']:,}", "Total BINs",
@@ -1217,6 +1235,25 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 return
             yield from _stream_file(written, tmpdir)
 
+        @output(id="dl_species_analysis")
+        @render.download_button(
+            filename=lambda: f"species_analysis_{export_io.timestamp()}.xlsx",
+            media_type="application/vnd.openxmlformats-officedocument"
+                       ".spreadsheetml.sheet")
+        def _dl_species_analysis():
+            search = state.search
+            if search is None:
+                yield from _empty_download("run a search first")
+                return
+            tmpdir = tempfile.TemporaryDirectory()
+            path = Path(tmpdir.name) / "export.xlsx"
+            written = search.export_species_analysis(store, path)
+            if written is None:
+                tmpdir.cleanup()
+                yield from _empty_download("no species in this result")
+                return
+            yield from _stream_file(written, tmpdir)
+
     return App(app_ui, server)
 
 
@@ -1412,8 +1449,6 @@ def _bins_html(frame: pd.DataFrame, *,
     def cell(column, value, row):
         if column == "concordance" and not _is_missing(value) and value:
             return _chip(value, CONCORDANCE_COLOURS.get(str(value), "#adb5bd"))
-        if column == "bin_coverage":
-            return "<td></td>" if _is_missing(value) else f"<td>{float(value):.1%}</td>"
         if column == "bin_uri" and not _is_missing(value) and value:
             return _link_cell(value, bold_bin_url(str(value)))
         return None

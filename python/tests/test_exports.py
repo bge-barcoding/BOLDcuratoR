@@ -162,6 +162,59 @@ def test_bin_analysis_workbook_has_three_populated_sheets(store, tmp_path):
     assert "CC BY-SA 4.0" in summary_text
 
 
+def test_species_analysis_workbook_has_the_checklist_and_gap_analysis(store, tmp_path):
+    """Plan round 3, items 3-4: one xlsx download for the Species screen."""
+    from boldcurator.core.pipeline import run_search
+    from boldcurator.core.summaries import build_species_checklist, gap_analysis
+
+    result = run_search(store, taxa_text="Danaus plexippus")
+    checklist = build_species_checklist(result.specimens, result.bags_grades)
+    gaps = gap_analysis(result.taxonomy_groups, result.specimens)
+
+    path = exports.write_species_analysis_xlsx(
+        checklist, gaps, tmp_path / "species.xlsx", snapshot_id="x")
+    sheets = pd.read_excel(path, sheet_name=None)
+    assert set(sheets) == {"Summary", "Species checklist", "Gap analysis"}
+    assert len(sheets["Species checklist"]) == len(checklist)
+    assert len(sheets["Gap analysis"]) == len(gaps)
+    assert "mean_quality_score" not in sheets["Species checklist"].columns
+    summary_text = sheets["Summary"].to_string()
+    assert "CC BY-SA 4.0" in summary_text
+
+
+def test_species_analysis_workbook_survives_an_empty_gap_analysis(store, tmp_path):
+    """A dataset/project-code-only search has no taxa typed -- gaps is
+    legitimately empty, and that must not be treated as nothing to export."""
+    from boldcurator.core.summaries import build_species_checklist
+
+    checklist = build_species_checklist(
+        pd.DataFrame({"species": ["Danaus plexippus"], "bin_uri": ["BOLD:AAA0001"],
+                     "country.ocean": ["Canada"], "quality_score": [10]}),
+        pd.DataFrame(columns=["species", "bags_grade"]),
+    )
+    gaps = pd.DataFrame(columns=["input_taxon", "status", "matched_species",
+                                 "specimen_count", "notes"])
+
+    path = exports.write_species_analysis_xlsx(
+        checklist, gaps, tmp_path / "species.xlsx", snapshot_id="x")
+    sheets = pd.read_excel(path, sheet_name=None)
+    assert len(sheets["Species checklist"]) == 1
+    assert len(sheets["Gap analysis"]) == 0
+
+
+def test_search_state_exports_species_analysis_end_to_end(store, tmp_path):
+    from boldcurator.ui.state import AppState
+
+    state = AppState(store, page_size=25)
+    state.run_search("Danaus plexippus")
+    written = state.search.export_species_analysis(store, tmp_path / "s.xlsx")
+    assert written is not None
+    sheets = pd.read_excel(written, sheet_name=None)
+    assert set(sheets) == {"Summary", "Species checklist", "Gap analysis"}
+    assert len(sheets["Species checklist"]) > 0
+    assert "Danaus plexippus" in sheets["Gap analysis"]["input_taxon"].tolist()
+
+
 def test_unknown_flag_is_refused():
     a = Annotations()
     with pytest.raises(ValueError, match="Unknown flag"):

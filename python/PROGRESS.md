@@ -105,12 +105,34 @@ before moving to the next.
    don't change on paging, so two different pages started looking
    identical) -- fixed with a new `tbody_text()` helper that reads only the
    row data.
-3. [ ] **Gap analysis needs an xlsx download**, matching the BIN dashboard's
-   "Download BIN analysis (xlsx)" button.
-4. [ ] **The species checklist doesn't need mean quality score shown**, and
-   needs its own xlsx download -- possibly a second sheet on the same
-   workbook as #3, since both are Species-screen summaries.
-5. [ ] **The BIN dashboard doesn't need "share of result" shown.**
+3. [x] **Gap analysis needs an xlsx download**, matching the BIN dashboard's
+   "Download BIN analysis (xlsx)" button. Fixed together with #4 -- one
+   workbook, since a curator downloading one Species-screen summary is
+   likely to want the other alongside it.
+4. [x] **The species checklist doesn't need mean quality score shown**, and
+   needs its own xlsx download. Fixed -- `io/exports.write_species_analysis_xlsx`
+   writes one workbook with three sheets (Summary, Species checklist, Gap
+   analysis) for the new "Download species analysis (xlsx)" button on the
+   Species screen; `SearchState.export_species_analysis` wires it up,
+   refusing only when there is no checklist at all (gap analysis can be
+   legitimately empty -- a dataset/project-code-only search -- while the
+   checklist still has something to show). Mean quality is dropped from
+   both the on-screen checklist and the new xlsx's checklist sheet -- from
+   the *display*, not from `build_species_checklist`'s own output, which
+   other callers (tests, a future consumer) still get it from.
+   `ui/format.CHECKLIST_LABELS` no longer carries a "Mean quality" entry.
+   New tests: `test_exports.py`'s three new cases (the workbook's three
+   sheets, survives an empty gap analysis, and `SearchState`'s own export
+   end to end). Verified live: no "Mean quality" header on screen, the
+   download button exists and produces a workbook with the three sheets.
+5. [x] **The BIN dashboard doesn't need "share of result" shown.** Fixed --
+   dropped from the on-screen table only (`bins_body`); the existing BIN
+   analysis xlsx download is unchanged, since it was not asked to change
+   and other things may still want that column from the export. The now-dead
+   `bin_coverage` cell-formatting branch in `_bins_html` was removed along
+   with it, and `ui/format.BIN_LABELS` no longer carries a "Share of
+   result" entry. Verified live: no "Share of result" header on the BINs
+   tab.
 6. [ ] **Session save should be schedulable** -- e.g. every minute,
    automatically, not only on a manual click.
 
