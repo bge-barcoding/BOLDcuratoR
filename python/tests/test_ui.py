@@ -34,22 +34,30 @@ def test_the_cc_by_sa_attribution_is_on_the_page(fixture_snapshot):
     assert CC_BY_SA_URL in html
 
 
-def test_the_preview_columns_all_exist_in_a_real_page(store):
-    """A preview column no page carries renders as a silently missing one.
+def test_all_columns_ordered_drops_nothing_and_leads_with_the_curated_ones(store):
+    """Plan round 3, item 1: the specimen table shows every column, not a
 
-    ``bags_grade`` is the one exception and it is deliberate: grading is a fact
-    about the whole result, so a page cannot carry it until a summary screen
-    has been opened. `SearchState.grade_lookup` supplies it after that.
+    curated subset -- matching the original R app's own `order_columns`/
+    `PREFERRED_COLUMNS` (curated columns first, everything else after, with
+    a horizontal scroll rather than anything hidden).
     """
     from boldcurator.core.table import SpecimenTable
     from boldcurator.data.queries import SearchQuery, plan_search, resolve_taxa
-    from boldcurator.ui.app import PREVIEW_COLUMNS
+    from boldcurator.ui.app import _all_columns_ordered
+    from boldcurator.ui.format import GROUP_COLUMNS
 
     plan = plan_search(store, SearchQuery(
         taxa=resolve_taxa(store, ["Nymphalidae"]).resolved, expand_bins=True))
     rows = SpecimenTable(store, plan, page_size=5).page(0).rows
-    missing = [c for c in PREVIEW_COLUMNS if c not in rows.columns]
-    assert missing == ["bags_grade"], f"unexpected missing columns: {missing}"
+    ordered = _all_columns_ordered(rows)
+
+    assert set(ordered) == set(rows.columns), "a column was dropped or invented"
+    assert len(ordered) == len(rows.columns), "no duplicates either"
+    curated_present = [c for c in GROUP_COLUMNS if c in rows.columns]
+    assert ordered[:len(curated_present)] == curated_present
+    # A real BOLD column that is deliberately not curated, to prove "the rest"
+    # isn't empty -- this port's schema always carries it.
+    assert "sampleid" in ordered[len(curated_present):]
 
 
 def test_the_grade_appears_on_the_specimen_table_once_the_analysis_has_run(store):
@@ -349,7 +357,7 @@ def test_grade_c_keeps_each_bin_of_a_split_species_separate(store):
 def test_the_specimen_table_renders_the_columns_it_says_it_does(store):
     """`_group_html` used to re-filter to the BAGS layout, silently dropping
     whatever columns the caller had chosen."""
-    from boldcurator.ui.app import PREVIEW_COLUMNS, _group_html
+    from boldcurator.ui.app import _all_columns_ordered, _group_html
     from boldcurator.ui.format import GROUP_LABELS
     from boldcurator.ui.state import AppState
 
@@ -361,9 +369,10 @@ def test_the_specimen_table_renders_the_columns_it_says_it_does(store):
     rows["bags_grade"] = [lookup.get(s, "") if isinstance(s, str) else ""
                           for s in rows["species"].astype(object)]
 
-    html = _group_html(rows, columns=PREVIEW_COLUMNS, limit=len(rows))
+    columns = _all_columns_ordered(rows)
+    html = _group_html(rows, columns=columns, limit=len(rows))
     header = html.split("<tbody>")[0]
-    for column in PREVIEW_COLUMNS:
+    for column in columns:
         label = GROUP_LABELS.get(column, column)
         assert f">{label}<" in header, f"{column} missing from the rendered header"
 

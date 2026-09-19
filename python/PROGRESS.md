@@ -76,21 +76,35 @@ Fixing one at a time, one commit per item, each verified with new unit tests
 and a live browser run (`tools/drive_ui.py` plus ad-hoc Playwright checks)
 before moving to the next.
 
-1. [ ] **Specimen tables should show every column, not a curated subset.**
-   The original Shiny app renders all BOLD columns (curated/annotation ones
-   first, via `PREFERRED_COLUMNS`/`order_columns`) with `scrollX` horizontal
-   scroll (`R/utils/table_utils.R`), rather than picking a subset. This
-   port's Specimens tab currently narrows to `PREVIEW_COLUMNS` (14 of ~71).
-   Show every column the page carries; keep the Rep./Check/Flag/Updated ID/
-   Notes columns frozen to the left edge the way they already are (the
-   sticky-column machinery is column-driven, not tied to the curated list).
-2. [ ] **The Specimens tab's curation toolbar doesn't fit the default window
-   width.** Check page / Check all / Clear checked / Flag / Curator note /
-   Corrected identification all sit in one flex row alongside the paging
-   controls, which overflows. Restructure to match the BAGS C/E layout
-   (`_grade_body`): paging/sort in their own row, the curation toolbar
-   (bulk-check buttons in a narrow column + `_annotation_controls`) in a
-   second, compact row below it.
+1. [x] **Specimen tables should show every column, not a curated subset.**
+   Fixed -- `_all_columns_ordered(frame)` (`ui/app.py`) replaces the old
+   14-column `PREVIEW_COLUMNS` constant: curated/annotation columns first
+   (via `GROUP_COLUMNS`, already used for the BAGS group tables), then every
+   remaining physical/derived column the page carries, in the frame's own
+   order -- matching the original R app's `PREFERRED_COLUMNS`/
+   `order_columns` (`R/config/constants.R`, `R/utils/annotation_utils.R`):
+   nothing dropped, curated columns lead, `scrollX`-style horizontal scroll
+   for the rest. The sticky-column machinery (`STICKY_COLUMN_WIDTHS`) is
+   already column-driven, not list-length-driven, so Rep./Check/Flag/
+   Updated ID/Notes stayed frozen with no changes needed there. Verified
+   live: the Specimens tab now renders 83 headers (was 14), including raw
+   BOLD columns with no curated label (`sampleid`, `flag_user`, ...), with
+   Rep. still the first, pinned header. `tests/test_ui.py` updated (the old
+   "the preview columns all exist" test replaced with one asserting nothing
+   is dropped or duplicated and the curated block leads).
+2. [x] **The Specimens tab's curation toolbar doesn't fit the default window
+   width.** Fixed -- split into two rows, matching the BAGS C/E layout
+   (`_grade_body`): paging/sort controls in their own row, then a second row
+   with Check page/Check all/Clear checked (+ a checked count, for parity
+   with the BAGS screens' own toolbar) stacked in a narrow column beside
+   `_annotation_controls` (Flag/Curator note/Corrected identification/
+   Apply). Verified live: the toolbar's bounding box fits within a 1400px
+   viewport it previously overflowed. `tools/drive_ui.py`'s "paging moves to
+   different rows" check was comparing the first 200 characters of the
+   *whole* table's text, which item 1 made almost entirely header (headers
+   don't change on paging, so two different pages started looking
+   identical) -- fixed with a new `tbody_text()` helper that reads only the
+   row data.
 3. [ ] **Gap analysis needs an xlsx download**, matching the BIN dashboard's
    "Download BIN analysis (xlsx)" button.
 4. [ ] **The species checklist doesn't need mean quality score shown**, and

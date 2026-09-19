@@ -66,15 +66,21 @@ from .state import AppState, ResultTooLargeToAnalyse
 
 PAGE_SIZES = [25, 50, 100, 250, 500]
 
-#: Shown on the specimen table. The full 71 columns are available; a grid with
-#: 71 columns is unreadable, and the R app shows a chosen subset too.
-#: ``bags_grade`` is absent until a summary screen has been opened -- see
-#: ``SearchState.grade_lookup``.
-PREVIEW_COLUMNS = [
-    "selected", "checked", "flag", "curator_notes", "updated_id",
-    "processid", "species", "bin_uri", "country.ocean",
-    "quality_score", "rank", "bags_grade", "inst", "identified_by",
-]
+def _all_columns_ordered(frame: pd.DataFrame) -> list[str]:
+    """Every column ``frame`` carries, curated ones first -- nothing dropped.
+
+    Matches the original R app's own choice (`PREFERRED_COLUMNS`/
+    `order_columns` in `R/config/constants.R` and `R/utils/annotation_utils.R`):
+    the curated/annotation columns lead, the rest of the ~71 BOLD columns
+    follow in whatever order the snapshot has them, and the table scrolls
+    horizontally (`SCROLL_CLASS`) rather than hiding anything. ``bags_grade``
+    is absent from a page until a summary screen has been opened -- see
+    ``SearchState.grade_lookup`` -- so it simply isn't in ``frame`` yet, not
+    specially excluded here.
+    """
+    preferred = [c for c in GROUP_COLUMNS if c in frame.columns]
+    rest = [c for c in frame.columns if c not in GROUP_COLUMNS]
+    return preferred + rest
 
 #: Why each specimen-handling TSV download can come back empty, keyed the same
 #: way ``SearchState.export_specimens`` is.
@@ -896,6 +902,11 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 if table.sort_column else "Result order (click a column header to sort)"
             )
             return ui.div(
+                # Paging/sort in their own row -- kept separate from the
+                # curation toolbar below (round 3, item 2) so the whole
+                # thing fits the default window width instead of overflowing
+                # one long flex row, matching the two-row layout the BAGS
+                # C/E screens already use (_grade_body).
                 ui.div(
                     ui.tags.span(sort_label, class_="small text-muted"),
                     ui.input_action_button("reset_sort", "Reset order",
@@ -910,12 +921,21 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                                  class_="small text-nowrap"),
                     ui.input_action_button("next_", "›", class_="btn-sm"),
                     ui.input_action_button("last", "»", class_="btn-sm"),
-                    ui.input_action_button("select_page", "Check page",
-                                           class_="btn-sm"),
-                    ui.input_action_button("select_all", "Check all",
-                                           class_="btn-sm"),
-                    ui.input_action_button("clear_selection", "Clear checked",
-                                           class_="btn-sm"),
+                    style="display:flex;align-items:center;gap:10px;"
+                          "flex-wrap:wrap;margin-bottom:8px;",
+                ),
+                ui.div(
+                    ui.div(
+                        ui.input_action_button("select_page", "Check page",
+                                               class_="btn-sm"),
+                        ui.input_action_button("select_all", "Check all",
+                                               class_="btn-sm"),
+                        ui.input_action_button("clear_selection", "Clear checked",
+                                               class_="btn-sm"),
+                        ui.div(f"{len(state.annotations.working):,} checked",
+                               class_="small text-muted pt-1"),
+                        style="display:flex;flex-direction:column;gap:4px;",
+                    ),
                     *_annotation_controls("sp"),
                     style="display:flex;align-items:end;gap:10px;flex-wrap:wrap;"
                           "margin-bottom:10px;padding:8px;background:#f8f9fa;"
@@ -936,7 +956,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;",
                 ),
                 ui.HTML(_group_html(
-                    rows, columns=PREVIEW_COLUMNS, limit=len(rows),
+                    rows, columns=_all_columns_ordered(rows), limit=len(rows),
                     sort_input="spec_sort_click",
                     sortable=frozenset(table.sortable_columns),
                     sort_state=(table.sort_column, table.sort_descending))),

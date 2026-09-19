@@ -76,8 +76,9 @@ GROUP_COLUMNS = [
     "species", "bags_grade", "identification", "identified_by", "country.ocean",
 ]
 
-#: Headers for ``GROUP_COLUMNS`` (and the specimen table's ``PREVIEW_COLUMNS``,
-#: a subset of the same names). "Rep." and "Check" carry the distinction
+#: Headers for ``GROUP_COLUMNS`` (and the columns of the same names among the
+#: specimen table's full column set -- see ``ui.app._all_columns_ordered``).
+#: "Rep." and "Check" carry the distinction
 #: ``GROUP_COLUMNS`` documents -- one is the persistent representative pick,
 #: the other a disposable bulk-edit selection.
 GROUP_LABELS = {

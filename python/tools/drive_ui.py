@@ -79,6 +79,13 @@ def main(argv: list[str] | None = None) -> int:
             tables = page.locator(f"{selector} table")
             return "\n".join(tables.nth(i).inner_text() for i in range(tables.count()))
 
+        def tbody_text(selector: str) -> str:
+            """Only the row data, not the header -- for a table wide enough
+            (round 3's "show every column") that the header alone can exceed
+            a short slice, making two different pages look identical."""
+            bodies = page.locator(f"{selector} table tbody")
+            return "\n".join(bodies.nth(i).inner_text() for i in range(bodies.count()))
+
         def show(name: str, settle: float = 3.0) -> None:
             # has-text, not text-is: the priority grades carry a bullet in
             # their label, so an exact match finds nothing.
@@ -200,11 +207,11 @@ def main(argv: list[str] | None = None) -> int:
         header = page.locator("#specimens_body table thead").inner_text()
         check("the specimen table carries the BAGS grade once analysed",
               "BAGS" in header, header.replace("\n", " "))
-        before = table_text("#specimens_body")[:200]
+        before = tbody_text("#specimens_body")[:200]
         page.click("#next_")
         time.sleep(SETTLE)
         check("paging moves to different rows",
-              table_text("#specimens_body")[:200] != before)
+              tbody_text("#specimens_body")[:200] != before)
         # The five annotation columns are sortable on the specimen table too,
         # not only a stored/physical one -- SpecimenTable.sort_by fetches
         # nothing from the database for these, it reads Annotations directly.
