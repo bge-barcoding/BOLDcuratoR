@@ -15,10 +15,11 @@ Two full rounds of curator-reported bugs (9 issues) are fixed and verified
 live; **round 3 (6 issues) is now also closed** -- see below. 286 tests
 pass, the parity gate is green. `fetch_snapshot` (plan 5.1) and the desktop
 launcher + first-run setup screen (4.1a/4.2) are done. **CI (plan 2.6) is
-written and has run for real**: green on Linux, macOS and the parity job;
-Windows caught a genuine cross-platform bug (a test helper decoding source
-files with the platform locale codepage instead of UTF-8), now fixed and
-awaiting a re-run. **The release build (plan 4.3) is written but not yet
+written, has run for real, and is fully green** on Linux, macOS, Windows and
+the parity job -- Windows caught a genuine cross-platform bug on the first
+run (a test helper decoding source files with the platform locale codepage
+instead of UTF-8), fixed and confirmed on the re-run. **The release build
+(plan 4.3) is written but not yet
 triggered** -- this session lacks the GitHub permissions to dispatch it;
 the project owner needs to run it from the Actions tab or by pushing a `v*`
 tag. A real frozen PyInstaller build was proven to work outside CI (CLI and
@@ -32,22 +33,11 @@ deliberate no for now (project owner's call).
 
 No open curator-reported bugs right now -- three rounds are closed (see the
 "Open issues" sections below for what was wrong and how each was fixed, if
-a similar bug resurfaces). What's left is packaging and distribution:
+a similar bug resurfaces). CI (plan 2.6) is done and confirmed green on all
+three platforms -- see "CI (plan 2.6)" below. What's left is the release
+build:
 
-1. **CI (plan 2.6) — written and passing on real runners.**
-   `.github/workflows/python-tests.yml` (pytest on Linux/macOS/Windows, plus
-   the parity harness on Linux with R installed via apt) ran for real on
-   this session's push: **Linux, macOS and the parity job all passed first
-   try; Windows failed on a genuine bug**, not a CI artefact --
-   `tests/test_no_gui_dependency.py`'s `_imports()` helper called
-   `Path.read_text()` with no encoding, which defaults to the platform's
-   locale codepage (cp1252 on Windows, not UTF-8), and this project's
-   docstrings use real em dashes and arrows that cp1252 cannot decode.
-   Fixed with an explicit `encoding="utf-8"` there and in `cli.py`'s
-   `--taxa-file` reader (same latent bug, not yet hit by a test, fixed
-   while here). **Not yet re-confirmed on Windows after the fix** -- push
-   this and check the next run.
-2. **4.3 the release build — written, real verification still pending.**
+1. **4.3 the release build — written, real verification still pending.**
    `.github/workflows/python-release.yml` (PyInstaller builds on Linux,
    Windows, macOS x86_64 and arm64, triggered by a `v*` tag or manually via
    `workflow_dispatch`) could **not** be triggered from this session --
@@ -66,12 +56,12 @@ a similar bug resurfaces). What's left is packaging and distribution:
    been reviewed by reading the code, not run. The release workflow's own
    smoke-test steps exist to catch exactly this kind of gap automatically,
    but only once someone actually fires it.
-3. **4.4 Signing** — still a deliberate no (project owner's call, curator
+2. **4.4 Signing** — still a deliberate no (project owner's call, curator
    testing doesn't need it) and **4.5 installer smoke test on a clean VM**
    still not done — the release workflow's own smoke test is a CI proxy for
    this, not a replacement for someone actually double-clicking a
    downloaded build.
-4. **Also open, not urgent:**
+3. **Also open, not urgent:**
    - The R app (not this rewrite) rejects 4% of real BOLD dataset codes --
      `mod_data_import_utils.R:50`'s `^DS-[A-Z0-9]+$` pattern; 544 of 13,706
      real `DS-` codes don't match. Live bug in the *shipped* app. The SQL to
@@ -171,6 +161,30 @@ before moving to the next.
    minute later (confirmed against the session's own `updated_at` in
    `sessions.sqlite`), and unchecking it stops further ticks (no third
    save in the following minute).
+
+## CI (plan 2.6) -- resolved, confirmed green on real runners
+
+[x] `.github/workflows/python-tests.yml`: pytest on a Linux/macOS/Windows
+matrix, plus the parity harness on Linux (R installed via apt, `--vanilla`
+to skip the repo's renv-bootstrapping `.Rprofile`). Two real pushes, two
+real outcomes worth recording:
+
+- **First run**: Linux, macOS and the parity job all passed immediately.
+  **Windows failed on a genuine bug**, not a CI artefact --
+  `tests/test_no_gui_dependency.py`'s `_imports()` helper called
+  `Path.read_text()` with no encoding, which defaults to the platform's
+  locale codepage (cp1252 on Windows, not UTF-8) rather than UTF-8, and
+  this project's docstrings use real em dashes and arrows that cp1252
+  cannot decode. Fixed with an explicit `encoding="utf-8"` there, and in
+  `cli.py`'s `--taxa-file` reader, which has the identical latent bug (not
+  yet hit by a test, since nothing has exercised it with non-ASCII taxon
+  names, but fixed while here rather than left for later).
+- **Second run, after the fix**: green on all four jobs (Linux, macOS,
+  Windows, parity).
+
+This is exactly the kind of thing plan 2.6 exists to catch automatically --
+a real, if narrow, cross-platform bug that every local run in this Linux
+sandbox was blind to.
 
 ## Packaging: native window and first-run setup (4.1a/4.2) -- resolved
 
