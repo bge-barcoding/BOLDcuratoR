@@ -124,29 +124,37 @@ less effort.
 **Verified on a real Windows machine:**
 - The frozen zip runs, and `boldcurator desktop` hits the
   `Python.Runtime.Loader.Initialize` failure above -- confirming the
-  problem is real, not sandbox-specific. Not yet re-tested against the
-  browser-fallback fix, which was written in response to this report but
-  has not itself been run on that machine.
+  problem is real, not sandbox-specific.
+- The Inno Setup installer (`packaging/windows-installer.iss`) builds in CI
+  (after a real failure on its first run -- a manually-triggered
+  `workflow_dispatch` sends `github.ref_name` as the *branch* name, not a
+  version, and that branch name's `/` made `OutputBaseFilename` invalid;
+  fixed by only trusting `github.ref` as a version on an actual
+  `refs/tags/vX.Y.Z` push), installs, and launches the app in `browser-app`
+  mode -- "looks like a regular app," per the project owner's own test.
+  Start Menu entry, desktop shortcut and uninstall have not been
+  individually confirmed beyond that.
 
 **Not verified anywhere yet:**
-- The `browser-app` and `tab` fallback paths, on a real machine (they are
-  covered by `tests/test_desktop.py`'s fault-injection tests, which prove
-  the cascade logic runs correctly and doesn't deadlock or double-read the
-  `resolved` queue, but not that a real Edge/Chrome window or browser tab
-  actually opens on a real Windows box).
 - `pywebview`'s happy path (a native window that actually opens). It could
   not even be *installed* in the sandbox this work was done in -- a `pip
   install pywebview` there fails while building one of its own
   dependencies (`proxy_tools`), due to a `setuptools`/`distutils`
   incompatibility specific to that environment's Debian-patched Python,
-  unrelated to this project's code.
-- The Inno Setup installer (`packaging/windows-installer.iss`) end to end:
-  it cannot even be *compiled* in this sandbox (`ISCC.exe` is
-  Windows-only), let alone run -- the CI step that builds it
-  (`python-release.yml`'s "Build the Windows installer" job) has not yet
-  been exercised on a real workflow run, and the resulting `setup.exe` has
-  never been installed, uninstalled, or checked for a working Start Menu
-  entry/desktop shortcut on an actual Windows machine.
+  unrelated to this project's code. The real Windows test above landed on
+  `browser-app` mode without anyone confirming whether `native` itself now
+  works or still hits the pythonnet failure -- both are consistent with
+  what was observed.
+- The `tab` fallback path specifically, on a real machine (covered by
+  `tests/test_desktop.py`'s fault-injection tests, which prove the cascade
+  logic runs correctly and doesn't deadlock or double-read the `resolved`
+  queue, but not that a real browser tab actually opens on a real Windows
+  box -- `browser-app` succeeding first means `tab` was never reached).
+- The setup screen's native file "Browse…" button (`ui/setup.py`, round 4
+  item 1): verified in this sandbox only as far as "no display at all"
+  gracefully falls through to "no file chosen" with no hang or crash --
+  not yet run on a machine with an actual screen to confirm the real
+  Tk file picker opens and returns a usable path.
 - The placeholder icon (`packaging/icon.ico`, a plain "BC" monogram) is
   exactly that -- a placeholder, swapped in purely so the installer and
   the browser-app window have *some* icon rather than a missing one.

@@ -36,57 +36,33 @@ native window and a bare tab. A second, independent Windows delivery
 mechanism was also built: an Inno Setup installer
 (`packaging/windows-installer.iss`) producing a real `setup.exe` with a
 Start Menu entry, optional desktop shortcut and uninstaller, wired into
-`python-release.yml`. Both are implemented and unit-tested but **not yet
-verified on a real Windows machine** -- see the new section below.
+`python-release.yml`. **Both are now confirmed on real Windows**: the
+installer's first CI run failed on an invalid `OutputBaseFilename` (a
+manually-triggered run's `github.ref_name` is a branch name, not a version --
+fixed by only trusting a real `refs/tags/vX.Y.Z` push), and once fixed, the
+project owner installed it and confirmed the app launches in its own
+browser-app window, "looks like a regular app." That same real-world test
+surfaced **round 4** (7 issues) -- now also closed, see below.
 
 ## NEXT SESSION — START HERE, in priority order
 
-No open curator-reported bugs right now -- three rounds are closed (see the
+No open curator-reported bugs right now -- four rounds are closed (see the
 "Open issues" sections below for what was wrong and how each was fixed, if
-a similar bug resurfaces). CI (plan 2.6) is done and confirmed green on all
-three platforms. What's left is confirming the browser-fallback fix on the
-Windows machine that hit the original crash, then the rest of the release
-build's real-world verification:
+a similar bug resurfaces). CI (plan 2.6) is green on all three platforms,
+and **the release build has now been confirmed working on real Windows**:
+the installer runs, the app launches in a `browser-app` window, and round 4
+(the issues that same real run surfaced) is closed too. What's left:
 
-1. **Re-test on the Windows machine that hit the
-   `Python.Runtime.Loader.Initialize` crash -- now with three window modes
-   and an installer to try.** A new build needs to be produced (trigger
-   `python-release.yml`, or build locally per `python/packaging/README.md`)
-   and actually run on that machine. Worth trying, in order: the plain zip
-   with `--window auto` (should now land on `browser-app` mode, a
-   chrome-less Edge/Chrome window, rather than the old plain browser tab,
-   since `native` is expected to still fail there); `--window browser-app`
-   forced, to confirm it never touches pythonnet; and the new
-   `BOLDcuratorSetup-*.exe` installer (Start Menu entry, optional desktop
-   shortcut, uninstaller) as the one-click alternative to unzipping. None of
-   this -- the `browser-app`/`tab` cascade logic, the icon, or the installer
-   script itself -- has been run on a real Windows machine yet; only the
-   fault-injection unit tests in `tests/test_desktop.py` have exercised the
-   cascade, and `windows-installer.iss` can't even be compiled outside
-   Windows (`ISCC.exe`), so this sandbox never got to try it at all.
-   - **A second real-world issue surfaced while getting that build**: the
-     matrix's Intel-macOS job (`macos-13`) queued forever, never picking up
-     a runner, while the other three jobs started within seconds.
-     `macos-13` hosted runners were fully retired by GitHub on
-     2025-12-04 -- the label matches nothing any more, so a job requesting
-     it queues indefinitely instead of failing. Fixed: `macos-13` ->
-     `macos-15-intel` (the current Intel label), plus a `timeout-minutes:
-     30` on the build job so a future runner-label rot fails clearly
-     instead of hanging the whole workflow again.
-2. **4.3 the rest of the release build — real verification still
-   pending.** `workflow_dispatch` on `.github/workflows/python-release.yml`
-   could not be triggered from this session (`actions: write` isn't
-   granted to the GitHub App token here, and dispatching it returned a
-   403) -- **the project owner needs to run it themselves**, from the
-   Actions tab ("Run workflow" on "Build desktop executables") or by
-   pushing a `v*` tag. See `python/packaging/README.md` for the exact
-   build recipe and the full account of what has/hasn't been verified.
-3. **4.4 Signing** — still a deliberate no (project owner's call, curator
+1. **4.4 Signing** — still a deliberate no (project owner's call, curator
    testing doesn't need it) and **4.5 installer smoke test on a clean VM**
-   still not done — the release workflow's own smoke test is a CI proxy for
-   this, not a replacement for someone actually double-clicking a
-   downloaded build.
-4. **Also open, not urgent:**
+   still not done for macOS/Linux (Windows is now covered by the project
+   owner's own real-machine test) — the release workflow's own smoke test is
+   a CI proxy for this, not a replacement for someone actually
+   double-clicking a downloaded build.
+2. **A macOS/Linux installer** (a `.dmg`, or similar) doesn't exist yet --
+   only Windows has one (Inno Setup). Not requested; worth asking the
+   project owner before building it speculatively.
+3. **Also open, not urgent:**
    - The R app (not this rewrite) rejects 4% of real BOLD dataset codes --
      `mod_data_import_utils.R:50`'s `^DS-[A-Z0-9]+$` pattern; 544 of 13,706
      real `DS-` codes don't match. Live bug in the *shipped* app. The SQL to
@@ -95,8 +71,14 @@ build's real-world verification:
    - `export_all` streams sequences twice (all specimens, then the selected
      subset) -- ~0.4 s a pass, not worth fixing without a curator waiting on
      it.
+   - The already-published Zenodo snapshot the project owner tested against
+     (round 4, item 2's real download) was itself built before round 4,
+     item 7's schema fix -- it will not gain the newly-unlocked columns
+     until it is rebuilt from a raw BOLD package with this session's
+     `snapshot_builder.py`/`schema.py` and republished. The code fix alone
+     does not retroactively add columns to a `.duckdb` file already on disk.
 
-Before starting any of the above: `python -m pytest tests/ -q` (308 passing)
+Before starting any of the above: `python -m pytest tests/ -q` (323 passing)
 and `python parity/compare.py` (PASS) from a clean checkout, per "First, 60
 seconds of setup" below -- and drive any UI change through
 `tools/drive_ui.py` before believing it works, per "the rules this session
@@ -152,13 +134,128 @@ approved ("Build both. Use a placeholder icon for now.").
   character. Fixed: only trust `github.ref` as a version when it actually
   matches `refs/tags/vX.Y.Z`; anything else (a manual run, a branch build)
   gets a fixed `0.0.0-dev` placeholder instead.
-- **Not verified anywhere yet** (this sandbox cannot get further): neither
-  window mode's actual on-screen behavior on a real Windows box, nor
-  whether the Inno Setup script now compiles cleanly end-to-end and
-  produces an installable `setup.exe` -- `ISCC.exe` is Windows-only, so
-  this can only be confirmed by a real CI run or a local Windows build.
-  See `python/packaging/README.md`'s "What has actually been verified"
-  section for the full, current list.
+- **Now verified on real Windows**: the project owner installed the built
+  `setup.exe` and confirmed the app launches in its own `browser-app`
+  window ("looks like a regular app") -- both new pieces from this section
+  work as designed. That same test surfaced round 4's 7 issues, below.
+
+## Windows delivery, round 4: real-machine test results -- all seven resolved
+
+The project owner's first real install + run of the packaged app (the
+`browser-app` window mode and Inno Setup installer above) surfaced seven
+issues, fixed one at a time the same way every prior round was: one commit
+per item where practical, `python -m pytest tests/ -q` (323 passing) and a
+live `tools/drive_ui.py`/Playwright run after each UI change.
+
+1. [x] **All specimen table columns were missing again, despite round 3's
+   fix.** Round 3 fixed the *display* (`_all_columns_ordered`, `ui/app.py`);
+   this was a *build-time* problem one layer below it that round 3 never
+   touched. `snapshot_builder.plan_columns` only ever kept source columns
+   named in `schema.REQUIRED_SOURCE_COLUMNS`/`OPTIONAL_SOURCE_COLUMNS` (71
+   of them) -- any BCDM column present in a real raw package but not yet
+   named in either list was silently dropped when the `.duckdb` snapshot
+   was built, long before the UI ever saw it. Fixed by inverting the
+   rule: keep **every** header column except `EXCLUDED_SOURCE_COLUMNS`
+   (still just `identifier_email`, a privacy exclusion) and the sequence
+   column, matching the original R app's own behaviour (`PREFERRED_COLUMNS`
+   in `R/config/constants.R` only ever reorders columns it already has, it
+   never narrows them). `describe_columns`'s dry-run report updated to
+   match (an unnamed column is now "kept anyway", not silently dropped).
+   **This is a build-time fix, not a display fix** -- it changes what a
+   *newly built* snapshot contains, not the one the project owner already
+   downloaded from Zenodo; that file needs rebuilding from a raw BOLD
+   package and republishing to actually gain the columns. Verified live: a
+   fresh fixture rebuild plus a `tools/drive_ui.py` run shows all 71+
+   columns again on the specimen table.
+2. [x] **Build in the Zenodo download**, so a curator doesn't have to find
+   or type a record id. `config.constants.DEFAULT_SNAPSHOT_ZENODO_DOI`
+   names this project's own published record
+   (`10.5281/zenodo.22849516`); the setup screen's "Download one" tab now
+   leads with a single "Download the latest public BOLD snapshot" button
+   using it, with the free-form URL/manifest/record field demoted to a
+   collapsed "Or provide your own source" for anyone who needs it.
+   `fetch_snapshot.py` gained: DOI/URL parsing (`_clean_zenodo_id`, via
+   `_ZENODO_ID_IN_DOI`) so a full DOI, a doi.org/zenodo.org URL, or a bare
+   id all resolve the same; `.duckdb.gz` recognised alongside `.duckdb`
+   when picking a file out of a multi-file record; and gzip decompression
+   (`_decompress_gzip`) after download, since real republished snapshots
+   are date-named and gzipped
+   (`bold_snapshot_2026-09-11.duckdb.gz`) -- the checksum Zenodo publishes
+   is verified against the *compressed* download (matching what was
+   actually uploaded) before decompressing into the final `.duckdb`.
+   8 new tests in `test_fetch_snapshot.py`. Verified live: the one-click
+   button correctly builds `https://zenodo.org/api/records/22849516` from
+   the raw DOI and attempts the real request (this sandbox's network
+   policy blocks zenodo.org outright, so it fails there with a clean
+   "Failed: Could not reach..." message rather than a crash -- exactly the
+   graceful-failure path a curator with a flaky connection would also see).
+3. [x] **Ten Shiny `UserWarning`s on the console** (`app.py`), all the same
+   shape: `def _handler(param=param):` inside a function already called
+   once per real value in a loop (`_register_grade(grade)`,
+   `_register_memory_sort(input_id, sort_state)`,
+   `_register_tsv_download(kind, output_id)`,
+   `_register_fasta_download(output_id, selected_only=...)`) -- the
+   default-argument closure trick is for binding a loop variable when the
+   *decorated function itself* is defined directly inside the loop; here
+   the outer function's own real parameter already did that job, making
+   the inner default redundant and the reason Shiny warned. Removed all
+   ten. Also fixed one unrelated `ShinyDeprecationWarning`
+   (`update_navs` → `update_navset`) noticed in the same console output.
+   Verified live: a fresh `boldcurator gui` run through the full
+   `tools/drive_ui.py` script (every control these ten functions back)
+   prints zero warnings.
+4. [x] **The app window needed vertical scrolling even maximized, on the
+   Species tab specifically ("other tabs fine").** Resolved as a direct
+   consequence of item 5 below, not a separate CSS change: the Species tab
+   was carrying its own grade-count boxes *and* the entire gap-analysis
+   block (its own boxes, its own table) stacked above the checklist table,
+   which is what pushed the page past the viewport. Moving gap analysis to
+   its own tab left Species with the same shape (and height) as BINs.
+   Verified live at three window sizes (1280×720, 1024×768, 1400×900 --
+   the last being `browser-app` mode's own default) with a Playwright
+   script measuring `document.documentElement.scrollHeight` against
+   `window.innerHeight`: zero overflow on Species, Gap analysis or BINs
+   at any of the three.
+5. [x] **Gap analysis moved to its own tab, above Species**, so it stops
+   crowding the checklist. `ui/app.py`: a new `gap_body` output/nav_panel
+   (`value="gap"`) carries exactly what used to be `species_body`'s
+   gap-analysis block; `species_body` now only renders the grade-count
+   boxes, the xlsx download and the checklist table.
+   `tools/drive_ui.py` updated to `show("Gap analysis")` before checking
+   its content, since it no longer lives inside `#species_body`.
+6. [x] **BINs tab's "Discordant BINs" and "BINs with >1 species" summary
+   boxes were reported as the same thing** -- removed the latter, kept
+   Discordant. (They are not *quite* identical in every edge case --
+   `discordant_bins` can be driven by a genus/family/order tie-break when
+   no BIN member has a valid species name at all, where `shared_bins`
+   only ever counts `unique_species > 1` -- but they coincide in every
+   ordinary case, which is what the report was based on.) One line
+   removed from `bins_body`, `ui/app.py`.
+7. [x] **The setup screen had no file browser** -- typing a path by hand
+   was the only way in, and a curator who had already been through setup
+   once (config persisted at `~/.boldcurator/config.json`, by design --
+   see `desktop.load_snapshot_path`) never saw the screen again to notice.
+   Added a "Browse…" button (`ui/setup.py`) that runs Tk's native
+   `askopenfilename` dialog in a short-lived helper **process**
+   (`multiprocessing`, `spawn` context), not in-process or via a plain
+   `subprocess` re-invoking `sys.executable -c ...`: the latter breaks
+   under PyInstaller, where `sys.executable` is this app's own frozen exe,
+   not a general-purpose interpreter, and Tk's dialogs are not guaranteed
+   to work off a process's main thread on every platform (this server runs
+   on a background thread regardless of window mode). `multiprocessing`'s
+   `spawn` context re-invokes whichever `sys.executable` actually is
+   correctly either way, given `freeze_support()` at the entry point --
+   added to `packaging/entrypoint.py`, guarded by its existing
+   `if __name__ == "__main__":` (needed for exactly this reason: a
+   `multiprocessing` spawn re-imports that module, and without the guard
+   it would re-launch the whole app recursively). A cancelled dialog and
+   "no Tk available at all" both report as "no file chosen" -- typing the
+   path is always the fallback, never a dead end. 7 new tests in
+   `test_setup.py`. Verified live: in this sandbox (no display at all),
+   clicking Browse correctly falls all the way through to "No file
+   chosen" with no hang and no crash, which is the worst case this
+   feature can hit -- a real Windows machine with an actual display is
+   expected to show the real native picker instead, not yet confirmed.
 
 ## Open issues from curator feedback, round 3 -- all six resolved
 
