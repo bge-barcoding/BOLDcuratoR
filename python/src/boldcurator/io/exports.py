@@ -28,6 +28,7 @@ from typing import Iterable, Iterator
 
 import pandas as pd
 
+from ..config.constants import BOLD_ATTRIBUTION_TEXT
 from ..core.species import column_or_missing, is_empty, to_text
 from .annotations import Annotations, merge_annotations
 
@@ -58,6 +59,12 @@ def _provenance(snapshot_id: str) -> list[str]:
     the maximum is 15 rather than 16 because the image criterion is gone, and
     BAGS grade E is evaluated against the whole snapshot rather than only the
     records that happened to be downloaded.
+
+    The licence line is not decoration: the BOLD data package this snapshot
+    is built from is CC BY-SA 4.0, which requires attribution *and* that a
+    redistributed or adapted dataset carry the same licence -- this export
+    is exactly that redistribution, so it says so on its way out the door,
+    not only in the app a curator downloaded it from.
     """
     return [
         f"# BOLDcuratoR (Python) export -- {_dt.datetime.now().isoformat(timespec='seconds')}",
@@ -65,6 +72,7 @@ def _provenance(snapshot_id: str) -> list[str]:
         "# scoring: 15 criteria, no HAS_IMAGE -- scores are NOT comparable with "
         "the R Shiny app (max 16)",
         "# BAGS grade E evaluated against the full snapshot, not only these records",
+        f"# {BOLD_ATTRIBUTION_TEXT}",
     ]
 
 
@@ -218,6 +226,7 @@ def write_bin_analysis_xlsx(
     summary_frame = pd.DataFrame(
         [{"metric": k, "value": v} for k, v in summary.items()]
         + [{"metric": "snapshot_id", "value": snapshot_id}]
+        + [{"metric": "data licence", "value": BOLD_ATTRIBUTION_TEXT}]
     )
     if len(content):
         stats = pd.DataFrame(
@@ -239,6 +248,40 @@ def write_bin_analysis_xlsx(
         summary_frame.to_excel(writer, sheet_name="Summary", index=False)
         content.to_excel(writer, sheet_name="Content", index=False)
         stats.to_excel(writer, sheet_name="Statistics", index=False)
+    return path
+
+
+def write_species_analysis_xlsx(
+    checklist: pd.DataFrame,
+    gaps: pd.DataFrame,
+    path: Path,
+    *,
+    snapshot_id: str = "",
+) -> Path:
+    """The species checklist and gap analysis, one workbook (plan round 3,
+
+    items 3-4) -- both are whole-result summaries of the Species screen, so
+    a curator downloading one is likely to want the other alongside it.
+    ``mean_quality_score`` is dropped from the checklist sheet: it is not
+    shown on screen any more (round 3, item 4), and a fresh export's column
+    set has no download-format compatibility to preserve the way the older,
+    already-shipped TSV/BIN exports do.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    checklist_out = checklist.drop(columns=["mean_quality_score"], errors="ignore")
+    summary_frame = pd.DataFrame([
+        {"metric": "species", "value": len(checklist)},
+        {"metric": "taxa typed", "value": len(gaps)},
+        {"metric": "snapshot_id", "value": snapshot_id},
+        {"metric": "data licence", "value": BOLD_ATTRIBUTION_TEXT},
+    ])
+
+    with pd.ExcelWriter(path, engine="openpyxl") as writer:
+        summary_frame.to_excel(writer, sheet_name="Summary", index=False)
+        checklist_out.to_excel(writer, sheet_name="Species checklist", index=False)
+        gaps.to_excel(writer, sheet_name="Gap analysis", index=False)
     return path
 
 

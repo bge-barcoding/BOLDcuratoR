@@ -3,14 +3,307 @@
 Branch: `claude/wonderful-newton-qw7llz`. Plan:
 [`../docs/python-app-plan.md`](../docs/python-app-plan.md).
 
-**State: Phases 0–2 complete and fast. Phase 3 has all six screens working,
-the eight downloads are wired, record selection is per-row (not just
-whole-group), auto-selection runs on a fresh search, and a real grade-E
-grouping bug is fixed. Every table sorts by clicking its column headers
-(including the five annotation columns), links out to the BOLD portal, keeps
-its annotation columns frozen and pinned to the top while scrolling, and
-"Apply to checked" is scoped to the current BAGS group. 245 tests pass, the
-parity gate is green.**
+**State: Phases 0–2 complete and fast. Phase 3 is entirely done** — all six
+screens working, the eight downloads wired, record selection per-row,
+auto-selection on a fresh search, a real grade-E grouping bug fixed, every
+table sortable by clicking its headers (including the five annotation
+columns) and linking out to the BOLD portal, annotation columns frozen and
+pinned while scrolling, "Apply to checked" scoped to the current BAGS group,
+gap analysis on the Species screen, the CC-BY-SA 4.0 attribution requirement
+in the app and every export, and **session save/resume wired end to end**.
+Two full rounds of curator-reported bugs (9 issues) are fixed and verified
+live; **round 3 (6 issues) is now also closed** -- see below. 286 tests
+pass, the parity gate is green. `fetch_snapshot` (plan 5.1) and the desktop
+launcher + first-run setup screen (4.1a/4.2) are done. **CI (plan 2.6) is
+written, has run for real, and is fully green** on Linux, macOS, Windows and
+the parity job -- Windows caught a genuine cross-platform bug on the first
+run (a test helper decoding source files with the platform locale codepage
+instead of UTF-8), fixed and confirmed on the re-run. **The release build
+(plan 4.3) is written but not yet
+triggered** -- this session lacks the GitHub permissions to dispatch it;
+the project owner needs to run it from the Actions tab or by pushing a `v*`
+tag. A real frozen PyInstaller build was proven to work outside CI (CLI and
+GUI server both verified against a real snapshot), catching a real bug
+(`shinychat` needs its own `--collect-all`) -- but `pywebview` itself
+couldn't be installed in this sandbox, so `boldcurator desktop` specifically
+is unverified until that workflow actually runs. Signing (4.4) is a
+deliberate no for now (project owner's call).
+
+## NEXT SESSION — START HERE, in priority order
+
+No open curator-reported bugs right now -- three rounds are closed (see the
+"Open issues" sections below for what was wrong and how each was fixed, if
+a similar bug resurfaces). CI (plan 2.6) is done and confirmed green on all
+three platforms -- see "CI (plan 2.6)" below. What's left is the release
+build:
+
+1. **4.3 the release build — written, real verification still pending.**
+   `.github/workflows/python-release.yml` (PyInstaller builds on Linux,
+   Windows, macOS x86_64 and arm64, triggered by a `v*` tag or manually via
+   `workflow_dispatch`) could **not** be triggered from this session --
+   `workflow_dispatch` needs `actions: write` on the GitHub App token this
+   session has, and dispatching it returned a 403. **The project owner
+   needs to run it themselves**, either from the Actions tab in the GitHub
+   UI ("Run workflow" on "Build desktop executables") or by pushing a `v*`
+   tag when ready to cut a real release. See `python/packaging/README.md`
+   for the exact build recipe and what has/hasn't been verified: the CLI
+   and the GUI server were both proven to work from a real frozen
+   PyInstaller build in this session (caught and fixed a real bug --
+   `shinychat` needs its own `--collect-all`), but `pywebview` itself could
+   not even be installed in this sandbox (an unrelated `distutils`/
+   `setuptools` incompatibility building one of its own dependencies), so
+   `boldcurator desktop` -- the actual packaged entry point -- has only
+   been reviewed by reading the code, not run. The release workflow's own
+   smoke-test steps exist to catch exactly this kind of gap automatically,
+   but only once someone actually fires it.
+2. **4.4 Signing** — still a deliberate no (project owner's call, curator
+   testing doesn't need it) and **4.5 installer smoke test on a clean VM**
+   still not done — the release workflow's own smoke test is a CI proxy for
+   this, not a replacement for someone actually double-clicking a
+   downloaded build.
+3. **Also open, not urgent:**
+   - The R app (not this rewrite) rejects 4% of real BOLD dataset codes --
+     `mod_data_import_utils.R:50`'s `^DS-[A-Z0-9]+$` pattern; 544 of 13,706
+     real `DS-` codes don't match. Live bug in the *shipped* app. The SQL to
+     list examples is further down this file, under "Findings from the real
+     build."
+   - `export_all` streams sequences twice (all specimens, then the selected
+     subset) -- ~0.4 s a pass, not worth fixing without a curator waiting on
+     it.
+
+Before starting any of the above: `python -m pytest tests/ -q` (286 passing)
+and `python parity/compare.py` (PASS) from a clean checkout, per "First, 60
+seconds of setup" below -- and drive any UI change through
+`tools/drive_ui.py` before believing it works, per "the rules this session
+cost the most to learn."
+
+## Open issues from curator feedback, round 3 -- all six resolved
+
+Fixing one at a time, one commit per item, each verified with new unit tests
+and a live browser run (`tools/drive_ui.py` plus ad-hoc Playwright checks)
+before moving to the next.
+
+1. [x] **Specimen tables should show every column, not a curated subset.**
+   Fixed -- `_all_columns_ordered(frame)` (`ui/app.py`) replaces the old
+   14-column `PREVIEW_COLUMNS` constant: curated/annotation columns first
+   (via `GROUP_COLUMNS`, already used for the BAGS group tables), then every
+   remaining physical/derived column the page carries, in the frame's own
+   order -- matching the original R app's `PREFERRED_COLUMNS`/
+   `order_columns` (`R/config/constants.R`, `R/utils/annotation_utils.R`):
+   nothing dropped, curated columns lead, `scrollX`-style horizontal scroll
+   for the rest. The sticky-column machinery (`STICKY_COLUMN_WIDTHS`) is
+   already column-driven, not list-length-driven, so Rep./Check/Flag/
+   Updated ID/Notes stayed frozen with no changes needed there. Verified
+   live: the Specimens tab now renders 83 headers (was 14), including raw
+   BOLD columns with no curated label (`sampleid`, `flag_user`, ...), with
+   Rep. still the first, pinned header. `tests/test_ui.py` updated (the old
+   "the preview columns all exist" test replaced with one asserting nothing
+   is dropped or duplicated and the curated block leads).
+2. [x] **The Specimens tab's curation toolbar doesn't fit the default window
+   width.** Fixed -- split into two rows, matching the BAGS C/E layout
+   (`_grade_body`): paging/sort controls in their own row, then a second row
+   with Check page/Check all/Clear checked (+ a checked count, for parity
+   with the BAGS screens' own toolbar) stacked in a narrow column beside
+   `_annotation_controls` (Flag/Curator note/Corrected identification/
+   Apply). Verified live: the toolbar's bounding box fits within a 1400px
+   viewport it previously overflowed. `tools/drive_ui.py`'s "paging moves to
+   different rows" check was comparing the first 200 characters of the
+   *whole* table's text, which item 1 made almost entirely header (headers
+   don't change on paging, so two different pages started looking
+   identical) -- fixed with a new `tbody_text()` helper that reads only the
+   row data.
+3. [x] **Gap analysis needs an xlsx download**, matching the BIN dashboard's
+   "Download BIN analysis (xlsx)" button. Fixed together with #4 -- one
+   workbook, since a curator downloading one Species-screen summary is
+   likely to want the other alongside it.
+4. [x] **The species checklist doesn't need mean quality score shown**, and
+   needs its own xlsx download. Fixed -- `io/exports.write_species_analysis_xlsx`
+   writes one workbook with three sheets (Summary, Species checklist, Gap
+   analysis) for the new "Download species analysis (xlsx)" button on the
+   Species screen; `SearchState.export_species_analysis` wires it up,
+   refusing only when there is no checklist at all (gap analysis can be
+   legitimately empty -- a dataset/project-code-only search -- while the
+   checklist still has something to show). Mean quality is dropped from
+   both the on-screen checklist and the new xlsx's checklist sheet -- from
+   the *display*, not from `build_species_checklist`'s own output, which
+   other callers (tests, a future consumer) still get it from.
+   `ui/format.CHECKLIST_LABELS` no longer carries a "Mean quality" entry.
+   New tests: `test_exports.py`'s three new cases (the workbook's three
+   sheets, survives an empty gap analysis, and `SearchState`'s own export
+   end to end). Verified live: no "Mean quality" header on screen, the
+   download button exists and produces a workbook with the three sheets.
+5. [x] **The BIN dashboard doesn't need "share of result" shown.** Fixed --
+   dropped from the on-screen table only (`bins_body`); the existing BIN
+   analysis xlsx download is unchanged, since it was not asked to change
+   and other things may still want that column from the export. The now-dead
+   `bin_coverage` cell-formatting branch in `_bins_html` was removed along
+   with it, and `ui/format.BIN_LABELS` no longer carries a "Share of
+   result" entry. Verified live: no "Share of result" header on the BINs
+   tab.
+6. [x] **Session save should be schedulable** -- e.g. every minute,
+   automatically, not only on a manual click. Fixed -- a checkbox +
+   interval (minutes) next to the existing Save/Load controls
+   (`ui/app.py`'s Session panel); an `_autosave_tick` reactive effect uses
+   `reactive.invalidate_later` to reschedule itself for as long as the
+   checkbox stays on. Saves under the same slugified-name identity as a
+   manual save (the text field above, or "Auto-save" if left blank), so a
+   scheduled and a manual save of the same name update one entry in place
+   rather than piling up. Refactored the Save button's own logic into a
+   shared `_do_save()` so both paths agree. Follows this codebase's
+   established isolate-what-you-don't-want-to-react-to rule: the checkbox
+   is read live (it should retrigger the effect), but the interval and
+   session-name fields are read inside `reactive.isolate()` so editing them
+   does not itself fire an extra save. No new unit tests -- Shiny's own
+   reactive scheduling isn't meaningfully unit-testable without a running
+   server, and the underlying save/upsert behaviour was already covered by
+   `test_session_resume.py`. Verified live instead, over real wall-clock
+   time: turning it on saves immediately, a second save lands exactly one
+   minute later (confirmed against the session's own `updated_at` in
+   `sessions.sqlite`), and unchecking it stops further ticks (no third
+   save in the following minute).
+
+## CI (plan 2.6) -- resolved, confirmed green on real runners
+
+[x] `.github/workflows/python-tests.yml`: pytest on a Linux/macOS/Windows
+matrix, plus the parity harness on Linux (R installed via apt, `--vanilla`
+to skip the repo's renv-bootstrapping `.Rprofile`). Two real pushes, two
+real outcomes worth recording:
+
+- **First run**: Linux, macOS and the parity job all passed immediately.
+  **Windows failed on a genuine bug**, not a CI artefact --
+  `tests/test_no_gui_dependency.py`'s `_imports()` helper called
+  `Path.read_text()` with no encoding, which defaults to the platform's
+  locale codepage (cp1252 on Windows, not UTF-8) rather than UTF-8, and
+  this project's docstrings use real em dashes and arrows that cp1252
+  cannot decode. Fixed with an explicit `encoding="utf-8"` there, and in
+  `cli.py`'s `--taxa-file` reader, which has the identical latent bug (not
+  yet hit by a test, since nothing has exercised it with non-ASCII taxon
+  names, but fixed while here rather than left for later).
+- **Second run, after the fix**: green on all four jobs (Linux, macOS,
+  Windows, parity).
+
+This is exactly the kind of thing plan 2.6 exists to catch automatically --
+a real, if narrow, cross-platform bug that every local run in this Linux
+sandbox was blind to.
+
+## Packaging: native window and first-run setup (4.1a/4.2) -- resolved
+
+Three decisions were blocking packaging; the project owner made all three
+this session: **native window** over a plain browser tab, **unsigned
+builds** for curator testing rather than paying for signing up front, and
+**the raw-TSV-to-snapshot build stays a CLI-only, maintainer step** rather
+than a GUI feature. The first two are built:
+
+- `desktop.py` -- `boldcurator desktop` wraps the same Shiny app
+  `boldcurator gui` runs in a native `pywebview` window instead of a
+  browser tab: starts the app as a plain ASGI app under `uvicorn` in a
+  background thread (not `shiny.run_app`, which blocks and owns signal
+  handling), opens a window pointed at it, and stops the server when the
+  window closes. `pywebview` is imported lazily, inside the functions that
+  actually open a window -- config persistence and server lifecycle stay
+  testable without it, which matters here specifically: `pywebview` needs a
+  native webview backend (WKWebView/WebView2, present by default on macOS/
+  Windows) this Linux sandbox does not have, so none of it could otherwise
+  be exercised at all.
+- `ui/setup.py` -- the first-run screen (plan 4.2), shown once when no
+  snapshot is configured yet (`desktop.load_snapshot_path` returns `None`,
+  reading `~/.boldcurator/config.json`). Two tabs: an existing `.duckdb`
+  file's path (opened and checked with `SnapshotStore` before being
+  accepted), or a URL/manifest.json/Zenodo id downloaded via
+  `build.fetch_snapshot` in a background thread with a live progress
+  readout. Deliberately does **not** offer building from a raw `.tsv.gz` --
+  see `docs/python-app-plan.md`'s "Packaging and data loading" section for
+  why that stays `tools/build_snapshot.py`. It is an ordinary Shiny app, so
+  -- unlike the pywebview wrapper around it -- it is fully testable the same
+  way every other screen in this app is.
+
+New tests: `tests/test_desktop.py` (8 cases -- config persistence,
+`run_server`'s start/serve/stop lifecycle against a trivial ASGI app, and
+`launch()`'s orchestration logic against a fake `webview` module injected
+into `sys.modules`, since the real one isn't installable here). Verified
+live: the setup screen itself needs no `pywebview` at all (it is just
+another Shiny app), so it was driven directly with Playwright against a
+plain `uvicorn` server -- a missing file is reported, a real snapshot is
+accepted and described, a failed download reports why, and a real download
+against a local HTTP server completes and is accepted (5/5 checks). The
+`pywebview` window wrapper itself (`desktop.py`'s `launch`/`_run_setup`) is
+**not** verified live in this sandbox -- there is no display server and no
+native webview backend to run it against; that needs an actual macOS or
+Windows machine, which is also what 4.3 (the PyInstaller build) needs.
+
+## Session save/resume (plan 3.8) -- resolved
+
+1. [x] **Wired end to end.** `io/session.py`'s `SessionStore`/`resume()` already
+existed and were tested in isolation; nothing there needed to change. What
+was missing was the GUI wiring and a way to rebuild a *working* search from
+a saved processid list, not just a rehydrated frame:
+
+- `data/queries.plan_from_processids` resolves a saved session's processids
+  back to `rowid`s **in the current snapshot** and returns a `SearchPlan`,
+  plus whatever processids no longer resolve (retracted/reassigned records,
+  reported not dropped). Routing a resume through a real `SearchPlan` means
+  it goes through the exact same `SpecimenTable`/`analyse_plan` path a live
+  search does -- paging, sorting, BAGS grouping all work identically on a
+  resumed session, rather than needing a second code path.
+- `AppState.save_session`/`resume_session` (`ui/state.py`) sit beside
+  `run_search`: save reads the already-analysed result (so it costs nothing
+  extra once a summary screen has been opened, and refuses -- same as every
+  other summary screen -- above the analysis size limit); resume rebuilds
+  the plan, swaps in the saved `Annotations`, and reports both a changed
+  snapshot id and any missing processids as warnings, never silently.
+- The GUI (`ui/app.py`, Data Input tab) gets a compact Session panel: a name
+  field, Save/Load/Delete buttons and a dropdown of saved sessions. Saving
+  under a name already used updates that entry in place (the session id is
+  the slugified name), matching `SessionStore.save()`'s own upsert
+  semantics, so repeated saves don't pile up duplicates.
+- Sessions are stored per-user by default at `~/.boldcurator/sessions.sqlite`
+  (`config/constants.DEFAULT_SESSIONS_PATH`) -- not next to the snapshot,
+  which may be shared/read-only -- overridable via `boldcurator gui
+  --sessions <path>`.
+
+New tests: `tests/test_session_resume.py` (9 cases: `plan_from_processids`
+found/missing/empty, save-without-a-search refusal, a full save→resume round
+trip confirming the resumed plan pages correctly and annotations survive,
+missing-processid and changed-snapshot-id warnings, the analysis-size-limit
+refusal, and same-name-updates-in-place). Verified live with an ad-hoc
+Playwright script: save, the session appearing in the dropdown, resuming
+after running a different search in between (confirms it restores the
+*saved* result, not whatever is currently on screen), the representative
+pick made before saving surviving the round trip, and delete removing it
+from the dropdown -- all six checks passed, and the existing
+`tools/drive_ui.py` suite (29 checks) still passes unchanged.
+
+## Gap analysis and Phase 0 closure -- both resolved
+
+1. [x] **Gap analysis (plan 3.4), ported.** `core/summaries.gap_analysis`
+   ports `perform_gap_analysis` (`mod_species_analysis_utils.R:57+`):
+   each typed taxon (a synonym group, first name is the valid one) is checked
+   against the specimens actually found, vectorised via a lower-cased
+   `value_counts()` lookup rather than a per-record loop. Reports Found/
+   Missing, the matched species' own spelling, its specimen count, and a
+   "matched via synonym" note when a later name in the group is what hit.
+   Rendered on the Species screen as Found/Missing value boxes plus a
+   sortable table, above the existing checklist, only when there is anything
+   to show. Fixed a real pre-existing gap while wiring this up:
+   `SearchState` never carried `taxonomy_groups` through from parsing to
+   `analyse_plan`, so the data `gap_analysis` needs never reached the GUI --
+   `AppState._build()` now returns the parsed groups and `run_search()`
+   threads them onto `SearchState`. Unit tests in `tests/test_summaries.py`
+   (8 cases); verified live with a new `tools/drive_ui.py` check that the
+   panel reports on the taxon actually typed.
+2. [x] **0.2 confirmed public.** No overlay/`ATTACH` schema work needed.
+3. [x] **0.3 CC-BY-SA 4.0 attribution, in writing.** `config/constants.py`
+   holds the licence text and URL (not `ui/format.py`, so `io/exports.py`
+   can use it without depending on the GUI layer). Shown in the app as a
+   short linked line in the header (`BOLD_ATTRIBUTION_SHORT`, hover title
+   is the full text) and as a full paragraph at the foot of the Data Input
+   tab, linking the licence itself. Stamped onto every non-FASTA export: the
+   TSV/CSV provenance header comment, and a row in the bin-analysis xlsx's
+   Summary sheet. FASTA is deliberately left alone -- an extra header line
+   there risks breaking downstream sequence-file parsers. Covered by
+   `test_exports.py::test_exports_carry_the_cc_by_sa_attribution`, the
+   Summary-sheet assertion in `test_bin_analysis_workbook_has_three_populated_sheets`,
+   and `test_ui.py::test_the_cc_by_sa_attribution_is_on_the_page`.
 
 ## Open issues from curator feedback, round 2 -- all three resolved
 
@@ -138,14 +431,13 @@ commit per item, each verified with new unit tests and a live browser run
 
 ---
 
-# START HERE TOMORROW
+# Reference
 
-Phases 0-2 are closed and performance is closed. Phase 3's six screens now
-have their downloads wired too; what remains is listed below in priority
-order. Everything after the second horizontal rule is reference — why things
-are the way they are — and does not need reading to get going.
+Everything from here down is reference -- why things are the way they are --
+and does not need reading to get going; the prioritised list at the top of
+this file is what to actually do next.
 
-## What this session did
+## What an earlier session did
 
 A curator using the real app (not the fixture) reported three things, all
 now fixed -- see the commit for the detail, this is the summary:
@@ -163,11 +455,12 @@ now fixed -- see the commit for the detail, this is the summary:
    `tests/test_grouping.py` has the regression tests, named after the real
    BIN.
 2. **Selection was whole-group-or-nothing.** The specimen table and every
-   BAGS group now render a real checkbox per record
-   (`ui/app.py::ROW_CHECKBOX_CLASS`, one delegated `document`-level listener
-   so it survives every table re-render) alongside the existing bulk buttons
-   (select page / group / all), wired through a `row_select` Shiny input to
-   `Annotations.set_selected`/`unset_selected`.
+   BAGS group now render a real checkbox per record (one delegated
+   `document`-level listener so it survives every table re-render) alongside
+   the existing bulk buttons (select page / group / all). This single
+   checkbox later turned out to conflate two different things and was split
+   into `ROW_REP_CLASS`/`ROW_CHECK_CLASS` in round 2 -- see that section
+   below and `io/annotations.py`'s module docstring.
 3. **Auto-selection (best record per BIN x country) was never wired to the
    GUI.** `core/selection.auto_select_best_specimens` existed and was tested,
    but `SearchState.analysis` passed `auto_select=False` and nothing ever
@@ -195,7 +488,7 @@ to learn" below for why that matters here specifically.
 cd C:\GitHub\BOLDcurator\python
 git pull
 pip install -e ".[dev,gui]"
-python -m pytest tests/ -q          # 245 passing
+python -m pytest tests/ -q          # 286 passing
 python parity/compare.py            # PASS
 
 python -m boldcurator.cli gui --snapshot "<the reordered snapshot>"
@@ -205,57 +498,12 @@ The snapshot to use is the **reordered** one (`sequence_order = specimen`).
 `info` and `benchmark` warn on the snapshot line if you point at the old
 layout, and `verify` fails it outright.
 
-## What to build next, in order
-
-### 1. Gap analysis (plan 3.4)
-
-`perform_gap_analysis` (`mod_species_analysis_utils.R:57+`) is **not ported**.
-It compares the taxa the user typed -- as synonym groups, first name is the
-valid one -- against what the search found, and reports Found / Missing per
-group. `core/pipeline.parse_taxa_input` already returns the groups, and
-`SearchResult.taxonomy_groups` carries them. It belongs in `core/summaries.py`
-beside `build_species_checklist`, then on the Species screen.
-
-### 2. Session save/resume (plan 3.8)
-
-`io/session.py` exists and is tested; it saves the query, processids and
-annotations rather than the whole frame. Wire Save/Load to `AppState`, and
-**warn on resume if the snapshot id changed** -- BIN membership and
-identifications may have moved under the saved work.
-
-### 3. CI (plan 2.6) -- still not done
-
-233 tests and the parity harness run only when someone remembers. A GitHub
-Actions matrix (Linux/macOS/Windows) that installs, runs pytest and runs
-`parity/compare.py` needs no real snapshot: `conftest.py` builds the fixture,
-and `tests/make_fake_package.py` generates the source. Worth doing before the
-GUI grows further.
-
-### 5. Two Phase 0 items only you can close
-
-* **0.2** confirm the course's records are public. If some are not, they are
-  simply absent from a public snapshot and we need an overlay DuckDB file in
-  the same schema, `ATTACH`ed and `UNION ALL`ed -- worth knowing early because
-  it changes the query layer.
-* **0.3** the CC-BY-SA 4.0 attribution requirement, in writing, for the about
-  text and any redistribution.
-
-### Also open, not urgent
-
-* **The R app rejects 4% of real BOLD dataset codes.** `mod_data_import_utils.R:50`
-  validates against `^DS-[A-Z0-9]+$` and sets `results$valid <- FALSE`, a hard
-  gate before any query runs; the builder found 544 of 13,706 real DS- codes do
-  not match. That is a live bug in the *shipped R app*, not in this rewrite.
-  The SQL to list examples is further down this file.
-* `export_all` streams the sequences twice, once for all specimens and once for
-  the selected subset. Two passes where one would do, at ~0.4 s a pass.
-
 ## The rules this session cost the most to learn
 
 1. **Drive the UI in a browser before believing it.** Every UI bug so far has
    been invisible to the unit tests and obvious on the first click. Run
-   `tools/drive_ui.py` -- it checks seventeen things across all six screens and
-   exits non-zero.
+   `tools/drive_ui.py` -- it checks twenty-six things across all six screens
+   and exits non-zero.
 2. **In a Shiny effect, read every input you react to OUTSIDE
    `reactive.isolate()`**, and isolate only the writes. Two controls rendered
    perfectly, accepted clicks and did nothing because of this.
@@ -278,7 +526,9 @@ GUI grows further.
    "next problem") needs one listener attached once, at `document` level, via
    event delegation, not a listener attached to the row elements themselves.
    That is what the per-record selection checkboxes do
-   (`ui/app.py::ROW_CHECKBOX_CLASS`).
+   (`ui/app.py::ROW_REP_CLASS`/`ROW_CHECK_CLASS`), and later the same pattern
+   for click-to-sort headers (`SORT_HEADER_CLASS`) and scroll-position
+   preservation (`SCROLL_CLASS`).
 
 And the one that predates the GUI: **measure before optimising**. Two sessions
 of guessing at performance cost more than the fixes did, and both real causes
@@ -519,12 +769,12 @@ name, so `"synonym" in panel.inner_text()` passes for an annotation that never
 rendered. That false pass cost a round.
 
 Run `tools/drive_ui.py` before believing any UI change works. It checks
-seventeen things across all six screens and exits non-zero.
+twenty-six things across all six screens and exits non-zero.
 
 ## Phase 3.2-3.6 — the six screens are in
 
 Data Input, Species, BINs, BAGS A-E, Specimens. `tools/drive_ui.py` checks
-fourteen things across all of them in a real browser and exits non-zero.
+twenty-six things across all of them in a real browser and exits non-zero.
 
 ### The BAGS screens, and why they are navigators
 
@@ -618,8 +868,9 @@ surfacing in the UI rather than letting a curator assume otherwise.
 - [x] 0.8 measured figures recorded — both snapshots built and verified
 - [x] 0.9 generated test fixture
 - [x] 0.1 download mechanics — still manual, fine
-- [ ] 0.2 confirm the course's records are public
-- [ ] 0.3 CC-BY-SA attribution noted in writing
+- [x] 0.2 confirm the course's records are public — confirmed
+- [x] 0.3 CC-BY-SA attribution noted in writing — in the app and every
+      non-FASTA export; see "Gap analysis and Phase 0 closure" above
 
 ### Phase 1 — core library
 - [x] 1.1–1.10 all complete
@@ -630,7 +881,8 @@ surfacing in the UI rather than letting a curator assume otherwise.
 - [x] 2.3 `io/session.py` — query + processids + annotations, not the whole frame
 - [x] 2.4 `parity/export_r_reference.R`
 - [x] 2.5 `parity/compare.py` — **green**
-- [ ] 2.6 CI workflow (Linux/macOS/Windows)
+- [x] 2.6 CI workflow (Linux/macOS/Windows) --
+      `.github/workflows/python-tests.yml`
 
 ### Phase 2.5 — performance
 - [x] plan-then-fetch, so a search projects only the rows it returns
@@ -659,11 +911,44 @@ surfacing in the UI rather than letting a curator assume otherwise.
       above and `tests/test_grouping.py`)
 - [x] 3.7 the six download buttons, plus the search-results CSV and the
       BIN-analysis workbook (eight downloads total, all driven in a browser)
-- [ ] 3.4 gap analysis against the taxa typed in
-- [ ] 3.8 session save/resume
+- [x] representative pick vs. working (bulk-edit) selection split into two
+      stores and two per-record checkboxes -- see `io/annotations.py`'s
+      module docstring; "Apply to checked" scoped to the current BAGS group
+- [x] click-to-sort column headers everywhere (species checklist, BIN
+      dashboard, BAGS groups, specimen table), including the five annotation
+      columns (Rep./Check/Flag/Updated ID/Notes) -- replaced the old sort
+      dropdown entirely
+- [x] processid/BIN/species cells link out to the BOLD portal in a new tab
+- [x] annotation columns frozen to the left edge *and* pinned to the top
+      (every `<th>` sticky individually, not the unreliable `<thead>`-level
+      sticky) on every wide table; table scroll position now survives a
+      re-render (checking a row used to snap it back to the top)
+- [x] BAGS screens: full-width specimen table, compact navigator row instead
+      of a permanent sidebar column
+- [x] 3.4 gap analysis against the taxa typed in
+- [x] 3.8 session save/resume
 
 ### Phases 4–5 — packaging and distribution
-- [ ] not started; compression (above) lands in 5.1
+- [x] 5.1 `tools/fetch_snapshot.py` / `boldcurator fetch-snapshot` -- URL,
+      manifest.json or Zenodo record/concept id; no-op when the snapshot id
+      is unchanged
+- [x] 4.1a window vs. browser tab -- **decided: native window.**
+      `desktop.py` wraps the Shiny app in a `pywebview` window
+- [x] 4.2 first-run flow -- `ui/setup.py`; existing file or a
+      fetch_snapshot-backed download; the raw-TSV path stays CLI-only
+      (`tools/build_snapshot.py`), by decision, not built into the GUI
+- [x] 4.3 PyInstaller builds on a CI matrix --
+      `.github/workflows/python-release.yml`; a real frozen build was
+      proven to work outside CI (CLI + GUI server against a real snapshot),
+      but `pywebview` itself is unverified -- see the top of this file and
+      `python/packaging/README.md`
+- [ ] 4.4 signing -- **decided: unsigned for now**, not required to ship
+      an unsigned build for curator testing
+- [ ] 4.5 installer smoke test -- the release workflow's own smoke-test
+      steps are a CI proxy for this, not a replacement
+- [ ] 5.2 publish to Zenodo -- blocked on having an account/community
+- [ ] 5.3 in-app "check for new snapshot" (thin wrapper once 4.2 exists)
+- [ ] 5.4 move `python/` to its own repo, finish PyPI publishing
 
 ---
 

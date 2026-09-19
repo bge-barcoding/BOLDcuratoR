@@ -67,14 +67,24 @@ def main(argv: list[str] | None = None) -> int:
         page.goto(args.url, wait_until="networkidle")
 
         def table_text(selector: str) -> str:
-            """Only the table.
+            """Only the table(s), not the surrounding panel.
 
             The toolbar holds a flag <select> whose options include every flag
             name, so matching against the whole panel's text reports a
-            success for an annotation that never rendered.
+            success for an annotation that never rendered. The Species screen
+            can hold two tables (gap analysis, then the checklist) when taxa
+            were typed, so this joins every table's text rather than assuming
+            there is exactly one.
             """
-            table = page.locator(f"{selector} table")
-            return table.inner_text() if table.count() else ""
+            tables = page.locator(f"{selector} table")
+            return "\n".join(tables.nth(i).inner_text() for i in range(tables.count()))
+
+        def tbody_text(selector: str) -> str:
+            """Only the row data, not the header -- for a table wide enough
+            (round 3's "show every column") that the header alone can exceed
+            a short slice, making two different pages look identical."""
+            bodies = page.locator(f"{selector} table tbody")
+            return "\n".join(bodies.nth(i).inner_text() for i in range(bodies.count()))
 
         def show(name: str, settle: float = 3.0) -> None:
             # has-text, not text-is: the priority grades carry a bullet in
@@ -112,6 +122,9 @@ def main(argv: list[str] | None = None) -> int:
         check("search lands on the species checklist",
               "Species" in page.locator("a.nav-link.active").inner_text())
         check("the checklist has rows", bool(table_text("#species_body")))
+        gap_text = table_text("#species_body")
+        check("gap analysis reports on the taxon actually typed",
+              args.taxon in gap_text and ("Found" in gap_text or "Missing" in gap_text))
         page.screenshot(path=str(args.out / "01-species.png"), full_page=True)
 
         show("BINs")
@@ -194,11 +207,11 @@ def main(argv: list[str] | None = None) -> int:
         header = page.locator("#specimens_body table thead").inner_text()
         check("the specimen table carries the BAGS grade once analysed",
               "BAGS" in header, header.replace("\n", " "))
-        before = table_text("#specimens_body")[:200]
+        before = tbody_text("#specimens_body")[:200]
         page.click("#next_")
         time.sleep(SETTLE)
         check("paging moves to different rows",
-              table_text("#specimens_body")[:200] != before)
+              tbody_text("#specimens_body")[:200] != before)
         # The five annotation columns are sortable on the specimen table too,
         # not only a stored/physical one -- SpecimenTable.sort_by fetches
         # nothing from the database for these, it reads Annotations directly.

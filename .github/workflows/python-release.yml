@@ -1,0 +1,116 @@
+name: Build desktop executables
+
+# Plan 4.3: automated release builds, so a curator gets an executable
+# without anyone running PyInstaller by hand. Fires on a version tag (a real
+# release) or manually via workflow_dispatch (to validate the pipeline
+# itself without cutting a release). See python/packaging/README.md for
+# what --collect-all is doing and what has/hasn't actually been verified.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: linux-x86_64
+          - os: windows-latest
+            name: windows-x86_64
+          - os: macos-13       # Intel
+            name: macos-x86_64
+          - os: macos-latest   # Apple Silicon
+            name: macos-arm64
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: python
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install the app and PyInstaller
+        run: |
+          pip install -e ".[desktop]"
+          pip install pyinstaller
+
+      - name: Build
+        run: >-
+          pyinstaller --onedir --name boldcurator --paths src
+          --collect-all duckdb --collect-all shiny --collect-all htmltools
+          --collect-all shinychat --collect-all pywebview
+          packaging/entrypoint.py
+
+      - name: Build a tiny fixture snapshot to smoke-test against
+        shell: bash
+        run: |
+          python tests/make_fake_package.py --out fake.tsv.gz --rows 200
+          python tools/build_snapshot.py --tsv fake.tsv.gz --out fixture.duckdb \
+            --memory-limit 512MB --threads 1 --no-hash
+
+      - name: Smoke test -- the frozen CLI actually queries the snapshot
+        shell: bash
+        run: |
+          BIN=dist/boldcurator/boldcurator
+          [ "${{ runner.os }}" = "Windows" ] && BIN="$BIN.exe"
+          "$BIN" info --snapshot fixture.duckdb
+
+      - name: Smoke test -- the frozen GUI server actually starts
+        # Catches a missing package data file before a curator does -- this
+        # exact check is what caught shinychat needing its own
+        # --collect-all during development (python/packaging/README.md).
+        shell: bash
+        run: |
+          BIN=dist/boldcurator/boldcurator
+          [ "${{ runner.os }}" = "Windows" ] && BIN="$BIN.exe"
+          "$BIN" gui --snapshot fixture.duckdb --port 8901 &
+          pid=$!
+          up=0
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8901/ >/dev/null 2>&1; then up=1; break; fi
+            sleep 1
+          done
+          kill "$pid" 2>/dev/null || true
+          if [ "$up" != "1" ]; then
+            echo "The frozen GUI server never came up"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: boldcurator-${{ matrix.name }}
+          path: python/dist/boldcurator
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Zip each platform's build
+        run: |
+          mkdir -p release
+          for d in artifacts/*/; do
+            name=$(basename "$d")
+            chmod +x "$d"boldcurator* 2>/dev/null || true
+            (cd "$d" && zip -rq "$OLDPWD/release/${name}.zip" .)
+          done
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release/*.zip
+          generate_release_notes: true

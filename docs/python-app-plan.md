@@ -417,7 +417,8 @@ immediately against a synthetic fixture.
 - [x] 2.3 `io/session.py` — SQLite annotation store (`selected`, `flag`, `updated_id`, `curator_notes`, each keyed by `processid` with timestamp + user). **Store the query + processid list + annotations, not the whole frame** — a named snapshot makes the result reproducible, so session blobs drop from ~125 MB to a few KB. Stamp `snapshot_id` on the session row.
 - [x] 2.4 `parity/export_r_reference.R` — run the R scorer/ranker/BAGS/selection over the shared fixture and dump a CSV.
 - [x] 2.5 `parity/compare.py` — row-by-row diff of `quality_score`, `criteria_met`, `rank`, BAGS grade, BIN concordance, auto-selection. **Every difference must be explained by a decision in this plan** (the unified species rule, the `HAS_IMAGE` removal, global grade E); anything unexplained is a bug. Output `parity/REPORT.md`.
-- [ ] 2.6 CI workflow running the Python tests and the parity harness on Linux/macOS/Windows.
+- [x] 2.6 CI workflow running the Python tests and the parity harness on
+      Linux/macOS/Windows — `.github/workflows/python-tests.yml`.
 
 **Gate 1: do not start Phase 3 until `parity/REPORT.md` is clean.** Met
 2026-09-18.
@@ -440,18 +441,139 @@ scan. See `python/PROGRESS.md`.
 
 ### Phase 4 — Packaging
 
-- [ ] 4.1 `pyproject.toml`, console script, `python -m boldcurator`.
-- [ ] 4.2 First-run flow: no snapshot configured → prompt for a path or a download URL; verify checksum; store the pointer in a platform config dir.
-- [ ] 4.3 PyInstaller/Briefcase builds on a GitHub Actions matrix (Windows, macOS x86_64 + arm64, Linux), attached to releases.
-- [ ] 4.4 **Signing is a real cost, decide explicitly**: unsigned builds hit Gatekeeper on macOS and SmartScreen on Windows. A genuine double-click needs Apple Developer (~$99/yr) plus Windows code signing. Document the workaround if not paying.
+**4.1 is already done** — `pyproject.toml` has console scripts (`boldcurator`,
+plus one per build tool) and `python -m boldcurator.cli` works from a plain
+`pip install -e .`. What Phase 4 actually still needs is turning that into
+something a curator double-clicks, which is three separable decisions:
+
+- [x] **4.1a Window vs. browser tab — decided: native window.** The plan's
+  original "opens in the browser" outcome was the zero-dependency option,
+  but leaves a console window running the server and nothing to
+  double-click to quit. **Decided with the project owner: wrap the server
+  in [`pywebview`](https://pywebview.flowrl.com/)** — a small, pure-Python
+  native window around a webview (WKWebView on macOS, no extra runtime;
+  WebView2 on Windows, preinstalled on current Win10/11) — so the app looks
+  and behaves like a normal desktop app and closing its window stops the
+  server. Built in `src/boldcurator/desktop.py`: starts the Shiny app as a
+  plain ASGI app under `uvicorn` in a background thread (not
+  `shiny.run_app`, which blocks and owns signal handling), opens a
+  `pywebview` window at the local URL, stops the server when the window
+  closes. `pywebview` is imported lazily inside the functions that actually
+  open a window, so config persistence and server lifecycle
+  (`tests/test_desktop.py`) stay testable without it — this sandbox has no
+  native webview backend to run it against (WKWebView/WebView2 are present
+  by default on macOS/Windows only), so the window-opening code itself is
+  **not verified live here**; that needs a machine of the target OS, same
+  as 4.3.
+- [x] **4.2 First-run flow — decided: two paths, not three.** No snapshot
+  configured → `src/boldcurator/ui/setup.py`, an ordinary Shiny app (so it
+  *is* fully testable, unlike the `pywebview` wrapper around it — driven
+  live with Playwright against a plain `uvicorn` server) offering an
+  existing `.duckdb` file's path (checked with `SnapshotStore` before being
+  accepted) or a URL/`manifest.json`/Zenodo id downloaded via
+  `fetch_snapshot` (§5.1) with a live progress readout. **The third path —
+  building from a raw BOLD `.tsv.gz` in-app — was decided against for v1**
+  (see "Packaging and data loading" below): it stays a documented
+  `tools/build_snapshot.py` step for whoever maintains the snapshot, not a
+  GUI feature, since that ~24-minute background build is a maintainer's
+  job, not a curator's. The resolved path is stored in
+  `~/.boldcurator/config.json` (plain JSON, not `platformdirs` — consistent
+  with `DEFAULT_SESSIONS_PATH`'s own choice not to add that dependency for
+  the core CLI) so this only happens once.
+- [x] 4.3 **PyInstaller, not Briefcase — built, first real CI run pending.**
+  `.github/workflows/python-release.yml` builds on a matrix of Linux,
+  Windows, macOS x86_64 and macOS arm64 (`--onedir`, faster startup than
+  `--onefile`, which self-extracts on every launch), triggered by a `v*` tag
+  or manually via `workflow_dispatch`. `python/packaging/entrypoint.py` is
+  what it actually bundles (`boldcurator.cli`'s own module can't be pointed
+  at directly — PyInstaller makes it `__main__`, breaking its relative
+  imports) and defaults to launching `desktop` when double-clicked with no
+  arguments. **A real frozen build was proven to work** in this session,
+  outside CI, against DuckDB and a real snapshot (the CLI) and the Shiny
+  server (a real search via Playwright) — this caught a genuine bug:
+  `shinychat` (a Shiny dependency for chat features this app never uses)
+  reads a JSON data file at import time that `--collect-all shiny` alone
+  does not bundle, so every frozen GUI build crashed before running a line
+  of this app's own code until `--collect-all shinychat` was added.
+  `python/packaging/README.md` has the full recipe and, critically, what is
+  and isn't verified: `pywebview` itself (plan 4.1a's whole point) could
+  not even be *installed* in the sandbox this was built in — an unrelated
+  `setuptools`/`distutils` incompatibility building one of its own
+  dependencies on that specific environment — so `boldcurator desktop`, the
+  actual packaged entry point, has only been read, not run. The release
+  workflow's own smoke-test steps (build a fixture, query it, start the GUI
+  server and curl it) exist to catch exactly the `shinychat`-shaped class of
+  bug automatically, on real runners this sandbox doesn't have. Installer
+  wrapping (`create-dmg` on macOS, Inno Setup/NSIS on Windows) is **not**
+  done — the workflow ships a plain zip of the `--onedir` output, a real
+  double-click-and-it-runs deliverable, just not a polished installer.
+- [ ] 4.4 **Signing is a real cost, decide explicitly.** Unsigned builds hit
+  Gatekeeper on macOS and SmartScreen on Windows — both show a scary warning
+  with a manual override, not a hard block, so shipping unsigned is viable
+  for curator testing if the workaround is documented. A genuine
+  no-warning double-click needs an Apple Developer account (~$99/yr, plus
+  notarisation, which is free once enrolled) and a Windows code-signing
+  certificate; a cheaper Windows option worth checking is Microsoft's Azure
+  Trusted Signing (~$10/month) or SignPath.io's free tier for open-source
+  projects, rather than a traditional ~$100-400/yr EV certificate. Not
+  decided — needs the project owner's call on budget, not a default.
 - [ ] 4.5 Smoke test each installer on a clean VM.
 
 ### Phase 5 — Distribution and hand-off
 
-- [ ] 5.1 `tools/fetch_snapshot.py` — Zenodo concept DOI (always resolves to latest) or plain URL + sha256; no-op when `snapshot_id` is unchanged.
-- [ ] 5.2 Publish to Zenodo with a `manifest.json` (`snapshot_id`, `sha256`, `row_count`, `schema_version`, source package id) and CC-BY-SA attribution.
-- [ ] 5.3 In-app "check for new snapshot".
-- [ ] 5.4 Move `python/` to its own repo, finish PyPI publishing, leave a pointer in this repo.
+- [x] 5.1 `tools/fetch_snapshot.py` (and `boldcurator fetch-snapshot`) —
+  three ways in, one download-and-verify core: a plain `--url` + `--sha256`;
+  a `--manifest` (the `manifest.json` shape 5.2 defines, fetched first so
+  the caller never has to know the digest by hand); or `--record`, a Zenodo
+  record or **concept** id resolved through the public REST API, where the
+  concept id always redirects to the latest version. No-ops (prints and
+  exits 0) when the destination file already reports the manifest's/record's
+  `snapshot_id` — `--force` overrides. Uses `urllib` from the standard
+  library, not `requests`, keeping the project's zero-extra-runtime-deps
+  policy. `tests/test_fetch_snapshot.py` runs the whole download/verify/skip
+  path against a throwaway local `http.server`, not the real network.
+- [ ] 5.2 Publish to Zenodo with a `manifest.json` (`snapshot_id`, `sha256`,
+  `row_count`, `schema_version`, source package id) and CC-BY-SA
+  attribution. Blocked on actually having a Zenodo account/community to
+  publish under — a project-owner decision, not a code task.
+- [ ] 5.3 In-app "check for new snapshot" — thin wrapper around 5.1 once 4.2
+  exists to call it from.
+- [ ] 5.4 Move `python/` to its own repo, finish PyPI publishing, leave a
+  pointer in this repo.
+
+## Packaging and data loading — how a curator actually gets running
+
+Two questions, asked together because the answer to the first shapes the
+second: how does the *app* get onto a curator's machine, and how does the
+*data* get onto it. The app is small (an installer, no snapshot inside);
+the data is gigabytes and changes on BOLD's own release cadence, so it is
+deliberately fetched separately, on demand, and re-checked rather than
+baked into a release.
+
+**Three ways to get a snapshot onto disk**, all meant to land on the same
+first-run screen (4.2):
+
+1. **Point at an existing `.duckdb` file.** Already fully supported
+   (`boldcurator gui --snapshot <path>`) — 4.2 is only a friendlier front
+   end onto the same thing, for someone who already has the file (a shared
+   drive, a colleague's copy, a previous download).
+2. **Download a pre-built snapshot.** The new `fetch_snapshot` machinery
+   (5.1, done) — from a direct URL, a `manifest.json`, or a Zenodo record/
+   concept id. This is the path most curators should use once 5.2 exists:
+   point the app at BOLDcuratoR's Zenodo concept DOI once, and every future
+   launch's "check for updates" (5.3) is a no-op until a new snapshot is
+   actually published.
+3. **Build one from a raw BOLD `.tsv.gz` package — decided: stays CLI-only
+   for v1.** `tools/build_snapshot.py` already does this (Phase 0); the
+   first-run screen (`ui/setup.py`) deliberately does **not** offer it as a
+   third option. This path is for whoever maintains the snapshot (they
+   already have the raw package from BOLD directly), not the typical
+   curator — a full ingest measured **~24 minutes** and needs several GB of
+   free disk (`python/PROGRESS.md`'s "Where the real data stands" section
+   has the measured figures). Building a progress screen for a 24-minute
+   background job is real UI work for an audience of one or two people who
+   are comfortable with a CLI already; the project owner agreed it is not
+   worth it for v1. Revisit if that audience or its size changes.
 
 ---
 

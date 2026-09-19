@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from pathlib import Path
 
 # --------------------------------------------------------------------------
 # Scoring
@@ -252,6 +253,41 @@ DOWNLOAD_LIMITS: dict[str, int] = {
     "MAX_RECORDS": 250_000,
     "MAX_BINS": 25_000,
 }
+
+# --------------------------------------------------------------------------
+# Data licence -- plan item 0.3
+# --------------------------------------------------------------------------
+
+#: The BOLD public data package this snapshot is built from is itself
+#: CC BY-SA 4.0 (``docs/python-app-plan.md:13``). That licence requires both
+#: attribution *and* that any redistributed or adapted dataset carry the same
+#: licence, so both this app's own exports and whatever a curator does with a
+#: download afterwards are covered -- not just this app's own use of the data.
+#: Lives here, not in ``ui/``, so ``io.exports`` (which stamps it onto every
+#: text export) does not have to depend on the GUI layer to say it.
+CC_BY_SA_URL = "https://creativecommons.org/licenses/by-sa/4.0/"
+
+BOLD_ATTRIBUTION_TEXT = (
+    "Specimen data is drawn from the Barcode of Life Data System (BOLD, "
+    "boldsystems.org) and is licensed under Creative Commons "
+    "Attribution-ShareAlike 4.0 International (CC BY-SA 4.0). Attribute BOLD "
+    "Systems in any use, publication or redistribution of this data "
+    "(including exports from this app), and share any redistributed or "
+    "adapted dataset under the same licence."
+)
+
+# --------------------------------------------------------------------------
+# Session storage -- plan item 3.8
+# --------------------------------------------------------------------------
+
+#: Where saved sessions live when the GUI is not told otherwise: per-user,
+#: not next to the snapshot -- a course's snapshot file may be shared and
+#: read-only, so it is not a safe place to write to (``docs/python-app-plan.md``'s
+#: "~20 students share one API key" context still applies to the *file*, even
+#: offline). A plain path avoids a new dependency for the common desktop case;
+#: ``boldcurator gui --sessions <path>`` overrides it for anything else.
+DEFAULT_SESSIONS_PATH = Path.home() / ".boldcurator" / "sessions.sqlite"
+
 # --------------------------------------------------------------------------
 # Geography
 # --------------------------------------------------------------------------

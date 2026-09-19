@@ -27,7 +27,12 @@ from pathlib import Path
 import pandas as pd
 from shiny import App, reactive, render, ui
 
-from ..config.constants import CONTINENT_COUNTRIES, DOWNLOAD_LIMITS, FLAG_OPTIONS
+from ..config.constants import (
+    CONTINENT_COUNTRIES,
+    DEFAULT_SESSIONS_PATH,
+    DOWNLOAD_LIMITS,
+    FLAG_OPTIONS,
+)
 from ..core.grouping import (
     GRADE_DESCRIPTIONS,
     GRADES,
@@ -38,10 +43,16 @@ from ..core.table import DEFAULT_PAGE_SIZE
 from ..data.snapshot import SnapshotStore
 from ..io import exports as export_io
 from ..io.annotations import merge_annotations
+from ..io.session import SessionStore
 from .format import (
     BIN_LABELS,
+    BOLD_ATTRIBUTION_SHORT,
+    BOLD_ATTRIBUTION_TEXT,
+    CC_BY_SA_URL,
     CHECKLIST_LABELS,
     CONCORDANCE_COLOURS,
+    GAP_LABELS,
+    GAP_STATUS_COLOURS,
     GRADE_COLOURS,
     GROUP_COLUMNS,
     GROUP_LABELS,
@@ -55,15 +66,21 @@ from .state import AppState, ResultTooLargeToAnalyse
 
 PAGE_SIZES = [25, 50, 100, 250, 500]
 
-#: Shown on the specimen table. The full 71 columns are available; a grid with
-#: 71 columns is unreadable, and the R app shows a chosen subset too.
-#: ``bags_grade`` is absent until a summary screen has been opened -- see
-#: ``SearchState.grade_lookup``.
-PREVIEW_COLUMNS = [
-    "selected", "checked", "flag", "curator_notes", "updated_id",
-    "processid", "species", "bin_uri", "country.ocean",
-    "quality_score", "rank", "bags_grade", "inst", "identified_by",
-]
+def _all_columns_ordered(frame: pd.DataFrame) -> list[str]:
+    """Every column ``frame`` carries, curated ones first -- nothing dropped.
+
+    Matches the original R app's own choice (`PREFERRED_COLUMNS`/
+    `order_columns` in `R/config/constants.R` and `R/utils/annotation_utils.R`):
+    the curated/annotation columns lead, the rest of the ~71 BOLD columns
+    follow in whatever order the snapshot has them, and the table scrolls
+    horizontally (`SCROLL_CLASS`) rather than hiding anything. ``bags_grade``
+    is absent from a page until a summary screen has been opened -- see
+    ``SearchState.grade_lookup`` -- so it simply isn't in ``frame`` yet, not
+    specially excluded here.
+    """
+    preferred = [c for c in GROUP_COLUMNS if c in frame.columns]
+    rest = [c for c in frame.columns if c not in GROUP_COLUMNS]
+    return preferred + rest
 
 #: Why each specimen-handling TSV download can come back empty, keyed the same
 #: way ``SearchState.export_specimens`` is.
@@ -163,9 +180,11 @@ def _grade_panel(grade: str) -> ui.Tag:
     )
 
 
-def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> App:
+def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
+               sessions_path: str | Path | None = None) -> App:
     store = SnapshotStore(snapshot)
     info = store.info()
+    sessions_path = sessions_path or DEFAULT_SESSIONS_PATH
 
     app_ui = ui.page_fluid(
         # One delegated listener, attached to the page once. The specimen and
@@ -239,6 +258,9 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
                 f"{info.bin_count:,} BINs · offline, no BOLD API",
                 class_="text-muted small",
             ),
+            ui.tags.a(BOLD_ATTRIBUTION_SHORT, href=CC_BY_SA_URL, target="_blank",
+                     rel="noopener noreferrer", class_="small",
+                     title=BOLD_ATTRIBUTION_TEXT),
             ui.div(
                 ui.input_text("user", None, placeholder="Your name (for annotations)",
                               width="240px"),
@@ -287,6 +309,46 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
                 ),
                 ui.output_ui("estimate_box"),
                 ui.output_ui("search_summary"),
+                ui.div(
+                    ui.tags.strong("Session", class_="small"),
+                    ui.div(
+                        ui.input_text("session_name", None,
+                                      placeholder="Session name",
+                                      width="220px"),
+                        ui.input_action_button("save_session", "Save",
+                                               class_="btn-sm"),
+                        ui.input_select("load_session_id", None, choices={},
+                                        width="320px"),
+                        ui.input_action_button("load_session", "Load",
+                                               class_="btn-sm"),
+                        ui.input_action_button("delete_session", "Delete",
+                                               class_="btn-sm btn-outline-danger"),
+                        style="display:flex;gap:8px;align-items:center;"
+                              "flex-wrap:wrap;margin-top:4px;",
+                    ),
+                    ui.div(
+                        ui.input_checkbox("autosave", "Auto-save every",
+                                          value=False),
+                        ui.input_numeric("autosave_interval", None, value=1,
+                                         min=1, max=60, width="70px"),
+                        ui.tags.span("minute(s), under the name above (or "
+                                     "\"Auto-save\" if blank)",
+                                     class_="small text-muted"),
+                        style="display:flex;gap:8px;align-items:center;"
+                              "flex-wrap:wrap;margin-top:6px;",
+                    ),
+                    ui.output_ui("session_status"),
+                    style="margin-top:16px;padding:10px 14px;"
+                          "background:#f8f9fa;border:1px solid #dee2e6;"
+                          "border-radius:5px;max-width:900px;",
+                ),
+                ui.div(
+                    BOLD_ATTRIBUTION_TEXT + " ",
+                    ui.tags.a("Full licence text.", href=CC_BY_SA_URL,
+                             target="_blank", rel="noopener noreferrer"),
+                    class_="small text-muted", style="margin-top:18px;"
+                          "max-width:900px;",
+                ),
                 value="input",
             ),
             ui.nav_panel("Species", ui.output_ui("species_body"), value="species"),
@@ -301,19 +363,26 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
 
     def server(input, output, session):
         state = AppState(store, page_size=page_size)
+        #: One connection per browser session/tab -- SQLite handles the
+        #: concurrent opens fine at this scale, and it means a tab closing
+        #: doesn't affect another tab's saved-session list.
+        sessions = SessionStore(sessions_path)
+        session.on_ended(sessions.close)
         revision = reactive.Value(0)
         status = reactive.Value("")
+        session_msg = reactive.Value("")
         offset = reactive.Value(0)
         estimate: reactive.Value = reactive.Value({})
         group_index: dict[str, reactive.Value] = {
             g: reactive.Value(0) for g in GRADES
         }
-        #: Click-a-header sort state for the three in-memory tables (species
-        #: checklist, BIN dashboard, one BAGS group at a time) -- (column,
-        #: descending). The specimen table sorts differently (server-side, via
-        #: SpecimenTable.sort_by) because it is never materialised whole; see
-        #: _spec_sort_click below.
+        #: Click-a-header sort state for the in-memory tables (species
+        #: checklist, gap analysis, BIN dashboard, one BAGS group at a time)
+        #: -- (column, descending). The specimen table sorts differently
+        #: (server-side, via SpecimenTable.sort_by) because it is never
+        #: materialised whole; see _spec_sort_click below.
         checklist_sort = reactive.Value(("", False))
+        gap_sort = reactive.Value(("", False))
         bins_sort = reactive.Value(("", False))
         group_sort = reactive.Value(("", False))
 
@@ -339,6 +408,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
                 touch()
 
         for _input_id, _state in (("checklist_sort_click", checklist_sort),
+                                  ("gap_sort_click", gap_sort),
                                   ("bins_sort_click", bins_sort),
                                   ("group_sort_click", group_sort)):
             _register_memory_sort(_input_id, _state)
@@ -382,6 +452,116 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
             if state.search is not None:
                 ui.update_navs("nav", selected="species")
             touch()
+
+        # -- session save/resume (plan 3.8) ---------------------------------
+        #
+        # A saved session's identity is its (slugified) name, so saving under
+        # a name already used updates that entry in place -- matching
+        # SessionStore.save()'s own upsert semantics -- rather than piling up
+        # duplicates every time a curator saves their progress.
+
+        def _slugify(name: str) -> str:
+            slug = "".join(c if c.isalnum() else "-" for c in name.strip().lower())
+            while "--" in slug:
+                slug = slug.replace("--", "-")
+            return slug.strip("-")
+
+        def _session_choices() -> dict[str, str]:
+            return {s.session_id: s.describe() for s in sessions.list_sessions()}
+
+        @reactive.effect
+        def _populate_sessions():
+            """Runs once at session startup -- it reads no reactive input, so
+            Shiny never re-invalidates it. Save/load/delete each refresh the
+            list themselves afterwards."""
+            ui.update_select("load_session_id", choices=_session_choices())
+
+        def _do_save(name: str, *, default_name: str, quiet_on_no_search: bool
+                    ) -> None:
+            """Shared by the Save button and the auto-save timer below --
+
+            same slugify-as-identity upsert either way, so a name typed once
+            covers both manual and scheduled saves of the same session.
+            ``quiet_on_no_search`` skips the "run a search first" message for
+            the timer, which fires on a schedule regardless of whether there
+            is anything to save yet.
+            """
+            if state.search is None:
+                if not quiet_on_no_search:
+                    session_msg.set("Run a search first.")
+                return
+            session_id = _slugify(name) or _slugify(default_name)
+            try:
+                saved = state.save_session(sessions, session_id,
+                                           name=name or default_name)
+            except (ValueError, ResultTooLargeToAnalyse) as exc:
+                session_msg.set(str(exc))
+                return
+            ui.update_select("load_session_id", choices=_session_choices(),
+                             selected=session_id)
+            session_msg.set(f"Saved {saved.name or saved.session_id!r} -- "
+                            f"{saved.record_count:,} records.")
+
+        @reactive.effect
+        @reactive.event(input.save_session)
+        def _save_session():
+            name = (input.session_name() or "").strip()
+            _do_save(name, default_name=f"session-{export_io.timestamp()}",
+                     quiet_on_no_search=False)
+
+        @reactive.effect
+        def _autosave_tick():
+            """Runs once at startup (autosave off, nothing to do) and then
+
+            once per interval for as long as the checkbox stays on --
+            `reactive.invalidate_later` has to be called on every run to keep
+            rescheduling itself, including the run that finds the checkbox
+            off, or it would never check again once turned off and back on.
+            `autosave_interval`/`session_name` are read isolated: changing
+            the interval or typing a name should not itself trigger a save,
+            only the timer firing or the checkbox being ticked should.
+            """
+            enabled = input.autosave()
+            with reactive.isolate():
+                minutes = max(1, int(input.autosave_interval() or 1))
+            if enabled:
+                reactive.invalidate_later(minutes * 60)
+            else:
+                return
+            with reactive.isolate():
+                name = (input.session_name() or "").strip()
+            _do_save(name, default_name="Auto-save", quiet_on_no_search=True)
+
+        @reactive.effect
+        @reactive.event(input.load_session)
+        def _load_session():
+            session_id = input.load_session_id()
+            saved = sessions.load(session_id) if session_id else None
+            if saved is None:
+                session_msg.set("Nothing to load -- save a session first.")
+                return
+            state.user = (input.user() or "").strip() or state.user
+            text, warnings = state.resume_session(saved)
+            offset.set(0)
+            for value in group_index.values():
+                value.set(0)
+            ui.update_navs("nav", selected="species")
+            session_msg.set(" ".join([text] + warnings))
+            touch()
+
+        @reactive.effect
+        @reactive.event(input.delete_session)
+        def _delete_session():
+            session_id = input.load_session_id()
+            if session_id and sessions.delete(session_id):
+                session_msg.set("Deleted.")
+            ui.update_select("load_session_id", choices=_session_choices())
+
+        @output
+        @render.ui
+        def session_status():
+            text = session_msg.get()
+            return ui.div(text, class_="small text-muted mt-1") if text else ui.div()
 
         @output
         @render.ui
@@ -480,14 +660,53 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
         @render.ui
         def species_body():
             def body(search):
-                checklist = _sorted_by(search.checklist(store), checklist_sort)
+                # Round 3, item 4: mean quality isn't something a curator
+                # scanning the checklist needs -- dropped from the on-screen
+                # table (and the xlsx export, SearchState.export_species_analysis)
+                # rather than the underlying build_species_checklist frame,
+                # which other callers (tests, a future consumer) may still
+                # want it from.
+                checklist = _sorted_by(
+                    search.checklist(store).drop(columns=["mean_quality_score"],
+                                                 errors="ignore"),
+                    checklist_sort)
                 counts = search.grade_counts(store)
+                gaps = search.gap_analysis(store)
+                # Gap analysis only has something to say when taxa were
+                # actually typed -- a dataset/project-code-only search has no
+                # "did the search find what I typed" question to answer.
+                gap_section = ui.div()
+                if len(gaps):
+                    found = int((gaps["status"] == "Found").sum())
+                    missing = int((gaps["status"] == "Missing").sum())
+                    gap_section = ui.div(
+                        ui.tags.strong("Gap analysis"),
+                        ui.tags.span(
+                            "  — every taxon typed, matched against synonyms "
+                            "too, and whether the search actually found it",
+                            style="opacity:.9;"),
+                        ui.div(
+                            value_box(f"{found:,}", "Found", "#28a745"),
+                            value_box(f"{missing:,}", "Missing", "#dc3545"),
+                            style="display:flex;gap:10px;margin:10px 0 12px;"
+                                  "flex-wrap:wrap;",
+                        ),
+                        ui.HTML(_gap_html(_sorted_by(gaps, gap_sort),
+                                          sort_state=gap_sort.get())),
+                        style="background:#f8f9fa;border:1px solid #dee2e6;"
+                              "border-radius:5px;padding:10px 14px;"
+                              "margin-bottom:16px;",
+                    )
                 return ui.div(
                     ui.div(
                         *[value_box(f"{counts.get(g, 0):,}", f"Grade {g}",
                                     GRADE_COLOURS[g]) for g in GRADES],
                         style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap;",
                     ),
+                    gap_section,
+                    ui.download_button("dl_species_analysis",
+                                       "Download species analysis (xlsx)",
+                                       class_="btn-sm mb-2"),
                     ui.HTML(_checklist_html(checklist, sort_state=checklist_sort.get())),
                 )
             return _needs_analysis(body)
@@ -500,7 +719,13 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
             def body(search):
                 analysis = search.analysis(store).bin_analysis
                 summary = analysis["summary"]
-                content = _sorted_by(analysis["content"], bins_sort)
+                # Round 3, item 5: "share of result" isn't something a
+                # curator scanning the BIN dashboard needs -- dropped from
+                # the on-screen table only; the BIN analysis xlsx download
+                # (analysis["content"] itself) is unchanged.
+                content = _sorted_by(
+                    analysis["content"].drop(columns=["bin_coverage"], errors="ignore"),
+                    bins_sort)
                 return ui.div(
                     ui.div(
                         value_box(f"{summary['total_bins']:,}", "Total BINs",
@@ -744,6 +969,11 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
                 if table.sort_column else "Result order (click a column header to sort)"
             )
             return ui.div(
+                # Paging/sort in their own row -- kept separate from the
+                # curation toolbar below (round 3, item 2) so the whole
+                # thing fits the default window width instead of overflowing
+                # one long flex row, matching the two-row layout the BAGS
+                # C/E screens already use (_grade_body).
                 ui.div(
                     ui.tags.span(sort_label, class_="small text-muted"),
                     ui.input_action_button("reset_sort", "Reset order",
@@ -758,12 +988,21 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
                                  class_="small text-nowrap"),
                     ui.input_action_button("next_", "›", class_="btn-sm"),
                     ui.input_action_button("last", "»", class_="btn-sm"),
-                    ui.input_action_button("select_page", "Check page",
-                                           class_="btn-sm"),
-                    ui.input_action_button("select_all", "Check all",
-                                           class_="btn-sm"),
-                    ui.input_action_button("clear_selection", "Clear checked",
-                                           class_="btn-sm"),
+                    style="display:flex;align-items:center;gap:10px;"
+                          "flex-wrap:wrap;margin-bottom:8px;",
+                ),
+                ui.div(
+                    ui.div(
+                        ui.input_action_button("select_page", "Check page",
+                                               class_="btn-sm"),
+                        ui.input_action_button("select_all", "Check all",
+                                               class_="btn-sm"),
+                        ui.input_action_button("clear_selection", "Clear checked",
+                                               class_="btn-sm"),
+                        ui.div(f"{len(state.annotations.working):,} checked",
+                               class_="small text-muted pt-1"),
+                        style="display:flex;flex-direction:column;gap:4px;",
+                    ),
                     *_annotation_controls("sp"),
                     style="display:flex;align-items:end;gap:10px;flex-wrap:wrap;"
                           "margin-bottom:10px;padding:8px;background:#f8f9fa;"
@@ -784,7 +1023,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
                     style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;",
                 ),
                 ui.HTML(_group_html(
-                    rows, columns=PREVIEW_COLUMNS, limit=len(rows),
+                    rows, columns=_all_columns_ordered(rows), limit=len(rows),
                     sort_input="spec_sort_click",
                     sortable=frozenset(table.sortable_columns),
                     sort_state=(table.sort_column, table.sort_descending))),
@@ -1045,6 +1284,25 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
                 return
             yield from _stream_file(written, tmpdir)
 
+        @output(id="dl_species_analysis")
+        @render.download_button(
+            filename=lambda: f"species_analysis_{export_io.timestamp()}.xlsx",
+            media_type="application/vnd.openxmlformats-officedocument"
+                       ".spreadsheetml.sheet")
+        def _dl_species_analysis():
+            search = state.search
+            if search is None:
+                yield from _empty_download("run a search first")
+                return
+            tmpdir = tempfile.TemporaryDirectory()
+            path = Path(tmpdir.name) / "export.xlsx"
+            written = search.export_species_analysis(store, path)
+            if written is None:
+                tmpdir.cleanup()
+                yield from _empty_download("no species in this result")
+                return
+            yield from _stream_file(written, tmpdir)
+
     return App(app_ui, server)
 
 
@@ -1240,12 +1498,23 @@ def _bins_html(frame: pd.DataFrame, *,
     def cell(column, value, row):
         if column == "concordance" and not _is_missing(value) and value:
             return _chip(value, CONCORDANCE_COLOURS.get(str(value), "#adb5bd"))
-        if column == "bin_coverage":
-            return "<td></td>" if _is_missing(value) else f"<td>{float(value):.1%}</td>"
         if column == "bin_uri" and not _is_missing(value) and value:
             return _link_cell(value, bold_bin_url(str(value)))
         return None
     return _table(frame, BIN_LABELS, cell, sort_input="bins_sort_click",
+                 sortable=frozenset(frame.columns) if len(frame) else frozenset(),
+                 sort_state=sort_state)
+
+
+def _gap_html(frame: pd.DataFrame, *,
+             sort_state: tuple[str | None, bool] = (None, False)) -> str:
+    def cell(column, value, row):
+        if column == "status" and not _is_missing(value) and value:
+            return _chip(value, GAP_STATUS_COLOURS.get(str(value), "#adb5bd"))
+        if column == "matched_species" and not _is_missing(value) and value:
+            return _link_cell(value, bold_species_url(str(value)))
+        return None
+    return _table(frame, GAP_LABELS, cell, sort_input="gap_sort_click",
                  sortable=frozenset(frame.columns) if len(frame) else frozenset(),
                  sort_state=sort_state)
 
@@ -1340,7 +1609,10 @@ def _group_html(frame: pd.DataFrame, columns: list[str] | None = None,
 
 
 def run(snapshot: str | Path, *, host: str = "127.0.0.1", port: int = 8000,
-        page_size: int = DEFAULT_PAGE_SIZE) -> None:
+        page_size: int = DEFAULT_PAGE_SIZE,
+        sessions_path: str | Path | None = None) -> None:
     import shiny
 
-    shiny.run_app(create_app(snapshot, page_size=page_size), host=host, port=port)
+    shiny.run_app(
+        create_app(snapshot, page_size=page_size, sessions_path=sessions_path),
+        host=host, port=port)

@@ -17,6 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 gui = ["shiny>=1.0"]
+desktop = ["shiny>=1.0", "uvicorn>=0.30", "pywebview>=5.0"]
 bench = ["psutil>=5.9"]
 dev = ["pytest>=8.0", "psutil>=5.9"]
 
@@ -24,6 +25,7 @@ dev = ["pytest>=8.0", "psutil>=5.9"]
 boldcurator = "boldcurator.cli:main"
 boldcurator-build-snapshot = "boldcurator.build.snapshot_builder:main"
 boldcurator-verify-snapshot = "boldcurator.build.verify:main"
+boldcurator-fetch-snapshot = "boldcurator.build.fetch_snapshot:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/boldcurator"]

@@ -11,6 +11,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from .build.fetch_snapshot import add_fetch_args
 from .core.pipeline import SizeLimitExceeded, parse_lines, run_search
 from .data.snapshot import SnapshotError, SnapshotStore
 
@@ -49,7 +50,7 @@ def cmd_resolve(args: argparse.Namespace) -> int:
 def cmd_search(args: argparse.Namespace) -> int:
     taxa_text = args.taxa or ""
     if args.taxa_file:
-        taxa_text = Path(args.taxa_file).read_text()
+        taxa_text = Path(args.taxa_file).read_text(encoding="utf-8")
 
     with SnapshotStore(args.snapshot) as store:
         try:
@@ -314,7 +315,8 @@ def cmd_gui(args: argparse.Namespace) -> int:
         print(f"The GUI needs the optional dependencies: pip install -e \".[gui]\"\n"
               f"  ({exc})")
         return 1
-    run(args.snapshot, host=args.host, port=args.port, page_size=args.page_size)
+    run(args.snapshot, host=args.host, port=args.port, page_size=args.page_size,
+        sessions_path=args.sessions)
     return 0
 
 
@@ -322,6 +324,30 @@ def cmd_verify(args: argparse.Namespace) -> int:
     from .build.verify import main as verify_main
 
     return verify_main(["--snapshot", str(args.snapshot)])
+
+
+def cmd_fetch_snapshot(args: argparse.Namespace) -> int:
+    from .build.fetch_snapshot import fetch
+
+    return fetch(args)
+
+
+def cmd_desktop(args: argparse.Namespace) -> int:
+    """Launch the packaged app: a native window, not a browser tab.
+
+    Imported here, not at module scope, for the same reason ``cmd_gui`` is --
+    it needs the ``desktop`` extra (Shiny plus ``pywebview``), which most
+    installs (the CLI, the parity harness) never need.
+    """
+    try:
+        import webview  # noqa: F401  -- proves the desktop extra is installed
+        from .desktop import launch
+    except ImportError as exc:
+        print(f"The desktop app needs the optional dependencies: "
+              f"pip install -e \".[desktop]\"\n  ({exc})")
+        return 1
+    launch(args.snapshot, page_size=args.page_size)
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -337,11 +363,28 @@ def build_parser() -> argparse.ArgumentParser:
     gui.add_argument("--host", default="127.0.0.1")
     gui.add_argument("--port", type=int, default=8000)
     gui.add_argument("--page-size", type=int, default=100)
+    gui.add_argument("--sessions", default=None,
+                     help="path to the saved-sessions SQLite file "
+                          "(default: ~/.boldcurator/sessions.sqlite)")
     gui.set_defaults(func=cmd_gui)
 
     verify = sub.add_parser("verify", help="verify a snapshot read-only")
     _add_snapshot_arg(verify)
     verify.set_defaults(func=cmd_verify)
+
+    fetch_snapshot = sub.add_parser(
+        "fetch-snapshot", help="download a pre-built snapshot (plan 5.1)")
+    add_fetch_args(fetch_snapshot)
+    fetch_snapshot.set_defaults(func=cmd_fetch_snapshot)
+
+    desktop = sub.add_parser(
+        "desktop", help="launch the packaged app in a native window")
+    desktop.add_argument("--snapshot", type=Path, default=None,
+                         help="snapshot .duckdb file; omit to use the saved "
+                              "one, or run the first-run setup screen if "
+                              "none is saved yet")
+    desktop.add_argument("--page-size", type=int, default=100)
+    desktop.set_defaults(func=cmd_desktop)
 
     resolve = sub.add_parser("resolve", help="resolve taxon names to ranks")
     _add_snapshot_arg(resolve)

@@ -13,9 +13,20 @@ import pandas as pd
 
 from shiny import ui
 
+from ..config.constants import BOLD_ATTRIBUTION_TEXT, CC_BY_SA_URL
+
+__all__ = [
+    "BOLD_ATTRIBUTION_TEXT", "CC_BY_SA_URL", "BOLD_ATTRIBUTION_SHORT",
+]
+
 #: The public BOLD portal -- no API key, no login, works from an offline
 #: snapshot's data because it is just a link, not a fetch.
 BOLD_PORTAL = "https://portal.boldsystems.org"
+
+#: The short form for the header bar; ``BOLD_ATTRIBUTION_TEXT`` (the full
+#: wording) lives in ``config.constants`` so ``io.exports`` can stamp it onto
+#: exports without depending on the GUI layer.
+BOLD_ATTRIBUTION_SHORT = "Data: BOLD Systems, CC BY-SA 4.0"
 
 
 def bold_record_url(processid: str) -> str:
@@ -53,6 +64,8 @@ GRADE_COLOURS: dict[str, str] = {
 
 CONCORDANCE_COLOURS = {"Concordant": "#28a745", "Discordant": "#dc3545"}
 
+GAP_STATUS_COLOURS = {"Found": "#28a745", "Missing": "#dc3545"}
+
 #: The columns a curator works with, in the order the R app shows them:
 #: annotations first, because that is what they are here to change.
 #: ``selected`` and ``checked`` are two different checkboxes -- see
@@ -63,8 +76,9 @@ GROUP_COLUMNS = [
     "species", "bags_grade", "identification", "identified_by", "country.ocean",
 ]
 
-#: Headers for ``GROUP_COLUMNS`` (and the specimen table's ``PREVIEW_COLUMNS``,
-#: a subset of the same names). "Rep." and "Check" carry the distinction
+#: Headers for ``GROUP_COLUMNS`` (and the columns of the same names among the
+#: specimen table's full column set -- see ``ui.app._all_columns_ordered``).
+#: "Rep." and "Check" carry the distinction
 #: ``GROUP_COLUMNS`` documents -- one is the persistent representative pick,
 #: the other a disposable bulk-edit selection.
 GROUP_LABELS = {
@@ -76,16 +90,28 @@ GROUP_LABELS = {
     "inst": "Institution",
 }
 
+#: ``mean_quality_score`` is a real column of ``build_species_checklist``'s
+#: output but has no entry here -- round 3, item 4 dropped it from the
+#: on-screen checklist and the xlsx export as noise nobody asked to see, not
+#: from the underlying data (other callers, e.g. tests, still get it).
 CHECKLIST_LABELS = {
     "species": "Species", "specimen_count": "Specimens", "bin_count": "BINs",
     "bin_uris": "BIN URIs", "bags_grade": "BAGS", "countries": "Countries",
-    "mean_quality_score": "Mean quality",
 }
 
+#: ``bin_coverage`` -- likewise a real column of ``analyse_bins``'s output,
+#: still in the BIN analysis xlsx download, but dropped from the on-screen
+#: dashboard (round 3, item 5).
 BIN_LABELS = {
     "bin_uri": "BIN", "total_records": "Records", "unique_species": "Species",
     "species_list": "Species list", "countries": "Countries",
-    "concordance": "Concordance", "bin_coverage": "Share of result",
+    "concordance": "Concordance",
+}
+
+GAP_LABELS = {
+    "input_taxon": "Taxon typed", "status": "Status",
+    "matched_species": "Matched species", "specimen_count": "Specimens",
+    "notes": "Notes",
 }
 
 
