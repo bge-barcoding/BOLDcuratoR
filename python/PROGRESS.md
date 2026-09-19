@@ -14,14 +14,19 @@ in the app and every export, and **session save/resume wired end to end**.
 Two full rounds of curator-reported bugs (9 issues) are fixed and verified
 live; **round 3 (6 issues) is now also closed** -- see below. 286 tests
 pass, the parity gate is green. `fetch_snapshot` (plan 5.1) and the desktop
-launcher + first-run setup screen (4.1a/4.2) are done. **CI (plan 2.6) and
-an automated release build (plan 4.3) are written this session** -- a real
-frozen PyInstaller build was proven to work (CLI and GUI server both
-verified against a real snapshot), catching a real bug (`shinychat` needs
-its own `--collect-all`) -- but `pywebview` itself couldn't be installed in
-this sandbox, so `boldcurator desktop` specifically is unverified until the
-GitHub Actions workflow actually runs on real Windows/macOS runners. Signing
-(4.4) is a deliberate no for now (project owner's call).
+launcher + first-run setup screen (4.1a/4.2) are done. **CI (plan 2.6) is
+written and has run for real**: green on Linux, macOS and the parity job;
+Windows caught a genuine cross-platform bug (a test helper decoding source
+files with the platform locale codepage instead of UTF-8), now fixed and
+awaiting a re-run. **The release build (plan 4.3) is written but not yet
+triggered** -- this session lacks the GitHub permissions to dispatch it;
+the project owner needs to run it from the Actions tab or by pushing a `v*`
+tag. A real frozen PyInstaller build was proven to work outside CI (CLI and
+GUI server both verified against a real snapshot), catching a real bug
+(`shinychat` needs its own `--collect-all`) -- but `pywebview` itself
+couldn't be installed in this sandbox, so `boldcurator desktop` specifically
+is unverified until that workflow actually runs. Signing (4.4) is a
+deliberate no for now (project owner's call).
 
 ## NEXT SESSION — START HERE, in priority order
 
@@ -29,35 +34,44 @@ No open curator-reported bugs right now -- three rounds are closed (see the
 "Open issues" sections below for what was wrong and how each was fixed, if
 a similar bug resurfaces). What's left is packaging and distribution:
 
-1. **CI (plan 2.6) and the release build (plan 4.3) — written, first real
-   run in progress/to check.** Two new workflows:
-   `.github/workflows/python-tests.yml` (pytest on a Linux/macOS/Windows
-   matrix, plus the parity harness on Linux with R installed via apt) and
-   `.github/workflows/python-release.yml` (PyInstaller builds on the same
-   three platforms plus macOS Intel, triggered by a `v*` tag or manually via
-   `workflow_dispatch`). See `python/packaging/README.md` for the exact
-   build recipe and, importantly, **what has and hasn't actually been
-   verified**: the CLI and the GUI server were both proven to work from a
-   real frozen PyInstaller build in this session (caught and fixed a real
-   bug -- `shinychat` needs its own `--collect-all`, see below), but
-   `pywebview` itself could not even be installed in this sandbox (an
-   unrelated `distutils`/`setuptools` incompatibility building one of its
-   own dependencies), so `boldcurator desktop` -- the actual packaged entry
-   point -- has only been reviewed by reading the code. The release
-   workflow's own smoke-test steps (build a tiny fixture, run `info`
-   against it, start the GUI server and curl it) exist specifically to
-   catch exactly this kind of issue automatically on real Windows/macOS/
-   Linux runners, which this sandbox cannot do. **Next session: check the
-   Actions run this session triggered (or trigger one) and read the
-   results** -- especially whether `pip install -e ".[desktop]"` (i.e.
-   pywebview) succeeds on all four runners, which is the one thing nothing
-   here could confirm.
-2. **4.4 Signing** — still a deliberate no (project owner's call, curator
+1. **CI (plan 2.6) — written and passing on real runners.**
+   `.github/workflows/python-tests.yml` (pytest on Linux/macOS/Windows, plus
+   the parity harness on Linux with R installed via apt) ran for real on
+   this session's push: **Linux, macOS and the parity job all passed first
+   try; Windows failed on a genuine bug**, not a CI artefact --
+   `tests/test_no_gui_dependency.py`'s `_imports()` helper called
+   `Path.read_text()` with no encoding, which defaults to the platform's
+   locale codepage (cp1252 on Windows, not UTF-8), and this project's
+   docstrings use real em dashes and arrows that cp1252 cannot decode.
+   Fixed with an explicit `encoding="utf-8"` there and in `cli.py`'s
+   `--taxa-file` reader (same latent bug, not yet hit by a test, fixed
+   while here). **Not yet re-confirmed on Windows after the fix** -- push
+   this and check the next run.
+2. **4.3 the release build — written, real verification still pending.**
+   `.github/workflows/python-release.yml` (PyInstaller builds on Linux,
+   Windows, macOS x86_64 and arm64, triggered by a `v*` tag or manually via
+   `workflow_dispatch`) could **not** be triggered from this session --
+   `workflow_dispatch` needs `actions: write` on the GitHub App token this
+   session has, and dispatching it returned a 403. **The project owner
+   needs to run it themselves**, either from the Actions tab in the GitHub
+   UI ("Run workflow" on "Build desktop executables") or by pushing a `v*`
+   tag when ready to cut a real release. See `python/packaging/README.md`
+   for the exact build recipe and what has/hasn't been verified: the CLI
+   and the GUI server were both proven to work from a real frozen
+   PyInstaller build in this session (caught and fixed a real bug --
+   `shinychat` needs its own `--collect-all`), but `pywebview` itself could
+   not even be installed in this sandbox (an unrelated `distutils`/
+   `setuptools` incompatibility building one of its own dependencies), so
+   `boldcurator desktop` -- the actual packaged entry point -- has only
+   been reviewed by reading the code, not run. The release workflow's own
+   smoke-test steps exist to catch exactly this kind of gap automatically,
+   but only once someone actually fires it.
+3. **4.4 Signing** — still a deliberate no (project owner's call, curator
    testing doesn't need it) and **4.5 installer smoke test on a clean VM**
    still not done — the release workflow's own smoke test is a CI proxy for
    this, not a replacement for someone actually double-clicking a
    downloaded build.
-3. **Also open, not urgent:**
+4. **Also open, not urgent:**
    - The R app (not this rewrite) rejects 4% of real BOLD dataset codes --
      `mod_data_import_utils.R:50`'s `^DS-[A-Z0-9]+$` pattern; 544 of 13,706
      real `DS-` codes don't match. Live bug in the *shipped* app. The SQL to

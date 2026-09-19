@@ -17,7 +17,11 @@ CORE_DIRS = ["config", "data", "core", "io", "build"]
 
 
 def _imports(path: Path) -> set[str]:
-    tree = ast.parse(path.read_text())
+    # Explicit encoding: this project's docstrings use real em dashes and
+    # arrows, which read_text()'s platform default (cp1252 on Windows, not
+    # UTF-8) cannot decode -- a real cross-platform CI failure, not a
+    # hypothetical one.
+    tree = ast.parse(path.read_text(encoding="utf-8"))
     found: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):

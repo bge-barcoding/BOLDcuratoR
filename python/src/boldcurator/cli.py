@@ -50,7 +50,7 @@ def cmd_resolve(args: argparse.Namespace) -> int:
 def cmd_search(args: argparse.Namespace) -> int:
     taxa_text = args.taxa or ""
     if args.taxa_file:
-        taxa_text = Path(args.taxa_file).read_text()
+        taxa_text = Path(args.taxa_file).read_text(encoding="utf-8")
 
     with SnapshotStore(args.snapshot) as store:
         try:
