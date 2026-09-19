@@ -27,8 +27,10 @@ progress readout does not need more than that.
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
 import json
+import re
 import sys
 import urllib.request
 from dataclasses import dataclass
@@ -36,6 +38,13 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 
 ZENODO_API = "https://zenodo.org/api/records/{record_id}"
+
+#: Matches the numeric id out of a full DOI (``10.5281/zenodo.22849516``), a
+#: ``doi.org``/``zenodo.org`` URL, or the id on its own -- so a curator (or
+#: ``DEFAULT_SNAPSHOT_ZENODO_DOI``) can hand this module whichever form is at
+#: hand. Anchored on ``zenodo.<digits>`` specifically so ``zenodo.org`` itself
+#: (no digits after the dot) never matches.
+_ZENODO_ID_IN_DOI = re.compile(r"zenodo\.(\d+)\b")
 
 #: Chunk size for the streamed download and the running sha256/md5.  A few
 #: hundred KB balances syscall overhead against progress-readout granularity
@@ -60,6 +69,13 @@ class Source:
     snapshot_id: str = ""
     row_count: int | None = None
     schema_version: str = ""
+    #: The published filename, when known (Zenodo's own ``key``) -- round 4,
+    #: item 2's date-named, gzipped published snapshots
+    #: (``bold_snapshot_2026-09-11.duckdb.gz``) are told apart from a plain
+    #: ``.duckdb`` by this, not by ``url`` alone, which is not guaranteed to
+    #: end in the real filename for every host. Falls back to ``url`` itself
+    #: when a source (a bare ``--url``, most manifests) doesn't carry one.
+    filename: str = ""
 
 
 def _get_json(url: str) -> dict:
@@ -97,7 +113,22 @@ def resolve_manifest(location: str) -> Source:
         snapshot_id=data.get("snapshot_id", ""),
         row_count=data.get("row_count"),
         schema_version=data.get("schema_version", ""),
+        filename=data.get("filename", ""),
     )
+
+
+def _clean_zenodo_id(record_id: str) -> str:
+    """Accept a bare id, a full DOI, or a doi.org/zenodo.org URL alike.
+
+    ``DEFAULT_SNAPSHOT_ZENODO_DOI`` is given as a full DOI (round 4, item 2)
+    so it reads the same as the citation on the Zenodo page itself, rather
+    than requiring a curator (or this project's own code) to know Zenodo's
+    internal numeric id separately.
+    """
+    match = _ZENODO_ID_IN_DOI.search(record_id)
+    if match:
+        return match.group(1)
+    return record_id.strip().rstrip("/").rsplit("/", 1)[-1]
 
 
 def resolve_zenodo_record(record_id: str, *, filename: str | None = None) -> Source:
@@ -108,7 +139,14 @@ def resolve_zenodo_record(record_id: str, *, filename: str | None = None) -> Sou
     right id to hand out for "always get the newest snapshot" -- a specific
     version id pins to that version forever, which is a deliberate choice
     too, just a different one.
+
+    Republished snapshots are date-named and gzipped (round 4, item 2:
+    ``bold_snapshot_2026-09-11.duckdb.gz``) -- matched here the same way a
+    plain ``.duckdb`` already was, so a record holding either (or, someday,
+    both across versions) resolves the same way with nothing curator-facing
+    to change.
     """
+    record_id = _clean_zenodo_id(record_id)
     data = _get_json(ZENODO_API.format(record_id=record_id))
     files = data.get("files", [])
     if not files:
@@ -124,7 +162,8 @@ def resolve_zenodo_record(record_id: str, *, filename: str | None = None) -> Sou
     elif len(files) == 1:
         matches = files
     else:
-        matches = [f for f in files if str(f.get("key", "")).endswith(".duckdb")]
+        matches = [f for f in files
+                  if str(f.get("key", "")).endswith((".duckdb", ".duckdb.gz"))]
         if len(matches) != 1:
             available = ", ".join(f.get("key", "?") for f in files)
             raise FetchError(
@@ -139,6 +178,7 @@ def resolve_zenodo_record(record_id: str, *, filename: str | None = None) -> Sou
         checksum=checksum or None,
         snapshot_id=str(data.get("id", record_id)),
         schema_version=str(metadata.get("version", "")),
+        filename=str(entry.get("key", "")),
     )
 
 
@@ -176,13 +216,33 @@ def _verify(path: Path, checksum: str) -> None:
             "not kept, since a silently wrong snapshot is worse than none.")
 
 
+def _decompress_gzip(src: Path, dst: Path, *, progress=print) -> None:
+    """Gunzip ``src`` into ``dst``, chunked -- a snapshot can be gigabytes,
+    and this is what keeps decompression from doubling that in memory."""
+    written = 0
+    with gzip.open(src, "rb") as fh_in, open(dst, "wb") as fh_out:
+        while chunk := fh_in.read(CHUNK_SIZE):
+            fh_out.write(chunk)
+            written += len(chunk)
+            progress(f"\rDecompressing... {written / 1e6:.0f} MB", end="")
+    progress("")
+
+
 def download(source: Source, out: Path, *, progress=print) -> Path:
     """Stream ``source.url`` to a temp file beside ``out``, verify, rename.
 
     The temp file (not ``out`` itself) is what a failed or interrupted
     download leaves behind, so ``out`` is never observed half-written.
+
+    Round 4, item 2: a published snapshot may be gzipped
+    (``bold_snapshot_2026-09-11.duckdb.gz``) -- detected from
+    ``source.filename`` (Zenodo's own name for the file) or, failing that,
+    ``source.url`` itself. The checksum Zenodo (or a manifest) publishes is
+    for the file as uploaded, so it is verified against the *compressed*
+    download, before decompressing into ``out``.
     """
-    tmp = out.with_suffix(out.suffix + ".part")
+    is_gzipped = (source.filename or source.url).split("?")[0].endswith(".gz")
+    tmp = out.with_suffix(out.suffix + (".gz.part" if is_gzipped else ".part"))
     out.parent.mkdir(parents=True, exist_ok=True)
 
     try:
@@ -214,7 +274,18 @@ def download(source: Source, out: Path, *, progress=print) -> Path:
     else:
         progress("No checksum given -- integrity of this download is NOT verified.")
 
-    tmp.replace(out)
+    if is_gzipped:
+        decompressed = out.with_suffix(out.suffix + ".part")
+        try:
+            _decompress_gzip(tmp, decompressed, progress=progress)
+        except (OSError, gzip.BadGzipFile) as exc:
+            decompressed.unlink(missing_ok=True)
+            tmp.unlink(missing_ok=True)
+            raise FetchError(f"Could not decompress the download: {exc}") from exc
+        tmp.unlink()
+        decompressed.replace(out)
+    else:
+        tmp.replace(out)
     return out
 
 
