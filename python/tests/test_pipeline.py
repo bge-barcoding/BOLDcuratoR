@@ -55,6 +55,18 @@ def test_end_to_end_search(store):
     assert result.selections
 
 
+def test_shared_bins_are_bins_the_result_actually_holds(store):
+    """core.grouping needs this set to tell a species' shared BIN from its
+
+    unrelated other one -- see the BOLD:AAL6477 tests in test_grouping.py.
+    """
+    result = P.run_search(store, taxa_text="Lepidoptera")
+    assert isinstance(result.shared_bins, frozenset)
+    assert result.shared_bins, "a family this size should have some sharing"
+    present = set(result.specimens["bin_uri"].dropna().astype(str))
+    assert result.shared_bins <= present
+
+
 def test_unmatched_taxa_produce_a_warning_not_a_failure(store):
     result = P.run_search(store, taxa_text="Danaus plexippus\nNotataxonatall")
     assert any("Notataxonatall" in w for w in result.warnings)

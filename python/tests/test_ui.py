@@ -100,6 +100,34 @@ def test_missing_values_render_as_blank_rather_than_raising():
     assert "nan" not in html.lower(), "a missing value must not print as 'nan'"
 
 
+def test_a_record_can_be_selected_on_its_own_not_only_the_whole_group():
+    """The point of the per-row checkbox: pick one record out of a group.
+
+    Before this, "selected" rendered as a plain check mark and the only ways
+    to change a selection were "select this whole group / page / result" --
+    there was no way to act on a handful of records out of a larger group.
+    """
+    import pandas as pd
+
+    from boldcurator.ui.app import ROW_CHECKBOX_CLASS, _group_html
+
+    frame = pd.DataFrame({
+        "processid": ["P1", "P2"],
+        "species": ["Danaus plexippus", "Danaus chrysippus"],
+        "bin_uri": ["BOLD:A", "BOLD:A"],
+        "selected": [True, False],
+    })
+    html = _group_html(frame)
+
+    assert html.count(f"class='{ROW_CHECKBOX_CLASS}'") == 2
+    assert "data-pid='P1'" in html and "data-pid='P2'" in html
+    # P1 is selected, P2 is not -- exactly one checkbox carries `checked`.
+    p1_row = html.split("data-pid='P1'")[1].split("</tr>")[0]
+    p2_row = html.split("data-pid='P2'")[1].split("</tr>")[0]
+    assert "checked" in p1_row.split(">")[0]
+    assert "checked" not in p2_row.split(">")[0]
+
+
 def test_an_empty_frame_renders_a_message_not_a_broken_table():
     import pandas as pd
 
@@ -180,6 +208,39 @@ def test_the_priority_grades_are_marked_in_the_navigation():
     for grade in ("A", "B", "D"):
         assert "work here first" not in rendered(grade)
     assert PRIORITY_GRADES == ("E", "C")
+
+
+def test_a_fresh_search_auto_selects_a_representative_per_bin_and_country(store):
+    """R auto-selects on a fresh import (``app.R:425-467``); so must this.
+
+    The GUI never materialises the whole result at search time, so the only
+    honest place to do this is the first time something needs the scored,
+    whole-result frame -- which is ``analysis()``.
+    """
+    from boldcurator.ui.state import AppState
+
+    state = AppState(store)
+    state.run_search("Lepidoptera")
+    assert state.annotations.selected == {}, "nothing selected before analysis runs"
+    state.search.analysis(store)
+    assert state.annotations.selected, "a fresh search must end up with a selection"
+    assert all(v.get("auto_selected") for v in state.annotations.selected.values())
+
+
+def test_auto_selection_never_overwrites_a_curator_s_own_choice(store):
+    from boldcurator.ui.state import AppState
+
+    state = AppState(store)
+    state.run_search("Lepidoptera")
+    first_page = state.search.table.page(0).rows
+    manual_pid = str(first_page["processid"].iloc[0])
+    state.annotations.set_selected(manual_pid, user="curator")
+
+    state.search.analysis(store)
+
+    assert state.annotations.selected == {
+        manual_pid: state.annotations.selected[manual_pid]
+    }, "an existing selection is a curator's, and analysis must leave it alone"
 
 
 def test_selecting_a_group_replaces_the_selection_rather_than_adding(store):

@@ -157,3 +157,26 @@ def test_the_plan_respects_the_limit_on_fetch_not_on_resolution(store):
     plan = Q.plan_search(store, query)
     assert plan.expanded_records > 5
     assert len(Q.fetch_planned(store, plan, limit=5)) == 5
+
+
+def test_fetch_by_bin_ignores_the_search_entirely(store):
+    """It is not scoped to a plan -- a whole BIN, by bin_uri, nothing else."""
+    taxa = Q.resolve_taxa(store, ["Danaus plexippus"]).resolved
+    plan = Q.plan_search(store, Q.SearchQuery(taxa=taxa, expand_bins=True))
+    seeded = Q.fetch_planned(store, plan)
+    a_bin = next(b for b in seeded["bin_uri"] if isinstance(b, str) and b)
+
+    by_bin = Q.fetch_by_bin(store, [a_bin])
+    assert len(by_bin) > 0
+    assert set(by_bin["bin_uri"].dropna().unique()) == {a_bin}
+    # Whatever the search's own BIN expansion already found for this BIN must
+    # be a subset of what a direct fetch of the BIN finds.
+    assert set(seeded.loc[seeded["bin_uri"] == a_bin, "processid"]) <= \
+        set(by_bin["processid"])
+
+
+def test_fetch_by_bin_of_nothing_is_an_empty_frame_with_the_right_columns(store):
+    empty = Q.fetch_by_bin(store, [])
+    assert len(empty) == 0
+    assert "processid" in empty.columns
+    assert "bin_uri" in empty.columns

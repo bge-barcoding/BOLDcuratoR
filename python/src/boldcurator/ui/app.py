@@ -21,6 +21,7 @@ This module lays them out and wires the clicks.
 
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
 
 import pandas as pd
@@ -30,6 +31,7 @@ from ..config.constants import CONTINENT_COUNTRIES, DOWNLOAD_LIMITS, FLAG_OPTION
 from ..core.grouping import GRADE_DESCRIPTIONS, GRADES, PRIORITY_GRADES
 from ..core.table import DEFAULT_PAGE_SIZE
 from ..data.snapshot import SnapshotStore
+from ..io import exports as export_io
 from ..io.annotations import merge_annotations
 from .format import (
     BIN_LABELS,
@@ -53,6 +55,35 @@ PREVIEW_COLUMNS = [
     "processid", "species", "bin_uri", "country.ocean",
     "quality_score", "rank", "bags_grade", "inst", "identified_by",
 ]
+
+#: Why each specimen-handling TSV download can come back empty, keyed the same
+#: way ``SearchState.export_specimens`` is.
+_EMPTY_REASONS = {
+    "all": "no records in this result",
+    "selected": "no specimens selected",
+    "annotated": "no flags, updated IDs or notes recorded",
+    "curation_report": "no flags, updated IDs or notes recorded",
+}
+
+
+def _stream_file(path: Path, tmpdir: tempfile.TemporaryDirectory):
+    """Yield one file's bytes in chunks, then clean up its temp directory.
+
+    ``@render.download_button`` wants yielded bytes, not a path to a file it
+    did not create -- "returning a path to a temp file you created" is exactly
+    the mistake that leaves the temp directory behind. Chunking keeps a large
+    FASTA export from doubling its own size in memory just to hand it to the
+    browser.
+    """
+    try:
+        with open(path, "rb") as fh:
+            while True:
+                chunk = fh.read(1 << 20)
+                if not chunk:
+                    break
+                yield chunk
+    finally:
+        tmpdir.cleanup()
 
 
 def _annotation_controls(prefix: str) -> list:
@@ -109,6 +140,21 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
     info = store.info()
 
     app_ui = ui.page_fluid(
+        # One delegated listener, attached to the page once. The specimen and
+        # group tables are re-rendered as raw HTML on every click (paging,
+        # sorting, "next problem"...), which replaces the checkboxes' own
+        # elements each time -- a listener attached to *them* would need
+        # re-attaching after every render and silently stop working after the
+        # first. Delegating to `document` sidesteps that entirely.
+        ui.tags.script(f"""
+            document.addEventListener('change', function(e) {{
+                if (e.target && e.target.classList.contains('{ROW_CHECKBOX_CLASS}')) {{
+                    Shiny.setInputValue('row_select',
+                        {{pid: e.target.dataset.pid, checked: e.target.checked}},
+                        {{priority: 'event'}});
+                }}
+            }});
+        """),
         ui.div(
             ui.tags.h4("BOLDcurator", style="margin:0;"),
             ui.tags.span(
@@ -290,6 +336,8 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
                 ),
                 ui.div(f"Searched: {search.query_label}", class_="small mt-2"),
                 ui.div(text, class_="small text-muted"),
+                ui.download_button("dl_search_results", "Download CSV",
+                                   class_="btn-sm mt-2"),
             )
 
         # -- the guard every summary screen shares -------------------------
@@ -341,6 +389,9 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
                                   "BINs with >1 species", "#f0ad4e"),
                         style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap;",
                     ),
+                    ui.download_button("dl_bin_analysis",
+                                       "Download BIN analysis (xlsx)",
+                                       class_="btn-sm mb-2"),
                     ui.HTML(_bins_html(content)),
                 )
             return _needs_analysis(body)
@@ -549,6 +600,20 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
                           "margin-bottom:10px;padding:8px;background:#f8f9fa;"
                           "border:1px solid #dee2e6;border-radius:5px;",
                 ),
+                ui.div(
+                    ui.download_button("dl_all", "Download All", class_="btn-sm"),
+                    ui.download_button("dl_selected", "Download Selected",
+                                       class_="btn-sm"),
+                    ui.download_button("dl_annotated", "Download Annotated Records",
+                                       class_="btn-sm"),
+                    ui.download_button("dl_curation_report",
+                                       "Download BOLD Curation Report",
+                                       class_="btn-sm"),
+                    ui.download_button("dl_fasta", "Download FASTA", class_="btn-sm"),
+                    ui.download_button("dl_selected_fasta", "Download Selected FASTA",
+                                       class_="btn-sm"),
+                    style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;",
+                ),
                 ui.HTML(_group_html(rows, columns=PREVIEW_COLUMNS,
                                     limit=len(rows))),
             )
@@ -632,9 +697,145 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
             touch()
 
         @reactive.effect
+        @reactive.event(input.row_select)
+        def _row_select():
+            """One record's own checkbox, on the specimen table or any group.
+
+            The bulk buttons (page / group / all) still exist; this is what
+            lets a curator select a handful out of a group without pulling in
+            everything else in it.
+            """
+            payload = input.row_select()
+            pid = str((payload or {}).get("pid") or "")
+            if not pid or state.search is None:
+                return
+            if payload.get("checked"):
+                state.annotations.set_selected(pid, user=(input.user() or "").strip())
+            else:
+                state.annotations.unset_selected(pid)
+            touch()
+
+        @reactive.effect
         @reactive.event(input.sp_apply)
         def _apply_specimens():
             _apply("sp")
+
+        # -- downloads -------------------------------------------------------
+        #
+        # The six specimen-handling buttons above, plus the search-results CSV
+        # (Data Input) and the BIN-analysis workbook (BINs) below. All eight
+        # write through `io.exports`, the same code the CLI and the parity
+        # harness already exercise, so a download and `boldcurator export`
+        # agree by construction rather than by two implementations staying in
+        # sync.
+
+        def _empty_download(reason: str):
+            """What a click gets when there is nothing to export.
+
+            A silently empty or missing file is worse than one line saying why
+            -- "no specimens selected" is not an error, it is the answer.
+            """
+            yield f"Nothing to export: {reason}.\n"
+
+        #: Filenames the way ``io.exports.export_all`` already names the same
+        #: files, so a download and a CLI/GUI export of the same kind agree.
+        _TSV_FILENAME_STEM = {
+            "all": "all_specimens", "selected": "selected_specimens",
+            "annotated": "annotated_specimens",
+            "curation_report": "bold_curation_report",
+        }
+
+        def _register_tsv_download(kind: str, output_id: str):
+            @output(id=output_id)
+            @render.download_button(
+                filename=lambda: (f"{_TSV_FILENAME_STEM[kind]}_"
+                                  f"{export_io.timestamp()}.tsv"))
+            def _handler(kind=kind):
+                search = state.search
+                if search is None:
+                    yield from _empty_download("run a search first")
+                    return
+                tmpdir = tempfile.TemporaryDirectory()
+                path = Path(tmpdir.name) / "export.tsv"
+                written = search.export_specimens(store, kind, path)
+                if written is None:
+                    tmpdir.cleanup()
+                    yield from _empty_download(_EMPTY_REASONS[kind])
+                    return
+                yield from _stream_file(written, tmpdir)
+
+        for _kind, _output_id in (
+            ("all", "dl_all"), ("selected", "dl_selected"),
+            ("annotated", "dl_annotated"),
+            ("curation_report", "dl_curation_report"),
+        ):
+            _register_tsv_download(_kind, _output_id)
+
+        def _register_fasta_download(output_id: str, *, selected_only: bool):
+            @output(id=output_id)
+            @render.download_button(
+                filename=lambda: (
+                    f"{'selected_' if selected_only else ''}"
+                    f"sequences_{export_io.timestamp()}.fasta"))
+            def _handler(selected_only=selected_only):
+                search = state.search
+                if search is None:
+                    yield from _empty_download("run a search first")
+                    return
+                if not store.has_sequences:
+                    yield from _empty_download(
+                        "this snapshot was built without sequences")
+                    return
+                tmpdir = tempfile.TemporaryDirectory()
+                path = Path(tmpdir.name) / "export.fasta"
+                result = search.export_fasta(store, path, selected_only=selected_only)
+                if result is None:
+                    tmpdir.cleanup()
+                    reason = ("no specimens selected" if selected_only
+                              else "no sequences for these records")
+                    yield from _empty_download(reason)
+                    return
+                written, _n = result
+                yield from _stream_file(written, tmpdir)
+
+        _register_fasta_download("dl_fasta", selected_only=False)
+        _register_fasta_download("dl_selected_fasta", selected_only=True)
+
+        @output(id="dl_search_results")
+        @render.download_button(
+            filename=lambda: f"bold_search_results_{export_io.timestamp()}.csv")
+        def _dl_search_results():
+            search = state.search
+            if search is None:
+                yield from _empty_download("run a search first")
+                return
+            tmpdir = tempfile.TemporaryDirectory()
+            path = Path(tmpdir.name) / "export.csv"
+            written = search.export_search_results(store, path)
+            if written is None:
+                tmpdir.cleanup()
+                yield from _empty_download("no records in this result")
+                return
+            yield from _stream_file(written, tmpdir)
+
+        @output(id="dl_bin_analysis")
+        @render.download_button(
+            filename=lambda: f"bin_analysis_{export_io.timestamp()}.xlsx",
+            media_type="application/vnd.openxmlformats-officedocument"
+                       ".spreadsheetml.sheet")
+        def _dl_bin_analysis():
+            search = state.search
+            if search is None:
+                yield from _empty_download("run a search first")
+                return
+            tmpdir = tempfile.TemporaryDirectory()
+            path = Path(tmpdir.name) / "export.xlsx"
+            written = search.export_bin_analysis(store, path)
+            if written is None:
+                tmpdir.cleanup()
+                yield from _empty_download("no BINs in this result")
+                return
+            yield from _stream_file(written, tmpdir)
 
         # AppState does not know about groups; give it the one helper it needs
         # rather than letting the UI reach into Annotations row by row.
@@ -689,7 +890,9 @@ def _table(frame: pd.DataFrame, labels: dict[str, str] | None = None,
     for _, row in shown.iterrows():
         cells = []
         for column in shown.columns:
-            rendered = cell(column, row[column]) if cell else None
+            # ``row`` too, not just the cell's own value -- a checkbox needs
+            # the record's processid, which lives in a different column.
+            rendered = cell(column, row[column], row) if cell else None
             cells.append(rendered if rendered is not None
                          else f"<td>{_escape(row[column])}</td>")
         body.append("<tr>" + "".join(cells) + "</tr>")
@@ -709,7 +912,7 @@ def _chip(value: str, colour: str) -> str:
 
 
 def _checklist_html(frame: pd.DataFrame) -> str:
-    def cell(column, value):
+    def cell(column, value, row):
         if column == "bags_grade" and not _is_missing(value) and value:
             return _chip(value, GRADE_COLOURS.get(str(value), "#adb5bd"))
         return None
@@ -717,13 +920,26 @@ def _checklist_html(frame: pd.DataFrame) -> str:
 
 
 def _bins_html(frame: pd.DataFrame) -> str:
-    def cell(column, value):
+    def cell(column, value, row):
         if column == "concordance" and not _is_missing(value) and value:
             return _chip(value, CONCORDANCE_COLOURS.get(str(value), "#adb5bd"))
         if column == "bin_coverage":
             return "<td></td>" if _is_missing(value) else f"<td>{float(value):.1%}</td>"
         return None
     return _table(frame, BIN_LABELS, cell)
+
+
+#: The class a row checkbox carries, so one delegated listener (attached once,
+#: to ``document`` -- see the script in ``create_app``) catches every row's
+#: click regardless of how many times the table around it has re-rendered.
+ROW_CHECKBOX_CLASS = "bc-row-select"
+
+
+def _checkbox_cell(pid: object, checked: bool) -> str:
+    pid = _escape(pid)
+    mark = "checked" if checked else ""
+    return (f"<td><input type='checkbox' class='{ROW_CHECKBOX_CLASS}' "
+            f"data-pid='{pid}' {mark}></td>")
 
 
 def _group_html(frame: pd.DataFrame, columns: list[str] | None = None,
@@ -733,12 +949,21 @@ def _group_html(frame: pd.DataFrame, columns: list[str] | None = None,
     ``columns`` defaults to the BAGS group layout. It is a parameter because
     the specimen table shows a different set, and applying the group layout to
     an already-narrowed frame silently dropped the columns the caller picked.
+
+    **The ``selected`` column is a real checkbox, one per record.** Before
+    this, the only way to select anything was "select this whole group /
+    page / result" -- there was no way to work a single record, or a handful,
+    out of a larger group. The bulk buttons stay; this adds the record-level
+    choice under them.
     """
     shown = present(frame, columns or GROUP_COLUMNS)
+    has_pid = "processid" in shown.columns
 
-    def cell(column, value):
+    def cell(column, value, row):
         if column == "selected":
             chosen = not _is_missing(value) and bool(value)
+            if has_pid:
+                return _checkbox_cell(row["processid"], chosen)
             return f"<td>{'✔' if chosen else ''}</td>"
         if column == "bags_grade" and not _is_missing(value) and value:
             return _chip(value, GRADE_COLOURS.get(str(value), "#adb5bd"))

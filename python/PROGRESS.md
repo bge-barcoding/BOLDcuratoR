@@ -1,20 +1,65 @@
 # Progress and session handover
 
-Branch: `claude/intelligent-dijkstra-g66cbr`. Plan:
+Branch: `claude/wonderful-newton-qw7llz`. Plan:
 [`../docs/python-app-plan.md`](../docs/python-app-plan.md).
 
-**State: Phases 0–2 complete and fast. Phase 3 has all six screens working —
-Data Input, Species, BINs, the five BAGS grades, and the paged specimen table.
-225 tests pass, the parity gate is green.**
+**State: Phases 0–2 complete and fast. Phase 3 has all six screens working,
+the eight downloads are wired, record selection is per-row (not just
+whole-group), auto-selection runs on a fresh search, and a real grade-E
+grouping bug is fixed. 233 tests pass, the parity gate is green.**
 
 ---
 
 # START HERE TOMORROW
 
-Phases 0-2 are closed and performance is closed. Phase 3 has six working
-screens; what remains is listed below in priority order. Everything after the
-second horizontal rule is reference — why things are the way they are — and
-does not need reading to get going.
+Phases 0-2 are closed and performance is closed. Phase 3's six screens now
+have their downloads wired too; what remains is listed below in priority
+order. Everything after the second horizontal rule is reference — why things
+are the way they are — and does not need reading to get going.
+
+## What this session did
+
+A curator using the real app (not the fixture) reported three things, all
+now fixed -- see the commit for the detail, this is the summary:
+
+1. **A real BAGS grade-E bug**: a species graded E because ONE of its BINs is
+   shared could turn its OTHER, unrelated BIN into a spurious "Shared BIN"
+   group. Real example: `BOLD:AAL6477` (one species, four records) showed up
+   as shared only because *Sialis concava* also sits in `BOLD:AAG9765`, which
+   really is shared. `core/grouping.py`'s `_shared_bin_groups` now filters to
+   BINs that are themselves in the shared set (`SearchResult.shared_bins`,
+   new on `core/pipeline.py`), not every BIN a grade-E species happens to
+   touch. It also now enriches a group from the snapshot
+   (`data/queries.fetch_by_bin`) when the sharing species wasn't captured by
+   the search's own taxa/geography, instead of only a note saying so.
+   `tests/test_grouping.py` has the regression tests, named after the real
+   BIN.
+2. **Selection was whole-group-or-nothing.** The specimen table and every
+   BAGS group now render a real checkbox per record
+   (`ui/app.py::ROW_CHECKBOX_CLASS`, one delegated `document`-level listener
+   so it survives every table re-render) alongside the existing bulk buttons
+   (select page / group / all), wired through a `row_select` Shiny input to
+   `Annotations.set_selected`/`unset_selected`.
+3. **Auto-selection (best record per BIN x country) was never wired to the
+   GUI.** `core/selection.auto_select_best_specimens` existed and was tested,
+   but `SearchState.analysis` passed `auto_select=False` and nothing ever
+   called it. It now runs the first time a result is analysed (species/BIN/
+   BAGS tab), straight into the session's `Annotations`, and only when
+   nothing is selected yet -- matching R's "auto-select on a fresh import"
+   and never overwriting a curator's own choice.
+
+Also: the six specimen-handling downloads (All / Selected / Annotated /
+Curation Report / FASTA / Selected FASTA), plus the search-results CSV and
+the BIN-analysis workbook, are wired to real `ui.download_button`s
+(`SearchState.export_*` in `ui/state.py`, `@render.download_button` handlers
+in `ui/app.py`). All eight were driven in a real browser and produce
+non-empty files; a click with nothing to export gets one line saying why
+instead of a blank or missing file.
+
+All of the above was checked in a real browser
+(`tools/drive_ui.py` plus ad-hoc Playwright scripts for the checkbox and the
+downloads), not just unit tests -- see "the rules this session cost the most
+to learn" below for why that matters here specifically.
 
 ## First, 60 seconds of setup
 
@@ -22,7 +67,7 @@ does not need reading to get going.
 cd C:\GitHub\BOLDcurator\python
 git pull
 pip install -e ".[dev,gui]"
-python -m pytest tests/ -q          # 225 passing
+python -m pytest tests/ -q          # 233 passing
 python parity/compare.py            # PASS
 
 python -m boldcurator.cli gui --snapshot "<the reordered snapshot>"
@@ -34,25 +79,7 @@ layout, and `verify` fails it outright.
 
 ## What to build next, in order
 
-### 1. The six download buttons (plan 3.7) -- the obvious next piece
-
-`io/exports.py` already writes all seven formats and is parity-tested; nothing
-new needs writing, they need placing on the screens and wiring to
-`ui/state.AppState`. Notes:
-
-* `export_all(result, directory, store=store)` takes a `SearchResult`, which is
-  what `SearchState.analysis(store)` returns -- so the summary screens can
-  export directly. The **Specimens** screen has only a plan, not a result, so
-  either compute the analysis for an export or export from the plan via
-  `analyse_plan`.
-* Annotations live in `AppState.annotations` and are merged by
-  `io/annotations.merge_annotations`; `SearchResult.specimens` does **not**
-  carry them, so an export must merge first or it will ship a frame with no
-  curator columns.
-* Shiny serves a file with `@render.download`. Write to a temp dir and yield
-  the path.
-
-### 2. Gap analysis (plan 3.4)
+### 1. Gap analysis (plan 3.4)
 
 `perform_gap_analysis` (`mod_species_analysis_utils.R:57+`) is **not ported**.
 It compares the taxa the user typed -- as synonym groups, first name is the
@@ -61,16 +88,16 @@ group. `core/pipeline.parse_taxa_input` already returns the groups, and
 `SearchResult.taxonomy_groups` carries them. It belongs in `core/summaries.py`
 beside `build_species_checklist`, then on the Species screen.
 
-### 3. Session save/resume (plan 3.8)
+### 2. Session save/resume (plan 3.8)
 
 `io/session.py` exists and is tested; it saves the query, processids and
 annotations rather than the whole frame. Wire Save/Load to `AppState`, and
 **warn on resume if the snapshot id changed** -- BIN membership and
 identifications may have moved under the saved work.
 
-### 4. CI (plan 2.6) -- still not done
+### 3. CI (plan 2.6) -- still not done
 
-225 tests and the parity harness run only when someone remembers. A GitHub
+233 tests and the parity harness run only when someone remembers. A GitHub
 Actions matrix (Linux/macOS/Windows) that installs, runs pytest and runs
 `parity/compare.py` needs no real snapshot: `conftest.py` builds the fixture,
 and `tests/make_fake_package.py` generates the source. Worth doing before the
@@ -95,8 +122,7 @@ GUI grows further.
 * `export_all` streams the sequences twice, once for all specimens and once for
   the selected subset. Two passes where one would do, at ~0.4 s a pass.
 
-## The three rules this session cost the most to learn
-
+## The rules this session cost the most to learn
 
 1. **Drive the UI in a browser before believing it.** Every UI bug so far has
    been invisible to the unit tests and obvious on the first click. Run
@@ -109,6 +135,22 @@ GUI grows further.
    annotation toolbar holds a flag `<select>` listing every flag name, so
    `"synonym" in panel.inner_text()` passes for an annotation that never
    rendered.
+4. **`ui.navset_pill_list` keeps every tab's DOM mounted, just hidden.** A
+   Playwright selector like `.bc-row-select` matches the specimen table's
+   checkboxes *and* whatever BAGS group table is behind another tab, and
+   Playwright correctly refuses to click the hidden ones. Scope selectors to
+   the active panel's own output id (`#specimens_body .bc-row-select`), not
+   the class alone. Also: a `<select>`'s value change is a websocket
+   round-trip -- clicking Apply immediately after `select_option` with no wait
+   between them races the server and can apply the *previous* value.
+5. **A raw HTML table (`ui.HTML(...)`) can still hold real inputs.** A
+   `<script>` tag inside that HTML will not run -- browsers do not execute
+   scripts inserted via `innerHTML` -- so a per-row control that needs to
+   survive the table being re-rendered on every click (paging, sorting,
+   "next problem") needs one listener attached once, at `document` level, via
+   event delegation, not a listener attached to the row elements themselves.
+   That is what the per-record selection checkboxes do
+   (`ui/app.py::ROW_CHECKBOX_CLASS`).
 
 And the one that predates the GUI: **measure before optimising**. Two sessions
 of guessing at performance cost more than the fixes did, and both real causes
@@ -482,8 +524,14 @@ surfacing in the UI rather than letting a curator assume otherwise.
 - [x] 3.2 shell — snapshot bar, name for annotation attribution
 - [x] 3.4 species checklist  [x] 3.5 BIN dashboard  [x] 3.6 BAGS A–E
 - [x] 3.3 Data Input — taxa, countries, continents, codes, size pre-check
+- [x] `core/table.py` / `ui/app.py` — per-record selection, not only whole-group
+- [x] auto-selection (best per BIN x country) wired into `SearchState.analysis`
+- [x] grade-E grouping bug fixed — a species' *other*, unshared BIN no longer
+      shows up as a "Shared BIN" group (see `BOLD:AAL6477` in `PROGRESS.md`
+      above and `tests/test_grouping.py`)
+- [x] 3.7 the six download buttons, plus the search-results CSV and the
+      BIN-analysis workbook (eight downloads total, all driven in a browser)
 - [ ] 3.4 gap analysis against the taxa typed in
-- [ ] 3.7 the six download buttons
 - [ ] 3.8 session save/resume
 
 ### Phases 4–5 — packaging and distribution

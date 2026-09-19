@@ -29,9 +29,11 @@ rule (``core.species``) in place of R's five.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable
 
 import pandas as pd
 
+from .bags import shared_bins as compute_shared_bins
 from .species import column_or_missing, is_species_level, to_text
 
 GRADES = ("A", "B", "C", "D", "E")
@@ -119,8 +121,14 @@ def specimens_for_grade(specimens: pd.DataFrame, grades: pd.DataFrame,
 
 
 def group_specimens(specimens: pd.DataFrame, grades: pd.DataFrame,
-                    grade: str) -> list[SpecimenGroup]:
-    """Split a grade into one group per problem, best specimens first."""
+                    grade: str, *, shared_bins: frozenset[str] | set[str] | None = None,
+                    fetch_bin: Callable[[str], pd.DataFrame] | None = None,
+                    ) -> list[SpecimenGroup]:
+    """Split a grade into one group per problem, best specimens first.
+
+    ``shared_bins`` and ``fetch_bin`` matter only for grade E -- see
+    :func:`_shared_bin_groups`.
+    """
     if grade not in GRADES:
         raise ValueError(f"Unknown BAGS grade {grade!r}; expected one of {GRADES}")
 
@@ -138,7 +146,8 @@ def group_specimens(specimens: pd.DataFrame, grades: pd.DataFrame,
         return _species_groups(frame, species, bins, named, grade)
     if grade == "C":
         return _species_bin_groups(frame, species, bins, named)
-    return _shared_bin_groups(frame, species, bins, named, grades)
+    return _shared_bin_groups(frame, species, bins, named, grades,
+                              shared_bins=shared_bins, fetch_bin=fetch_bin)
 
 
 def _sorted(frame: pd.DataFrame) -> pd.DataFrame:
@@ -186,23 +195,54 @@ def _species_bin_groups(frame, species, bins, named) -> list[SpecimenGroup]:
     return groups
 
 
-def _shared_bin_groups(frame, species, bins, named, grades) -> list[SpecimenGroup]:
-    """One group per BIN belonging to a grade-E species.
+def _shared_bin_groups(frame, species, bins, named, grades, *,
+                       shared_bins=None, fetch_bin=None) -> list[SpecimenGroup]:
+    """One group per BIN that is *itself* shared -- not per grade-E species.
+
+    A species is graded E if **any** of its BINs is shared, so the frame this
+    receives can contain a species' other, unshared BIN too (that is the
+    ``BOLD:AAL6477`` bug: a single-species BIN showing up as "Shared" only
+    because the same species also sits in a genuinely shared BIN elsewhere).
+    ``shared_bins`` -- the same set ``bags.calculate_bags_grades`` used for
+    ``has_shared_bins`` -- is what tells the two apart; a BIN not in it gets no
+    group at all, however many grade-E species happen to pass through it.
 
     R keeps a BIN only when more than one species-level name appears *in the
     downloaded records*.  Grade E here is evaluated against the whole snapshot
     (``core.bags``), so a BIN can be genuinely shared while the other species is
     absent from this search.  Dropping those would hide the very records the
-    grade exists to flag, so they are kept and the group says why it looks
-    innocent.
+    grade exists to flag, so ``fetch_bin`` -- when given -- pulls the rest of
+    the BIN's specimens straight from the snapshot instead of hiding them
+    behind a note.
     """
+    if shared_bins is None:
+        shared_bins = compute_shared_bins(frame)
+    shared_bins = set(shared_bins)
+
     groups: list[SpecimenGroup] = []
-    for bin_uri in sorted(set(bins[bins != ""])):
+    for bin_uri in sorted(set(bins[bins != ""]) & shared_bins):
         in_bin = bins == bin_uri
-        names = tuple(sorted(set(species[in_bin & named]) - {""}))
-        members = _sorted(frame[in_bin])
+        members = frame[in_bin]
         note = ""
-        if len(names) < 2:
+
+        local_names = set(species[in_bin & named]) - {""}
+        if len(local_names) < 2 and fetch_bin is not None:
+            extra = fetch_bin(bin_uri)
+            if extra is not None and len(extra) and "processid" in members.columns:
+                known = set(_text(members, "processid"))
+                extra = extra[~_text(extra, "processid").isin(known)]
+            if extra is not None and len(extra):
+                members = pd.concat([members, extra], ignore_index=True)
+                note = ("includes records outside this search's taxa or "
+                        "geography, because this BIN is shared with another "
+                        "species in the snapshot")
+
+        member_species = _text(members, "species")
+        member_level = pd.Series(is_species_level(members).to_numpy(),
+                                 index=members.index)
+        names = tuple(sorted(set(member_species[member_level & (member_species != "")])
+                             - {""}))
+        if len(names) < 2 and not note:
             note = ("shared with a species outside this search — BAGS grades "
                     "sharing against the whole snapshot, not just these records")
         label = (f"Shared BIN: {bin_uri} ({len(names)} species"
@@ -210,7 +250,7 @@ def _shared_bin_groups(frame, species, bins, named, grades) -> list[SpecimenGrou
         groups.append(SpecimenGroup(
             key=f"E|{bin_uri}",
             caption=label,
-            specimens=members,
+            specimens=_sorted(members),
             species=names,
             bins=(bin_uri,),
             note=note,
