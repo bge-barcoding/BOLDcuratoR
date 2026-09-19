@@ -28,7 +28,12 @@ import pandas as pd
 from shiny import App, reactive, render, ui
 
 from ..config.constants import CONTINENT_COUNTRIES, DOWNLOAD_LIMITS, FLAG_OPTIONS
-from ..core.grouping import GRADE_DESCRIPTIONS, GRADES, PRIORITY_GRADES
+from ..core.grouping import (
+    GRADE_DESCRIPTIONS,
+    GRADES,
+    PRIORITY_GRADES,
+    SPECIES_GRADES,
+)
 from ..core.table import DEFAULT_PAGE_SIZE
 from ..data.snapshot import SnapshotStore
 from ..io import exports as export_io
@@ -179,6 +184,13 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
                         {{priority: 'event'}});
                 }}
             }});
+            document.addEventListener('click', function(e) {{
+                var th = e.target.closest && e.target.closest('.{SORT_HEADER_CLASS}');
+                if (th) {{
+                    Shiny.setInputValue(th.dataset.sortInput, th.dataset.sortCol,
+                        {{priority: 'event'}});
+                }}
+            }});
         """),
         ui.div(
             ui.tags.h4("BOLDcurator", style="margin:0;"),
@@ -256,9 +268,47 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
         group_index: dict[str, reactive.Value] = {
             g: reactive.Value(0) for g in GRADES
         }
+        #: Click-a-header sort state for the three in-memory tables (species
+        #: checklist, BIN dashboard, one BAGS group at a time) -- (column,
+        #: descending). The specimen table sorts differently (server-side, via
+        #: SpecimenTable.sort_by) because it is never materialised whole; see
+        #: _spec_sort_click below.
+        checklist_sort = reactive.Value(("", False))
+        bins_sort = reactive.Value(("", False))
+        group_sort = reactive.Value(("", False))
 
         def touch() -> None:
             revision.set(revision.get() + 1)
+
+        def _register_memory_sort(input_id: str, sort_state: reactive.Value):
+            """Click a header: same column flips direction, a new one sorts
+
+            ascending. Shared by every table whose frame already lives in
+            memory (the specimens table is the one exception -- it sorts by
+            fetching one column server-side instead, see _spec_sort_click).
+            """
+            @reactive.effect
+            @reactive.event(input[input_id])
+            def _sort(input_id=input_id, sort_state=sort_state):
+                column = input[input_id]()
+                if not column:
+                    return
+                current_column, current_desc = sort_state.get()
+                sort_state.set((column, False if column != current_column
+                               else not current_desc))
+                touch()
+
+        for _input_id, _state in (("checklist_sort_click", checklist_sort),
+                                  ("bins_sort_click", bins_sort),
+                                  ("group_sort_click", group_sort)):
+            _register_memory_sort(_input_id, _state)
+
+        def _sorted_by(frame: pd.DataFrame, sort_state: reactive.Value) -> pd.DataFrame:
+            column, descending = sort_state.get()
+            if not column or frame is None or len(frame) == 0 or column not in frame.columns:
+                return frame
+            return frame.sort_values(column, ascending=not descending,
+                                     kind="stable", na_position="last")
 
         def current():
             revision.get()
@@ -394,7 +444,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
         @render.ui
         def species_body():
             def body(search):
-                checklist = search.checklist(store)
+                checklist = _sorted_by(search.checklist(store), checklist_sort)
                 counts = search.grade_counts(store)
                 return ui.div(
                     ui.div(
@@ -402,7 +452,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
                                     GRADE_COLOURS[g]) for g in GRADES],
                         style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap;",
                     ),
-                    ui.HTML(_checklist_html(checklist)),
+                    ui.HTML(_checklist_html(checklist, sort_state=checklist_sort.get())),
                 )
             return _needs_analysis(body)
 
@@ -413,7 +463,8 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
         def bins_body():
             def body(search):
                 analysis = search.analysis(store).bin_analysis
-                summary, content = analysis["summary"], analysis["content"]
+                summary = analysis["summary"]
+                content = _sorted_by(analysis["content"], bins_sort)
                 return ui.div(
                     ui.div(
                         value_box(f"{summary['total_bins']:,}", "Total BINs",
@@ -429,7 +480,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
                     ui.download_button("dl_bin_analysis",
                                        "Download BIN analysis (xlsx)",
                                        class_="btn-sm mb-2"),
-                    ui.HTML(_bins_html(content)),
+                    ui.HTML(_bins_html(content, sort_state=bins_sort.get())),
                 )
             return _needs_analysis(body)
 
@@ -443,13 +494,20 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
                                   class_="text-muted")
                 index = min(group_index[grade].get(), len(groups) - 1)
                 group = groups[index]
-                rows = _with_checked(
-                    merge_annotations(group.specimens, state.annotations),
-                    state.annotations)
+                rows = _sorted_by(
+                    _with_checked(
+                        merge_annotations(group.specimens, state.annotations),
+                        state.annotations),
+                    group_sort)
+                # A/B/D group one species at a time; C/E group one BIN at a
+                # time (species split across BINs, or a BIN shared between
+                # species) -- "problem" told a curator neither.
+                unit = "species" if grade in SPECIES_GRADES else "BIN"
+                plural_unit = "species" if unit == "species" else "BINs"
                 return ui.row(
                     ui.column(4, ui.div(
                         ui.div(f"{len(groups):,} "
-                               f"{'problem' if len(groups) == 1 else 'problems'} "
+                               f"{unit if len(groups) == 1 else plural_unit} "
                                "to work through", class_="small text-muted mb-1"),
                         ui.input_select(
                             f"group_{grade}", None,
@@ -494,7 +552,8 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
                                   "background:#f8f9fa;border:1px solid #dee2e6;"
                                   "border-radius:5px;",
                         ),
-                        ui.HTML(_group_html(rows)),
+                        ui.HTML(_group_html(rows, sort_input="group_sort_click",
+                                            sort_state=group_sort.get())),
                     )),
                 )
             return _needs_analysis(body)
@@ -618,13 +677,17 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
                     for s in rows["species"].astype(object)
                 ]
 
+            sort_label = (
+                f"Sorted by {table.sort_column} "
+                f"({'desc' if table.sort_descending else 'asc'})"
+                if table.sort_column else "Result order (click a column header to sort)"
+            )
             return ui.div(
                 ui.div(
-                    ui.input_select("sort", None,
-                                    choices=["(result order)"]
-                                    + table.sortable_columns,
-                                    selected="(result order)", width="200px"),
-                    ui.input_checkbox("descending", "Desc"),
+                    ui.tags.span(sort_label, class_="small text-muted"),
+                    ui.input_action_button("reset_sort", "Reset order",
+                                           class_="btn-sm") if table.sort_column
+                    else ui.span(),
                     ui.input_select("page_size", None,
                                     choices=[str(n) for n in PAGE_SIZES],
                                     selected=str(table.page_size), width="90px"),
@@ -659,20 +722,38 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
                                        class_="btn-sm"),
                     style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;",
                 ),
-                ui.HTML(_group_html(rows, columns=PREVIEW_COLUMNS,
-                                    limit=len(rows))),
+                ui.HTML(_group_html(
+                    rows, columns=PREVIEW_COLUMNS, limit=len(rows),
+                    sort_input="spec_sort_click",
+                    sortable=frozenset(table.sortable_columns),
+                    sort_state=(table.sort_column, table.sort_descending))),
             )
 
         @reactive.effect
-        def _sort():
+        @reactive.event(input.spec_sort_click)
+        def _spec_sort_click():
+            """Click a header: same column flips direction, a new one sorts
+
+            ascending -- same rule as the in-memory tables
+            (_register_memory_sort), but acting through SpecimenTable.sort_by
+            because this table is never materialised whole; see its docstring
+            for why that costs one narrow-column fetch instead of nothing.
+            """
             search = state.search
-            column, descending = input.sort(), bool(input.descending())
-            if search is None or column is None:
+            column = input.spec_sort_click()
+            if search is None or not column:
                 return
-            with reactive.isolate():
-                search.table.sort_by(
-                    None if column == "(result order)" else column,
-                    descending=descending)
+            table = search.table
+            descending = False if column != table.sort_column else not table.sort_descending
+            table.sort_by(column, descending=descending)
+            offset.set(0)
+            touch()
+
+        @reactive.effect
+        @reactive.event(input.reset_sort)
+        def _reset_sort():
+            if state.search is not None:
+                state.search.table.sort_by(None)
                 offset.set(0)
                 touch()
 
@@ -937,13 +1018,45 @@ def _escape(value: object) -> str:
     return (text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
 
 
+#: The class a clickable column header carries, so the one delegated
+#: ``document``-level listener (see the script in ``create_app``) catches a
+#: click on it regardless of how many times the table has re-rendered --
+#: exactly the reason the row checkboxes are delegated the same way.
+SORT_HEADER_CLASS = "bc-sort-th"
+
+
+def _header_cell(column: str, labels: dict[str, str], *, sort_input: str | None,
+                 sortable: frozenset[str], sort_state: tuple[str | None, bool]) -> str:
+    label = _escape(labels.get(column, column))
+    if not sort_input or column not in sortable:
+        return f"<th>{label}</th>"
+    arrow = ""
+    if sort_state[0] == column:
+        arrow = " ▼" if sort_state[1] else " ▲"
+    return (f"<th class='{SORT_HEADER_CLASS}' data-sort-input='{sort_input}' "
+            f"data-sort-col='{_escape(column)}' "
+            "style='cursor:pointer;user-select:none;' title='Click to sort'>"
+            f"{label}{arrow}</th>")
+
+
 def _table(frame: pd.DataFrame, labels: dict[str, str] | None = None,
-           cell=None, limit: int = 500) -> str:
+           cell=None, limit: int = 500, *, sort_input: str | None = None,
+           sortable: frozenset[str] = frozenset(),
+           sort_state: tuple[str | None, bool] = (None, False)) -> str:
+    """Render one table.
+
+    ``sort_input`` names the Shiny input a header click posts its column name
+    to (``None`` renders plain, unclickable headers); ``sortable`` is which
+    columns accept a click; ``sort_state`` is ``(column, descending)``, so the
+    current sort carries its own arrow.
+    """
     if frame is None or len(frame) == 0:
         return "<p class='text-muted'>Nothing to show.</p>"
     labels = labels or {}
     shown = frame.head(limit)
-    head = "".join(f"<th>{_escape(labels.get(c, c))}</th>" for c in shown.columns)
+    head = "".join(_header_cell(c, labels, sort_input=sort_input, sortable=sortable,
+                                sort_state=sort_state)
+                   for c in shown.columns)
     body = []
     for _, row in shown.iterrows():
         cells = []
@@ -969,22 +1082,28 @@ def _chip(value: str, colour: str) -> str:
             f"border-radius:10px;font-weight:600;'>{_escape(value)}</span></td>")
 
 
-def _checklist_html(frame: pd.DataFrame) -> str:
+def _checklist_html(frame: pd.DataFrame, *,
+                    sort_state: tuple[str | None, bool] = (None, False)) -> str:
     def cell(column, value, row):
         if column == "bags_grade" and not _is_missing(value) and value:
             return _chip(value, GRADE_COLOURS.get(str(value), "#adb5bd"))
         return None
-    return _table(frame, CHECKLIST_LABELS, cell)
+    return _table(frame, CHECKLIST_LABELS, cell, sort_input="checklist_sort_click",
+                 sortable=frozenset(frame.columns) if len(frame) else frozenset(),
+                 sort_state=sort_state)
 
 
-def _bins_html(frame: pd.DataFrame) -> str:
+def _bins_html(frame: pd.DataFrame, *,
+              sort_state: tuple[str | None, bool] = (None, False)) -> str:
     def cell(column, value, row):
         if column == "concordance" and not _is_missing(value) and value:
             return _chip(value, CONCORDANCE_COLOURS.get(str(value), "#adb5bd"))
         if column == "bin_coverage":
             return "<td></td>" if _is_missing(value) else f"<td>{float(value):.1%}</td>"
         return None
-    return _table(frame, BIN_LABELS, cell)
+    return _table(frame, BIN_LABELS, cell, sort_input="bins_sort_click",
+                 sortable=frozenset(frame.columns) if len(frame) else frozenset(),
+                 sort_state=sort_state)
 
 
 #: The classes the two per-row checkboxes carry, so one delegated listener
@@ -1014,8 +1133,15 @@ def _checkbox_cell(pid: object, checked: bool, css_class: str, *,
             f"data-pid='{pid}' {mark}></td>")
 
 
+#: Never worth a click-to-sort header: booleans that already show as a
+#: checkbox in every row, so sorting by them just clusters ticked rows.
+_UNSORTABLE_GROUP_COLUMNS = frozenset({"selected", "checked"})
+
+
 def _group_html(frame: pd.DataFrame, columns: list[str] | None = None,
-                limit: int = 500) -> str:
+                limit: int = 500, *, sort_input: str | None = None,
+                sortable: frozenset[str] | None = None,
+                sort_state: tuple[str | None, bool] = (None, False)) -> str:
     """One group's specimens, with the grade and flag colours carried through.
 
     ``columns`` defaults to the BAGS group layout. It is a parameter because
@@ -1030,9 +1156,18 @@ def _group_html(frame: pd.DataFrame, columns: list[str] | None = None,
     ``merge_annotations``) and ``checked`` (working, added by the caller from
     ``Annotations.working`` -- it has no curatorial meaning to persist, so it
     is not one of ``merge_annotations``'s six columns).
+
+    ``sortable`` defaults to every shown column but the two checkboxes -- fine
+    for a group table, which is already fully in memory. The specimen table
+    passes its own narrower set (``SpecimenTable.sortable_columns``): sorting
+    it means fetching one column for the *whole* result, so a computed column
+    (``quality_score``, ``rank``, ``bags_grade``...) is refused there, not
+    silently sorted by something else.
     """
     shown = present(frame, columns or GROUP_COLUMNS)
     has_pid = "processid" in shown.columns
+    if sortable is None:
+        sortable = frozenset(shown.columns) - _UNSORTABLE_GROUP_COLUMNS
 
     def cell(column, value, row):
         if column == "selected":
@@ -1052,7 +1187,8 @@ def _group_html(frame: pd.DataFrame, columns: list[str] | None = None,
         if column == "flag" and not _is_missing(value) and value:
             return _chip(value, "#6f42c1")
         return None
-    return _table(shown, GROUP_LABELS, cell=cell, limit=limit)
+    return _table(shown, GROUP_LABELS, cell=cell, limit=limit, sort_input=sort_input,
+                 sortable=sortable, sort_state=sort_state)
 
 
 def run(snapshot: str | Path, *, host: str = "127.0.0.1", port: int = 8000,

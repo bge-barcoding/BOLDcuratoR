@@ -173,12 +173,36 @@ def main(argv: list[str] | None = None) -> int:
         time.sleep(SETTLE)
         check("paging moves to different rows",
               table_text("#specimens_body")[:200] != before)
-        page.select_option("#sort", "processid")
+        # Click-a-column-header sorting, not a dropdown: click the "Process
+        # ID" header twice (ascending, then descending) and check the order
+        # actually changes each time.
+        header_cell = page.locator(
+            "#specimens_body th.bc-sort-th", has_text="Process ID")
+        header_cell.click()
         time.sleep(SETTLE * 1.5)
-        page.check("#descending")
+        ascending = table_text("#specimens_body")[:200]
+        check("clicking a column header sorts the specimen table",
+              bool(ascending) and ascending != before)
+        header_cell.click()
         time.sleep(SETTLE * 1.5)
-        check("sorting the specimen table works", bool(table_text("#specimens_body")))
+        descending = table_text("#specimens_body")[:200]
+        check("clicking the same header again reverses the order",
+              descending != ascending)
         page.screenshot(path=str(args.out / "05-specimens.png"), full_page=True)
+
+        # -- click-a-column-header sorting on a BAGS group table too
+        show("BAGS A")
+        group_before = table_text("#grade_A_body")[:200]
+        group_header = page.locator(
+            "#grade_A_body th.bc-sort-th", has_text="Process ID")
+        if group_header.count():
+            group_header.first.click()
+            time.sleep(SETTLE * 1.5)
+            check("clicking a column header sorts a BAGS group table",
+                  table_text("#grade_A_body")[:200] != group_before)
+        else:
+            check("clicking a column header sorts a BAGS group table", False,
+                  "no sortable header found")
 
         # -- clearing the checked/working selection must not touch the
         # representative pick (auto-selected best per BIN x country) -- see

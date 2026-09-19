@@ -32,10 +32,24 @@ commit per item where the change is self-contained.
    `test_ui.py`'s per-row-checkbox test; confirmed live with
    `tools/drive_ui.py`'s new "clearing the checked selection leaves the
    representative pick alone" check (44 -> 44).
-2. [ ] **Sort is a dropdown, not click-the-column-header.** Only exists on the
-   Specimens tab; BAGS group tables aren't sortable at all.
-3. [ ] **BAGS "problems to work through" should say species/BINs.** A/B/D
-   group by species, C/E by BIN -- the generic "problem" hides which.
+2. [x] **Sort is a dropdown, not click-the-column-header.** Fixed on every
+   table, not just Specimens. Every header carries the class
+   `ui/app.py::SORT_HEADER_CLASS`; one delegated click listener (same pattern
+   as the row checkboxes) posts the clicked column to a Shiny input, and an
+   arrow shows the current column/direction. The species checklist, BIN
+   dashboard and one-group-at-a-time BAGS tables sort a frame already in
+   memory (`_sorted_by` + a per-table `reactive.Value`); the specimen table
+   still sorts server-side through `SpecimenTable.sort_by` (it is never
+   materialised whole), so a computed column is still correctly refused, not
+   silently ignored. The old dropdown + "Desc" checkbox are gone, replaced by
+   a "Reset order" button (server-side sort only, so there was no obvious way
+   back to result order otherwise). Verified live: `tools/drive_ui.py` clicks
+   a header on both the specimen table and a BAGS group table and checks the
+   order actually changes, twice (ascending, then descending).
+3. [x] **BAGS "problems to work through" should say species/BINs.** Fixed --
+   `_grade_body` now says "N species to work through" for A/B/D and "N BINs to
+   work through" for C/E (`core.grouping.SPECIES_GRADES` already knew which is
+   which). Confirmed live for grades A, C and E.
 4. [ ] **No linkouts to BOLD.** processid, BIN and species should each open
    the matching BOLD portal page in a new tab.
 5. [ ] **No sticky columns on wide tables.** selected/flag/curator_notes/

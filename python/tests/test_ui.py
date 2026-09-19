@@ -157,6 +157,48 @@ def test_an_empty_frame_renders_a_message_not_a_broken_table():
     assert "Nothing to show" in _group_html(pd.DataFrame())
 
 
+def test_column_headers_are_clickable_and_carry_the_sort_arrow():
+    """Click-a-header sorting: the point of this issue.
+
+    A sortable column's header carries the class the delegated JS listener
+    watches for, the Shiny input name it should post to, and an arrow on
+    whichever column is currently the sort key -- so a curator can tell what
+    they are looking at without a separate dropdown.
+    """
+    import pandas as pd
+
+    from boldcurator.ui.app import SORT_HEADER_CLASS, _table
+
+    frame = pd.DataFrame({"species": ["B", "A"], "count": [2, 1]})
+    html = _table(frame, sort_input="my_sort", sortable=frozenset(frame.columns),
+                 sort_state=("species", False))
+    header = html.split("<tbody>")[0]
+
+    assert header.count(f"class='{SORT_HEADER_CLASS}'") == 2
+    assert "data-sort-input='my_sort'" in header
+    assert "data-sort-col='species'" in header and "data-sort-col='count'" in header
+    # only the current sort column carries an arrow, and ascending is "up"
+    species_th = header.split("data-sort-col='species'")[1].split("</th>")[0]
+    count_th = header.split("data-sort-col='count'")[1].split("</th>")[0]
+    assert "▲" in species_th
+    assert "▲" not in count_th and "▼" not in count_th
+
+
+def test_a_column_left_out_of_sortable_renders_a_plain_header():
+    """"selected"/"checked" are never worth a click-to-sort header -- they
+    already show as a checkbox in every row.
+    """
+    import pandas as pd
+
+    from boldcurator.ui.app import SORT_HEADER_CLASS, _table
+
+    frame = pd.DataFrame({"selected": [True], "species": ["A"]})
+    html = _table(frame, sort_input="my_sort", sortable=frozenset({"species"}))
+    header = html.split("<tbody>")[0]
+    assert "<th>selected</th>" in header, "excluded column must render plain"
+    assert header.count(f"class='{SORT_HEADER_CLASS}'") == 1
+
+
 def test_the_fixture_exercises_every_grade_the_screens_show(store):
     """A fixture with no grade-C data leaves the busiest screen untested."""
     from boldcurator.core.grouping import GRADES, group_specimens
