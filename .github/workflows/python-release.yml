@@ -21,11 +21,16 @@ jobs:
             name: linux-x86_64
           - os: windows-latest
             name: windows-x86_64
-          - os: macos-13       # Intel
+          - os: macos-15-intel # Intel; macos-13 was retired 2025-12-04
             name: macos-x86_64
           - os: macos-latest   # Apple Silicon
             name: macos-arm64
     runs-on: ${{ matrix.os }}
+    # A runner label that stops resolving to any actual runner (macos-13's
+    # retirement on 2025-12-04 did exactly this) queues forever rather than
+    # failing -- this caps that at a clear failure instead of a silent hang
+    # blocking the whole workflow.
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: python
