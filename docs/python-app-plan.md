@@ -499,8 +499,15 @@ something a curator double-clicks, which is three separable decisions:
   and isn't verified: `pywebview` itself (plan 4.1a's whole point) could
   not even be *installed* in the sandbox this was built in — an unrelated
   `setuptools`/`distutils` incompatibility building one of its own
-  dependencies on that specific environment — so `boldcurator desktop`, the
-  actual packaged entry point, has only been read, not run. The release
+  dependencies on that specific environment. **A curator then ran a real
+  build on real Windows and hit exactly that gap**: `RuntimeError: Failed
+  to resolve Python.Runtime.Loader.Initialize`, a known, still-open issue
+  in the pywebview/pythonnet/PyInstaller ecosystem, not a bug in this
+  codebase. Fixed by treating the native window as a best effort, not a
+  requirement — `desktop.py`'s `launch()`/`_run_setup()` now catch a
+  pywebview failure anywhere and fall back to opening the app in the
+  system's default browser, so the app still comes up either way. Not yet
+  re-verified on the machine that hit the original crash. The release
   workflow's own smoke-test steps (build a fixture, query it, start the GUI
   server and curl it) exist to catch exactly the `shinychat`-shaped class of
   bug automatically, on real runners this sandbox doesn't have. Installer

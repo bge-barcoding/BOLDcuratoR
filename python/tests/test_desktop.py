@@ -157,3 +157,89 @@ def test_launch_runs_setup_when_nothing_is_configured(
     assert desktop.load_snapshot_path(config) == store.path
     windows = [c for c in fake_webview.calls if c[0] == "create_window"]
     assert windows == [("create_window", "BOLDcurator", "http://x/")]
+
+
+def test_launch_falls_back_to_the_browser_when_the_window_fails_to_start(
+    fake_webview, tmp_path, store, monkeypatch
+):
+    """The real-world case this guards against: a curator on Windows whose
+
+    pythonnet/CLR bridge fails deep inside webview.start() -- native window
+    or not, the app must still come up.
+    """
+    config = tmp_path / "config.json"
+    monkeypatch.setattr(desktop, "run_server",
+                        lambda app, **kw: ("http://x/", lambda: None))
+    fake_webview.start = lambda: (_ for _ in ()).throw(
+        RuntimeError("Failed to resolve Python.Runtime.Loader.Initialize"))
+    opened = {}
+    monkeypatch.setattr("webbrowser.open", lambda url: opened.setdefault("url", url))
+    monkeypatch.setattr(desktop.time, "sleep",
+                        lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
+
+    desktop.launch(store.path, config_path=config)
+
+    assert opened["url"] == "http://x/"
+
+
+def test_run_setup_falls_back_to_the_browser_when_the_window_fails_to_start(
+    tmp_path, store, monkeypatch, fake_webview
+):
+    """Same failure, mid-setup: the watcher thread is already blocked on the
+
+    queue when webview.start() raises, so the fallback must join it rather
+    than read the queue a second time (that would race the watcher).
+    """
+    monkeypatch.setattr(desktop, "run_server",
+                        lambda app, **kw: ("http://x/", lambda: None))
+    fake_webview.start = lambda: (_ for _ in ()).throw(
+        RuntimeError("Failed to resolve Python.Runtime.Loader.Initialize"))
+
+    def fake_create_setup_app(resolved):
+        # Stands in for a curator completing setup in the fallback browser
+        # tab -- the setup app itself would call this once they submit a
+        # path or a download finishes.
+        resolved.put(store.path)
+        return object()
+
+    monkeypatch.setattr("boldcurator.ui.setup.create_setup_app",
+                        fake_create_setup_app)
+    opened = {}
+    monkeypatch.setattr("webbrowser.open", lambda url: opened.setdefault("url", url))
+
+    config = tmp_path / "config.json"
+    path = desktop._run_setup(config)
+
+    assert path == store.path
+    assert opened["url"] == "http://x/"
+    assert desktop.load_snapshot_path(config) == store.path
+
+
+def test_run_setup_falls_back_when_the_window_cannot_even_be_created(
+    tmp_path, store, monkeypatch
+):
+    """No window, no watcher thread -- _run_setup must read the queue
+
+    itself rather than waiting on a watcher that was never started.
+    """
+    monkeypatch.setattr(desktop, "run_server",
+                        lambda app, **kw: ("http://x/", lambda: None))
+
+    def fake_create_setup_app(resolved):
+        resolved.put(store.path)
+        return object()
+
+    monkeypatch.setattr("boldcurator.ui.setup.create_setup_app",
+                        fake_create_setup_app)
+    monkeypatch.setattr("webbrowser.open", lambda url: None)
+    # No fake_webview fixture here -- "webview" stays whatever real module
+    # (if any) is on sys.path; make create_window itself the failure.
+    broken = types.ModuleType("webview")
+    broken.create_window = lambda *a, **k: (_ for _ in ()).throw(
+        ImportError("No module named 'clr'"))
+    monkeypatch.setitem(sys.modules, "webview", broken)
+
+    config = tmp_path / "config.json"
+    path = desktop._run_setup(config)
+
+    assert path == store.path

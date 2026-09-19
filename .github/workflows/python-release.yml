@@ -47,6 +47,7 @@ jobs:
           pyinstaller --onedir --name boldcurator --paths src
           --collect-all duckdb --collect-all shiny --collect-all htmltools
           --collect-all shinychat --collect-all pywebview
+          --collect-all pythonnet --collect-all clr_loader
           packaging/entrypoint.py
 
       - name: Build a tiny fixture snapshot to smoke-test against

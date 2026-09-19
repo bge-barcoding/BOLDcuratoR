@@ -12,56 +12,57 @@ pinned while scrolling, "Apply to checked" scoped to the current BAGS group,
 gap analysis on the Species screen, the CC-BY-SA 4.0 attribution requirement
 in the app and every export, and **session save/resume wired end to end**.
 Two full rounds of curator-reported bugs (9 issues) are fixed and verified
-live; **round 3 (6 issues) is now also closed** -- see below. 286 tests
+live; **round 3 (6 issues) is now also closed** -- see below. 289 tests
 pass, the parity gate is green. `fetch_snapshot` (plan 5.1) and the desktop
 launcher + first-run setup screen (4.1a/4.2) are done. **CI (plan 2.6) is
 written, has run for real, and is fully green** on Linux, macOS, Windows and
 the parity job -- Windows caught a genuine cross-platform bug on the first
 run (a test helper decoding source files with the platform locale codepage
 instead of UTF-8), fixed and confirmed on the re-run. **The release build
-(plan 4.3) is written but not yet
-triggered** -- this session lacks the GitHub permissions to dispatch it;
-the project owner needs to run it from the Actions tab or by pushing a `v*`
-tag. A real frozen PyInstaller build was proven to work outside CI (CLI and
-GUI server both verified against a real snapshot), catching a real bug
-(`shinychat` needs its own `--collect-all`) -- but `pywebview` itself
-couldn't be installed in this sandbox, so `boldcurator desktop` specifically
-is unverified until that workflow actually runs. Signing (4.4) is a
-deliberate no for now (project owner's call).
+(plan 4.3) exists and a curator has actually run it on real Windows** --
+and it hit exactly the risk this file already flagged as unverified:
+`Python.Runtime.Loader.Initialize` failed inside pywebview's pythonnet/.NET
+bridge, a known, still-open issue in that ecosystem, not a bug in this
+codebase. Fixed by making the native window a **best effort, not a
+requirement**: `desktop.py` now catches a pywebview failure anywhere and
+falls back to opening the app in the system's default browser instead of
+crashing. Signing (4.4) is a deliberate no for now (project owner's call).
 
 ## NEXT SESSION — START HERE, in priority order
 
 No open curator-reported bugs right now -- three rounds are closed (see the
 "Open issues" sections below for what was wrong and how each was fixed, if
 a similar bug resurfaces). CI (plan 2.6) is done and confirmed green on all
-three platforms -- see "CI (plan 2.6)" below. What's left is the release
-build:
+three platforms. What's left is confirming the browser-fallback fix on the
+Windows machine that hit the original crash, then the rest of the release
+build's real-world verification:
 
-1. **4.3 the release build — written, real verification still pending.**
-   `.github/workflows/python-release.yml` (PyInstaller builds on Linux,
-   Windows, macOS x86_64 and arm64, triggered by a `v*` tag or manually via
-   `workflow_dispatch`) could **not** be triggered from this session --
-   `workflow_dispatch` needs `actions: write` on the GitHub App token this
-   session has, and dispatching it returned a 403. **The project owner
-   needs to run it themselves**, either from the Actions tab in the GitHub
-   UI ("Run workflow" on "Build desktop executables") or by pushing a `v*`
-   tag when ready to cut a real release. See `python/packaging/README.md`
-   for the exact build recipe and what has/hasn't been verified: the CLI
-   and the GUI server were both proven to work from a real frozen
-   PyInstaller build in this session (caught and fixed a real bug --
-   `shinychat` needs its own `--collect-all`), but `pywebview` itself could
-   not even be installed in this sandbox (an unrelated `distutils`/
-   `setuptools` incompatibility building one of its own dependencies), so
-   `boldcurator desktop` -- the actual packaged entry point -- has only
-   been reviewed by reading the code, not run. The release workflow's own
-   smoke-test steps exist to catch exactly this kind of gap automatically,
-   but only once someone actually fires it.
-2. **4.4 Signing** — still a deliberate no (project owner's call, curator
+1. **Re-test on the Windows machine that hit the
+   `Python.Runtime.Loader.Initialize` crash.** A new build (with
+   `desktop.py`'s browser-fallback fix, plus `--collect-all pythonnet
+   --collect-all clr_loader` added as a first line of defense) needs to be
+   produced (trigger `python-release.yml`, or build locally per
+   `python/packaging/README.md`) and actually run on that machine. Two
+   acceptable outcomes: pywebview now works and a native window opens
+   (the `--collect-all` additions fixed it), or it still fails and the app
+   falls back to opening a browser tab instead of crashing (the resilience
+   fix worked even if the underlying pythonnet issue didn't get fixed).
+   Only a silent crash or the app not coming up at all would mean the fix
+   needs more work.
+2. **4.3 the rest of the release build — real verification still
+   pending.** `workflow_dispatch` on `.github/workflows/python-release.yml`
+   could not be triggered from this session (`actions: write` isn't
+   granted to the GitHub App token here, and dispatching it returned a
+   403) -- **the project owner needs to run it themselves**, from the
+   Actions tab ("Run workflow" on "Build desktop executables") or by
+   pushing a `v*` tag. See `python/packaging/README.md` for the exact
+   build recipe and the full account of what has/hasn't been verified.
+3. **4.4 Signing** — still a deliberate no (project owner's call, curator
    testing doesn't need it) and **4.5 installer smoke test on a clean VM**
    still not done — the release workflow's own smoke test is a CI proxy for
    this, not a replacement for someone actually double-clicking a
    downloaded build.
-3. **Also open, not urgent:**
+4. **Also open, not urgent:**
    - The R app (not this rewrite) rejects 4% of real BOLD dataset codes --
      `mod_data_import_utils.R:50`'s `^DS-[A-Z0-9]+$` pattern; 544 of 13,706
      real `DS-` codes don't match. Live bug in the *shipped* app. The SQL to
@@ -71,7 +72,7 @@ build:
      subset) -- ~0.4 s a pass, not worth fixing without a curator waiting on
      it.
 
-Before starting any of the above: `python -m pytest tests/ -q` (286 passing)
+Before starting any of the above: `python -m pytest tests/ -q` (289 passing)
 and `python parity/compare.py` (PASS) from a clean checkout, per "First, 60
 seconds of setup" below -- and drive any UI change through
 `tools/drive_ui.py` before believing it works, per "the rules this session
@@ -161,6 +162,54 @@ before moving to the next.
    minute later (confirmed against the session's own `updated_at` in
    `sessions.sqlite`), and unchecking it stops further ticks (no third
    save in the following minute).
+
+## Windows native-window crash, reported from a real machine -- fixed
+
+A curator downloaded a built `boldcurator-windows-x86_64` zip and ran
+`entrypoint.py` (i.e. `boldcurator desktop`) on real Windows. It crashed
+immediately:
+
+```
+RuntimeError: Failed to resolve Python.Runtime.Loader.Initialize from
+C:\Users\...\_internal\pythonnet\runtime\Python.Runtime.dll
+```
+
+Traced to `webview.start()` -> `initialize()` -> `import_winforms()` --
+every one of pywebview's Windows backends bridges to .NET through
+`pythonnet`/`clr_loader`, and that bridge has a long, still-open history of
+fragile, environment-specific failures once frozen by PyInstaller
+(r0x0r/pywebview#1215, #1292, #1638; pythonnet/clr-loader#74). Reports show
+people trying `--hidden-import`/`--collect-all` combinations without
+reliably fixing it -- this is not a bug in this codebase, and chasing it
+indefinitely was the wrong response.
+
+**Fixed by making the native window a best effort, not a requirement.**
+`desktop.py`'s `launch()` and `_run_setup()` both now catch a failure
+anywhere in `webview.create_window()`/`webview.start()` and fall back to
+opening the app in the system's default browser instead -- a curator sees
+a browser tab rather than a crash. The trickiest part was `_run_setup()`:
+a background thread ("the watcher") has to be running and blocked on a
+queue *before* `webview.start()` is called, so it can close the window
+once setup resolves a snapshot path -- when `start()` itself is what
+fails, that thread is already alive and already the queue's one reader, so
+the fallback has to `join()` it rather than read the queue a second time,
+which would race it. `--collect-all pythonnet --collect-all clr_loader`
+were also added to the build as a first line of defense (the same fix
+shape as the `shinychat` issue below), on the chance they resolve the
+underlying pythonnet problem for some environments even though reports
+suggest they don't for everyone.
+
+New tests: `tests/test_desktop.py` gained three fault-injection cases (14
+total) -- `webview.start()` raising after a window and its watcher thread
+already exist, `webview.create_window()` raising before either exists, and
+confirming `launch()`'s own simpler fallback (no return value needed,
+just block until interrupted) both print what happened and actually call
+`webbrowser.open()`. **Not yet re-verified on the Windows machine that hit
+the original crash** -- that is the next thing to do, not something this
+session could confirm itself. See `python/packaging/README.md` for the
+full account, including the `win32` (pywin32/comtypes, no .NET) GUI
+backend as a fallback worth trying later if the browser fallback turns out
+to be needed routinely rather than occasionally.
 
 ## CI (plan 2.6) -- resolved, confirmed green on real runners
 
@@ -488,7 +537,7 @@ to learn" below for why that matters here specifically.
 cd C:\GitHub\BOLDcurator\python
 git pull
 pip install -e ".[dev,gui]"
-python -m pytest tests/ -q          # 286 passing
+python -m pytest tests/ -q          # 289 passing
 python parity/compare.py            # PASS
 
 python -m boldcurator.cli gui --snapshot "<the reordered snapshot>"
