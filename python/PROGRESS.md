@@ -143,12 +143,22 @@ approved ("Build both. Use a placeholder icon for now.").
   generated with Pillow -- not a project dependency, just a one-off
   generation step) stands in for real branding for now, used by both the
   installer and the browser-app window.
+- **First real CI run of the installer step failed, and it wasn't a
+  sandbox-only bug**: `OutputBaseFilename=BOLDcuratorSetup-{#MyAppVersion}-x64`
+  was invalid because the workflow derived `MyAppVersion` from
+  `github.ref_name`, which is the release tag (`v1.2.3`, fine) on a real
+  release but the *branch name* on a manual `workflow_dispatch` run --
+  `claude/wonderful-newton-qw7llz` here, whose `/` isn't a legal filename
+  character. Fixed: only trust `github.ref` as a version when it actually
+  matches `refs/tags/vX.Y.Z`; anything else (a manual run, a branch build)
+  gets a fixed `0.0.0-dev` placeholder instead.
 - **Not verified anywhere yet** (this sandbox cannot get further): neither
-  window mode's actual on-screen behavior on a real Windows box, nor the
-  Inno Setup script even compiling -- `ISCC.exe` is Windows-only, so this
-  was authored and unit-tested but never run. See
-  `python/packaging/README.md`'s "What has actually been verified" section
-  for the full, current list.
+  window mode's actual on-screen behavior on a real Windows box, nor
+  whether the Inno Setup script now compiles cleanly end-to-end and
+  produces an installable `setup.exe` -- `ISCC.exe` is Windows-only, so
+  this can only be confirmed by a real CI run or a local Windows build.
+  See `python/packaging/README.md`'s "What has actually been verified"
+  section for the full, current list.
 
 ## Open issues from curator feedback, round 3 -- all six resolved
 

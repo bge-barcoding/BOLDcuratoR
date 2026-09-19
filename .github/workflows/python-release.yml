@@ -104,7 +104,18 @@ jobs:
         shell: pwsh
         run: |
           choco install innosetup -y --no-progress
-          $version = "${{ github.ref_name }}" -replace '^v', ''
+
+          # github.ref_name is the *tag* name on a real release (vX.Y.Z --
+          # strip the v) but the *branch* name on a workflow_dispatch run,
+          # e.g. "claude/wonderful-newton-qw7llz" -- which contains a "/"
+          # and breaks OutputBaseFilename below (an actual CI failure this
+          # caused). Only trust it as a version on an actual vX.Y.Z tag.
+          if ("${{ github.ref }}" -match '^refs/tags/v(\d+\.\d+\.\d+)$') {
+            $version = $Matches[1]
+          } else {
+            $version = '0.0.0-dev'
+          }
+
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" `
             "/DMyAppVersion=$version" packaging\windows-installer.iss
 
