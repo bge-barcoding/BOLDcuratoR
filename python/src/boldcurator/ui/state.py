@@ -27,14 +27,18 @@ from ..core.pipeline import (
     geographic_filter,
     parse_lines,
     parse_taxa_input,
+    process_specimen_data,
     flatten_taxa,
 )
+from ..core import selection
+from ..core.ranking import score_and_rank
 from ..core.summaries import build_species_checklist
 from ..core.table import SpecimenTable
 from ..data.queries import (
     SearchPlan,
     SearchQuery,
     estimate_search,
+    fetch_by_bin,
     missing_recordset_codes,
     plan_search,
     resolve_taxa,
@@ -69,6 +73,10 @@ class SearchState:
     table: SpecimenTable
     query_label: str = ""
     warnings: list[str] = field(default_factory=list)
+    #: The session's one annotation store, so a fresh search's auto-selection
+    #: (see :meth:`analysis`) lands where the specimen table and every BAGS
+    #: group already look for it.
+    annotations: Annotations | None = field(default=None, repr=False)
     _analysis: SearchResult | None = field(default=None, repr=False)
     _groups: dict[str, list[SpecimenGroup]] = field(default_factory=dict, repr=False)
 
@@ -85,13 +93,29 @@ class SearchState:
         return self._analysis is not None
 
     def analysis(self, store: SnapshotStore) -> SearchResult:
-        """The whole-result summaries. Computed once, on first use."""
+        """The whole-result summaries. Computed once, on first use.
+
+        Auto-selects a best specimen per (BIN x country) the first time this
+        result is analysed -- ``auto_select_best_specimens`` already refuses to
+        touch a non-empty selection, so this only ever fires on a fresh search,
+        the way R's own auto-selection does (``app.R:425-467``). It happens
+        here rather than at search time because this is the first point that
+        actually holds the scored, whole-result frame the selection needs --
+        the search itself only plans, and the paged table never materialises
+        more than one page.
+        """
         if self._analysis is None:
             if not self.can_analyse:
                 raise ResultTooLargeToAnalyse(self.record_count)
-            # auto_select=False: the paged table owns the curator's selection,
-            # and auto-selecting behind their back would overwrite it.
+            # auto_select=False: analyse_plan's own auto-select can't see the
+            # session's Annotations object, so it is done just below instead,
+            # against the one store the rest of the app reads and writes.
             self._analysis = analyse_plan(store, self.plan, auto_select=False)
+            if self.annotations is not None:
+                chosen = selection.auto_select_best_specimens(
+                    self._analysis.specimens, existing=self.annotations.selected)
+                if chosen is not self.annotations.selected:
+                    self.annotations.selected.update(chosen)
         return self._analysis
 
     def checklist(self, store: SnapshotStore):
@@ -102,8 +126,23 @@ class SearchState:
         """The groups for one grade, cached -- a curator revisits a tab often."""
         if grade not in self._groups:
             result = self.analysis(store)
+
+            def fetch_bin(bin_uri: str, store=store):
+                """Everything in this BIN, straight from the snapshot.
+
+                Used only when a grade-E group's own search didn't happen to
+                capture the species it shares the BIN with -- see
+                ``core.grouping``. Scored the same way every other specimen is,
+                so it sorts and displays like the rest of the group.
+                """
+                extra = fetch_by_bin(store, [bin_uri])
+                if len(extra) == 0:
+                    return extra
+                return score_and_rank(process_specimen_data(extra))
+
             self._groups[grade] = group_specimens(
-                result.specimens, result.bags_grades, grade)
+                result.specimens, result.bags_grades, grade,
+                shared_bins=result.shared_bins, fetch_bin=fetch_bin)
         return self._groups[grade]
 
     def grade_lookup(self) -> dict[str, str]:
@@ -125,6 +164,82 @@ class SearchState:
         if not len(grades):
             return {}
         return grades["bags_grade"].value_counts().to_dict()
+
+    # -- exports -------------------------------------------------------
+    #
+    # Six of these mirror ``mod_specimen_handling_ui.R``'s six download
+    # buttons exactly: All, Selected, Annotated, Curation Report, FASTA,
+    # Selected FASTA. ``search_results`` and ``bin_analysis`` are the two
+    # other live R download handlers (``mod_data_import_server.R:932`` and
+    # ``mod_bin_analysis_server.R:200``), placed on the screens that already
+    # show what they export. Each writes to ``path`` and hands back what it
+    # wrote, or ``None`` when there is nothing to write -- a curator should
+    # not be able to click "Download Selected" into an empty file.
+
+    def export_specimens(self, store: SnapshotStore, kind: str, path) -> "Path | None":
+        from ..io import exports as export_io
+
+        result = self.analysis(store)
+        frame = result.specimens
+        ann = self.annotations if self.annotations is not None else Annotations()
+
+        if kind == "all":
+            rows = export_io.merge_annotations(frame, ann)
+        elif kind == "selected":
+            rows = export_io.merge_annotations(
+                export_io.selected_rows(frame, ann), ann)
+        elif kind == "annotated":
+            rows = export_io.merge_annotations(
+                export_io.annotated_rows(frame, ann), ann)
+        elif kind == "curation_report":
+            rows = export_io.curation_report(frame, ann)
+        else:
+            raise ValueError(f"Unknown export {kind!r}")
+
+        if len(rows) == 0:
+            return None
+        return export_io.write_tsv(rows, path, snapshot_id=result.snapshot_id)
+
+    def export_search_results(self, store: SnapshotStore, path) -> "Path | None":
+        from ..io import exports as export_io
+
+        result = self.analysis(store)
+        if len(result.specimens) == 0:
+            return None
+        return export_io.write_csv(result.specimens, path,
+                                   snapshot_id=result.snapshot_id)
+
+    def export_fasta(self, store: SnapshotStore, path, *,
+                     selected_only: bool) -> "tuple[Path, int] | None":
+        if not store.has_sequences:
+            return None
+        from ..data.queries import iter_sequences
+        from ..io import exports as export_io
+
+        result = self.analysis(store)
+        frame = result.specimens
+        if selected_only:
+            ann = self.annotations if self.annotations is not None else Annotations()
+            frame = export_io.selected_rows(frame, ann)
+        if len(frame) == 0:
+            return None
+
+        written, n = export_io.write_fasta(
+            frame, iter_sequences(store, [str(p) for p in frame["processid"]]), path)
+        if n == 0:
+            written.unlink(missing_ok=True)
+            return None
+        return written, n
+
+    def export_bin_analysis(self, store: SnapshotStore, path) -> "Path | None":
+        from ..io import exports as export_io
+
+        result = self.analysis(store)
+        analysis = result.bin_analysis
+        if not analysis or not len(analysis.get("content", [])):
+            return None
+        return export_io.write_bin_analysis_xlsx(analysis, path,
+                                                  snapshot_id=result.snapshot_id)
 
 
 class AppState:
@@ -246,6 +361,7 @@ class AppState:
                                 annotations=self.annotations, user=self.user),
             query_label=label,
             warnings=warnings,
+            annotations=self.annotations,
         )
         return (f"{plan.expanded_records:,} records "
                 f"({plan.seed_records:,} seed, {plan.seed_bins:,} BINs)")

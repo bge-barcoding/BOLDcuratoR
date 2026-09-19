@@ -24,6 +24,7 @@ Exits non-zero if any check fails.
 from __future__ import annotations
 
 import argparse
+import re
 import time
 from pathlib import Path
 
@@ -162,22 +163,154 @@ def main(argv: list[str] | None = None) -> int:
             check("the next group is untouched",
                   "synonym" not in other and "driven by drive_ui" not in other)
 
+            # -- a per-row check left in one group must not leak into
+            # "Apply to checked" in another. Only "Check this group" (just
+            # used above) replaces the whole checked set; the per-row
+            # checkbox adds to it, so start clean in both groups first.
+            page.click(f"#clear_{grade}")            # currently group 2
+            time.sleep(SETTLE)
+            page.click(f"#prev_{grade}")
+            time.sleep(SETTLE)
+            page.click(f"#clear_{grade}")             # and group 1
+            time.sleep(SETTLE)
+            page.locator(f"#grade_{grade}_body .bc-row-check").first.click()
+            time.sleep(SETTLE)
+            page.click(f"#next_{grade}")
+            time.sleep(SETTLE)
+            page.locator(f"#grade_{grade}_body .bc-row-check").first.click()
+            time.sleep(SETTLE)
+            page.select_option(f"#g{grade}_flag", "data_issue")
+            page.click(f"#g{grade}_apply")
+            time.sleep(SETTLE * 1.5)
+            check("apply to checked reaches the current group's own check",
+                  "data_issue" in table_text(f"#grade_{grade}_body"))
+            page.click(f"#prev_{grade}")
+            time.sleep(SETTLE * 1.5)
+            check("a check left in a different group is not swept into that apply",
+                  "data_issue" not in table_text(f"#grade_{grade}_body"))
+
         # -- the paged specimen table
         show("Specimens", settle=SETTLE * 1.5)
         header = page.locator("#specimens_body table thead").inner_text()
         check("the specimen table carries the BAGS grade once analysed",
-              "bags_grade" in header, header.replace("\n", " "))
+              "BAGS" in header, header.replace("\n", " "))
         before = table_text("#specimens_body")[:200]
         page.click("#next_")
         time.sleep(SETTLE)
         check("paging moves to different rows",
               table_text("#specimens_body")[:200] != before)
-        page.select_option("#sort", "processid")
+        # The five annotation columns are sortable on the specimen table too,
+        # not only a stored/physical one -- SpecimenTable.sort_by fetches
+        # nothing from the database for these, it reads Annotations directly.
+        for label in ("Rep.", "Check", "Flag", "Updated ID", "Notes"):
+            check(f'the "{label}" column header is sortable',
+                  page.locator("#specimens_body th.bc-sort-th",
+                              has_text=label).count() >= 1)
+
+        # Click-a-column-header sorting, not a dropdown: click the "Process
+        # ID" header twice (ascending, then descending) and check the order
+        # actually changes each time.
+        header_cell = page.locator(
+            "#specimens_body th.bc-sort-th", has_text="Process ID")
+        header_cell.click()
         time.sleep(SETTLE * 1.5)
-        page.check("#descending")
+        ascending = table_text("#specimens_body")[:200]
+        check("clicking a column header sorts the specimen table",
+              bool(ascending) and ascending != before)
+        header_cell.click()
         time.sleep(SETTLE * 1.5)
-        check("sorting the specimen table works", bool(table_text("#specimens_body")))
+        descending = table_text("#specimens_body")[:200]
+        check("clicking the same header again reverses the order",
+              descending != ascending)
+
+        # Sorting by "Rep." (the representative pick) must surface the
+        # auto-selected rows, not silently do nothing -- this is the one
+        # annotation column with a real answer to check for correctness
+        # (True sorts after False; the representative picks are True).
+        rep_header = page.locator("#specimens_body th.bc-sort-th", has_text="Rep.")
+        rep_header.click()
+        time.sleep(SETTLE)
+        rep_header.click()   # descending: True (checked) first
+        time.sleep(SETTLE * 1.5)
+        first_row_rep = page.locator(
+            "#specimens_body tbody tr").first.locator("td").first.locator(
+            "input").is_checked()
+        check("sorting by Rep. surfaces the representative picks",
+              first_row_rep)
         page.screenshot(path=str(args.out / "05-specimens.png"), full_page=True)
+
+        # -- click-a-column-header sorting on a BAGS group table too
+        show("BAGS A")
+        group_before = table_text("#grade_A_body")[:200]
+        group_header = page.locator(
+            "#grade_A_body th.bc-sort-th", has_text="Process ID")
+        if group_header.count():
+            group_header.first.click()
+            time.sleep(SETTLE * 1.5)
+            check("clicking a column header sorts a BAGS group table",
+                  table_text("#grade_A_body")[:200] != group_before)
+        else:
+            check("clicking a column header sorts a BAGS group table", False,
+                  "no sortable header found")
+
+        # -- a checked/unchecked row must not reset the table's scroll
+        # position, and the Rep./Check/Flag/Updated ID/Notes headers must
+        # stay pinned to the top while scrolled, exactly like every other
+        # header. Dispatching the click via JS on a checkbox already inside
+        # the scrolled viewport (rather than page.click(), which scrolls an
+        # off-screen element into view first) is what actually exercises
+        # this -- a real curator only ever clicks what they can already see.
+        show("Specimens", settle=SETTLE)
+        scroll_div = page.locator("#specimens_body div.bc-scroll")
+        scroll_div.evaluate("el => { el.scrollTop = 300; }")
+        time.sleep(0.3)
+        rep_header_y = page.locator(
+            "#specimens_body thead th", has_text="Rep.").bounding_box()["y"]
+        container_top_y = scroll_div.bounding_box()["y"]
+        check("the Rep. header stays pinned to the top while scrolled",
+              abs(rep_header_y - container_top_y) < 5,
+              f"header y={rep_header_y}, container top y={container_top_y}")
+
+        scroll_before = scroll_div.evaluate("el => el.scrollTop")
+        clicked = scroll_div.evaluate("""
+            (el) => {
+                const rect = el.getBoundingClientRect();
+                const box = Array.from(el.querySelectorAll('.bc-row-check'))
+                    .find(b => {
+                        const r = b.getBoundingClientRect();
+                        return r.top >= rect.top && r.bottom <= rect.bottom;
+                    });
+                if (!box) return false;
+                box.click();
+                return true;
+            }
+        """)
+        time.sleep(SETTLE)
+        scroll_after = page.locator("#specimens_body div.bc-scroll").evaluate(
+            "el => el.scrollTop")
+        check("checking a visible row does not reset the table's scroll position",
+              clicked and scroll_before > 0 and scroll_after == scroll_before,
+              f"{scroll_before} -> {scroll_after}")
+
+        # -- clearing the checked/working selection must not touch the
+        # representative pick (auto-selected best per BIN x country) -- see
+        # io.annotations's module docstring for why the two are separate.
+        def value_box_count(label: str) -> int:
+            show("Data Input", settle=1.5)
+            body = page.locator("#search_summary").inner_text()
+            match = re.search(rf"([\d,]+)\s*\n?{label}", body)
+            return int(match.group(1).replace(",", "")) if match else -1
+
+        before_rep = value_box_count("Representative")
+        show("Specimens", settle=1.5)
+        page.click("#select_all")    # "Check all"
+        time.sleep(SETTLE)
+        page.click("#clear_selection")   # "Clear checked"
+        time.sleep(SETTLE)
+        after_rep = value_box_count("Representative")
+        check("clearing the checked selection leaves the representative pick alone",
+              before_rep > 0 and before_rep == after_rep,
+              f"{before_rep} -> {after_rep}")
 
         check("no javascript errors", not js_errors, "; ".join(js_errors))
         browser.close()

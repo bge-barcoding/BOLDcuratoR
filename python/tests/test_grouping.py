@@ -5,7 +5,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from boldcurator.core.bags import calculate_bags_grades
+from boldcurator.core.bags import calculate_bags_grades, shared_bins
 from boldcurator.core.grouping import (
     GRADE_DESCRIPTIONS,
     GRADES,
@@ -166,10 +166,80 @@ def test_a_bin_shared_only_in_the_snapshot_still_gets_a_group_and_says_so():
     grades = calculate_bags_grades(local, bin_species=snapshot_bins)
     assert grades["bags_grade"].iloc[0] == "E"
 
-    groups = group_specimens(local, grades, "E")
+    # The caller passes the snapshot-wide shared set explicitly -- see the
+    # BOLD:AAL6477 tests below for why grouping cannot assume the local frame
+    # alone tells it which BINs are genuinely shared.
+    groups = group_specimens(local, grades, "E",
+                             shared_bins=shared_bins(snapshot_bins))
     assert len(groups) == 1
     assert groups[0].note, "a group that looks innocent must explain itself"
     assert "outside this search" in groups[0].note
+
+
+def test_fetch_bin_fills_in_the_sharing_species_when_given():
+    """The point of ``fetch_bin``: don't just say a BIN is shared, show it."""
+    local = _frame([
+        {"processid": "R1", "species": "Danaus plexippus", "bin_uri": "BOLD:X",
+         "quality_score": 5},
+    ])
+    snapshot_bins = pd.DataFrame([
+        {"bin_uri": "BOLD:X", "species": "Danaus plexippus"},
+        {"bin_uri": "BOLD:X", "species": "Danaus chrysippus"},
+    ])
+    grades = calculate_bags_grades(local, bin_species=snapshot_bins)
+
+    extra = _frame([
+        {"processid": "R2", "species": "Danaus chrysippus", "bin_uri": "BOLD:X",
+         "quality_score": 6},
+    ])
+    fetched: list[str] = []
+
+    def fetch_bin(bin_uri):
+        fetched.append(bin_uri)
+        return extra
+
+    groups = group_specimens(local, grades, "E",
+                             shared_bins=shared_bins(snapshot_bins),
+                             fetch_bin=fetch_bin)
+    assert fetched == ["BOLD:X"]
+    group = groups[0]
+    assert set(group.specimens["processid"]) == {"R1", "R2"}
+    assert group.species == ("Danaus chrysippus", "Danaus plexippus")
+    assert "2 species" in group.caption
+    assert "outside this search" in group.note
+
+
+# -- a species' OTHER bin must not borrow its grade-E status ----------------
+
+
+def test_a_species_own_unshared_bin_gets_no_group():
+    """The ``BOLD:AAL6477`` bug.
+
+    A species graded E because ONE of its BINs is shared must not turn its
+    OTHER, unrelated BIN into a "Shared BIN" group -- that BIN never held more
+    than one species, locally or in the snapshot, and grouping it under grade E
+    only because the species also happens to sit in a shared BIN elsewhere is
+    exactly what R never did.
+    """
+    local = _frame([
+        # BOLD:AAG9765 is genuinely shared -- two species.
+        {"processid": "S1", "species": "Sialis concava", "bin_uri": "BOLD:AAG9765",
+         "quality_score": 5},
+        {"processid": "S2", "species": "Sialis other", "bin_uri": "BOLD:AAG9765",
+         "quality_score": 5},
+        # BOLD:AAL6477 holds only Sialis concava -- never shared.
+        {"processid": "S3", "species": "Sialis concava", "bin_uri": "BOLD:AAL6477",
+         "quality_score": 5},
+        {"processid": "S4", "species": "Sialis concava", "bin_uri": "BOLD:AAL6477",
+         "quality_score": 5},
+    ])
+    grades = calculate_bags_grades(local)
+    assert grades.set_index("species").loc["Sialis concava", "bags_grade"] == "E"
+
+    groups = group_specimens(local, grades, "E", shared_bins=shared_bins(local))
+    assert [g.bins for g in groups] == [("BOLD:AAG9765",)], (
+        "BOLD:AAL6477 has only one species and must not appear as a shared BIN"
+    )
 
 
 # -- the species checklist -------------------------------------------------

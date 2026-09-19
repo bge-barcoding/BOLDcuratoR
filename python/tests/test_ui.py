@@ -100,12 +100,198 @@ def test_missing_values_render_as_blank_rather_than_raising():
     assert "nan" not in html.lower(), "a missing value must not print as 'nan'"
 
 
+def test_a_record_can_be_selected_on_its_own_not_only_the_whole_group():
+    """The point of the per-row checkboxes: pick one record out of a group.
+
+    Before this, "selected" rendered as a plain check mark and the only ways
+    to change it were "select this whole group / page / result" -- there was
+    no way to act on a handful of records out of a larger group. There are now
+    two independent checkboxes per row -- "Rep." (the representative pick,
+    ``ROW_REP_CLASS``) and "Check" (the disposable bulk-edit selection,
+    ``ROW_CHECK_CLASS``) -- see io.annotations's module docstring for why they
+    must not be the same one.
+    """
+    import pandas as pd
+
+    from boldcurator.ui.app import ROW_CHECK_CLASS, ROW_REP_CLASS, _group_html
+
+    frame = pd.DataFrame({
+        "processid": ["P1", "P2"],
+        "species": ["Danaus plexippus", "Danaus chrysippus"],
+        "bin_uri": ["BOLD:A", "BOLD:A"],
+        "selected": [True, False],   # representative: P1 only
+        "checked": [False, True],    # working: P2 only
+    })
+    html = _group_html(frame)
+
+    assert html.count(f"class='{ROW_REP_CLASS}'") == 2
+    assert html.count(f"class='{ROW_CHECK_CLASS}'") == 2
+
+    def row(pid: str) -> str:
+        marker = f"data-pid='{pid}'"
+        start = html.index(marker)
+        # walk back/forward to the enclosing <tr>...</tr>
+        tr_start = html.rindex("<tr>", 0, start)
+        tr_end = html.index("</tr>", start)
+        return html[tr_start:tr_end]
+
+    p1, p2 = row("P1"), row("P2")
+    # P1 is the representative but not checked.
+    assert f"class='{ROW_REP_CLASS}'" in p1.split(f"class='{ROW_CHECK_CLASS}'")[0]
+    rep_cell_p1 = p1.split(f"class='{ROW_REP_CLASS}'")[1].split(">")[0]
+    check_cell_p1 = p1.split(f"class='{ROW_CHECK_CLASS}'")[1].split(">")[0]
+    assert "checked" in rep_cell_p1
+    assert "checked" not in check_cell_p1
+    # P2 is checked but not the representative.
+    rep_cell_p2 = p2.split(f"class='{ROW_REP_CLASS}'")[1].split(">")[0]
+    check_cell_p2 = p2.split(f"class='{ROW_CHECK_CLASS}'")[1].split(">")[0]
+    assert "checked" not in rep_cell_p2
+    assert "checked" in check_cell_p2
+
+
+def test_processid_bin_and_species_link_out_to_the_bold_portal():
+    """A curator working offline from a snapshot still wants to look a record
+
+    up on BOLD itself -- the portal is public and needs no API key, so a link
+    costs nothing this app depends on.
+    """
+    import pandas as pd
+
+    from boldcurator.ui.app import _group_html
+    from boldcurator.ui.format import bold_bin_url, bold_record_url, bold_species_url
+
+    frame = pd.DataFrame({
+        "processid": ["GBMHO3680-19"],
+        "species": ["Cordulegaster heros"],
+        "bin_uri": ["BOLD:AAJ5773"],
+    })
+    html = _group_html(frame)
+
+    assert f"href='{bold_record_url('GBMHO3680-19')}'" in html
+    assert f"href='{bold_bin_url('BOLD:AAJ5773')}'" in html
+    assert f"href='{bold_species_url('Cordulegaster heros')}'" in html
+    assert html.count("target='_blank'") == 3
+    assert "GBMHO3680-19</a>" in html
+
+
+def test_sticky_columns_freeze_to_the_left_edge_in_column_order():
+    """selected/checked/flag/updated_id/curator_notes stay put while the rest
+
+    of a wide table scrolls sideways underneath them.
+    """
+    import pandas as pd
+
+    from boldcurator.ui.app import STICKY_COLUMN_WIDTHS, _group_html
+
+    frame = pd.DataFrame({
+        "selected": [True], "checked": [False], "flag": ["misidentification"],
+        "updated_id": ["Danaus plexippus"], "curator_notes": ["checked"],
+        "processid": ["P1"], "species": ["Danaus plexippus"],
+    })
+    html = _group_html(frame)
+    header = html.split("<tbody>")[0]
+
+    running = 0
+    for column in ("selected", "checked", "flag", "updated_id", "curator_notes"):
+        width = STICKY_COLUMN_WIDTHS[column]
+        assert f"left:{running}px" in html, f"{column} should sit at {running}px"
+        running += width
+    # every header cell stays pinned to the top (see test below), but a
+    # column that isn't one of the five never gets a *left* offset
+    other_header_cell = header.split("Process ID")[1].split("</th>")[0]
+    assert "left:" not in other_header_cell
+
+
+def test_every_header_cell_stays_pinned_to_the_top_not_just_the_thead():
+    """The bug: only the five frozen-left headers had their own
+
+    ``position:sticky``; the rest relied on ``<thead>``'s, which browsers do
+    not reliably honour (``<thead>`` is ``display:table-header-group``, not a
+    table cell). Every ``<th>`` now carries its own top-sticky style.
+    """
+    import pandas as pd
+
+    from boldcurator.ui.app import _group_html
+
+    frame = pd.DataFrame({"processid": ["P1"], "species": ["Danaus plexippus"]})
+    html = _group_html(frame)
+    header = html.split("<tbody>")[0]
+    assert "<thead><tr>" in header, "sticky belongs on the cells, not <thead>"
+    for column_label in ("Process ID", "Species"):
+        cell = header.split(column_label)[0].split("<th")[-1]
+        assert "position:sticky" in cell and "top:0" in cell
+
+
 def test_an_empty_frame_renders_a_message_not_a_broken_table():
     import pandas as pd
 
     from boldcurator.ui.app import _group_html
 
     assert "Nothing to show" in _group_html(pd.DataFrame())
+
+
+def test_column_headers_are_clickable_and_carry_the_sort_arrow():
+    """Click-a-header sorting: the point of this issue.
+
+    A sortable column's header carries the class the delegated JS listener
+    watches for, the Shiny input name it should post to, and an arrow on
+    whichever column is currently the sort key -- so a curator can tell what
+    they are looking at without a separate dropdown.
+    """
+    import pandas as pd
+
+    from boldcurator.ui.app import SORT_HEADER_CLASS, _table
+
+    frame = pd.DataFrame({"species": ["B", "A"], "count": [2, 1]})
+    html = _table(frame, sort_input="my_sort", sortable=frozenset(frame.columns),
+                 sort_state=("species", False))
+    header = html.split("<tbody>")[0]
+
+    assert header.count(f"class='{SORT_HEADER_CLASS}'") == 2
+    assert "data-sort-input='my_sort'" in header
+    assert "data-sort-col='species'" in header and "data-sort-col='count'" in header
+    # only the current sort column carries an arrow, and ascending is "up"
+    species_th = header.split("data-sort-col='species'")[1].split("</th>")[0]
+    count_th = header.split("data-sort-col='count'")[1].split("</th>")[0]
+    assert "▲" in species_th
+    assert "▲" not in count_th and "▼" not in count_th
+
+
+def test_a_column_left_out_of_sortable_renders_a_plain_header():
+    """A caller can still restrict which columns are clickable (the specimen
+
+    table does, for columns SpecimenTable.sort_by can't fetch server-side);
+    _table must honour that rather than making everything clickable.
+    """
+    import pandas as pd
+
+    from boldcurator.ui.app import SORT_HEADER_CLASS, _table
+
+    frame = pd.DataFrame({"selected": [True], "species": ["A"]})
+    html = _table(frame, sort_input="my_sort", sortable=frozenset({"species"}))
+    header = html.split("<tbody>")[0]
+    excluded_cell = header.split("selected")[0].split("<th")[-1]
+    assert "cursor:pointer" not in excluded_cell, "excluded column must not be clickable"
+
+
+def test_group_tables_default_to_sorting_by_rep_and_check_too():
+    """Flag/Updated ID/Notes were already sortable in a BAGS group table;
+
+    Rep./Check (selected/checked) were the two left out. A group table is
+    already fully in memory, so there is no reason a boolean column can't
+    sort like any other.
+    """
+    import pandas as pd
+
+    from boldcurator.ui.app import SORT_HEADER_CLASS, _group_html
+
+    frame = pd.DataFrame({
+        "selected": [True, False], "checked": [False, True],
+        "processid": ["P1", "P2"], "species": ["A", "B"],
+    })
+    html = _group_html(frame, sort_input="group_sort_click")
+    header = html.split("<tbody>")[0]
+    assert header.count(f"class='{SORT_HEADER_CLASS}'") == 4
 
 
 def test_the_fixture_exercises_every_grade_the_screens_show(store):
@@ -149,6 +335,7 @@ def test_the_specimen_table_renders_the_columns_it_says_it_does(store):
     """`_group_html` used to re-filter to the BAGS layout, silently dropping
     whatever columns the caller had chosen."""
     from boldcurator.ui.app import PREVIEW_COLUMNS, _group_html
+    from boldcurator.ui.format import GROUP_LABELS
     from boldcurator.ui.state import AppState
 
     state = AppState(store, page_size=5)
@@ -162,7 +349,8 @@ def test_the_specimen_table_renders_the_columns_it_says_it_does(store):
     html = _group_html(rows, columns=PREVIEW_COLUMNS, limit=len(rows))
     header = html.split("<tbody>")[0]
     for column in PREVIEW_COLUMNS:
-        assert f">{column}<" in header, f"{column} missing from the rendered header"
+        label = GROUP_LABELS.get(column, column)
+        assert f">{label}<" in header, f"{column} missing from the rendered header"
 
 
 def test_the_priority_grades_are_marked_in_the_navigation():
@@ -182,11 +370,46 @@ def test_the_priority_grades_are_marked_in_the_navigation():
     assert PRIORITY_GRADES == ("E", "C")
 
 
-def test_selecting_a_group_replaces_the_selection_rather_than_adding(store):
+def test_a_fresh_search_auto_selects_a_representative_per_bin_and_country(store):
+    """R auto-selects on a fresh import (``app.R:425-467``); so must this.
+
+    The GUI never materialises the whole result at search time, so the only
+    honest place to do this is the first time something needs the scored,
+    whole-result frame -- which is ``analysis()``.
+    """
+    from boldcurator.ui.state import AppState
+
+    state = AppState(store)
+    state.run_search("Lepidoptera")
+    assert state.annotations.selected == {}, "nothing selected before analysis runs"
+    state.search.analysis(store)
+    assert state.annotations.selected, "a fresh search must end up with a selection"
+    assert all(v.get("auto_selected") for v in state.annotations.selected.values())
+
+
+def test_auto_selection_never_overwrites_a_curator_s_own_choice(store):
+    from boldcurator.ui.state import AppState
+
+    state = AppState(store)
+    state.run_search("Lepidoptera")
+    first_page = state.search.table.page(0).rows
+    manual_pid = str(first_page["processid"].iloc[0])
+    state.annotations.set_selected(manual_pid, user="curator")
+
+    state.search.analysis(store)
+
+    assert state.annotations.selected == {
+        manual_pid: state.annotations.selected[manual_pid]
+    }, "an existing selection is a curator's, and analysis must leave it alone"
+
+
+def test_checking_a_group_replaces_the_checked_set_rather_than_adding(store):
     """Otherwise annotating the second problem re-annotates the first.
 
-    The screens exist so a curator works one problem at a time; a selection
-    that accumulates across groups quietly defeats that.
+    The screens exist so a curator works one problem at a time; a checked set
+    that accumulates across groups quietly defeats that. This is the working
+    selection ("Check this group" / "Apply to checked"), not the
+    representative pick -- see io.annotations's module docstring.
     """
     from boldcurator.ui.state import AppState
 
@@ -195,16 +418,16 @@ def test_selecting_a_group_replaces_the_selection_rather_than_adding(store):
     groups = state.search.groups(store, "C")
     assert len(groups) >= 2
 
-    def select(group):
-        state.annotations.selected.clear()
+    def check(group):
+        state.annotations.clear_working()
         for pid in group.specimens["processid"]:
-            state.annotations.set_selected(str(pid))
+            state.annotations.set_working(str(pid))
 
-    select(groups[0])
-    first = set(state.annotations.selected)
-    select(groups[1])
-    second = set(state.annotations.selected)
+    check(groups[0])
+    first = set(state.annotations.working)
+    check(groups[1])
+    second = set(state.annotations.working)
 
     assert second and not (first & second), "the two groups must not overlap"
-    assert set(state.annotations.selected) == second, \
-        "selecting a group must not leave the previous group selected"
+    assert set(state.annotations.working) == second, \
+        "checking a group must not leave the previous group checked"

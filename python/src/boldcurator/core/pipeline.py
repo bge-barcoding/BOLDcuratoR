@@ -138,6 +138,12 @@ class SearchResult:
     geographic_filter: list[str] = field(default_factory=list)
     snapshot_id: str = ""
     warnings: list[str] = field(default_factory=list)
+    #: BINs that genuinely hold more than one species-level name -- the same
+    #: scope ``bags_grade`` E was graded against (snapshot-wide when available).
+    #: ``core.grouping`` uses this to tell "this BIN is the shared one" from
+    #: "this species has a *different* BIN that is shared", which grading alone
+    #: cannot distinguish.
+    shared_bins: frozenset[str] = field(default_factory=frozenset)
 
     @property
     def record_count(self) -> int:
@@ -304,6 +310,10 @@ def analyse_plan(
         frame = frame.merge(
             grades[["species", "bags_grade"]], on="species", how="left"
         )
+    # The same scope calculate_bags_grades used for "has_shared_bins": which
+    # BINs are *themselves* shared, not which species have a shared BIN
+    # somewhere among their (possibly several) BINs.
+    shared = bags.shared_bins(bin_species if bin_species is not None else frame)
 
     analysis = bins.analyse_bins(frame)
     selections = selection.auto_select_best_specimens(frame) if auto_select else {}
@@ -320,4 +330,5 @@ def analyse_plan(
         geographic_filter=list(geographic_filter or []),
         snapshot_id=store.info().snapshot_id,
         warnings=warnings,
+        shared_bins=frozenset(shared),
     )

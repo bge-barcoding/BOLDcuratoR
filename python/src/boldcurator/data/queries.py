@@ -405,6 +405,28 @@ def search_specimens(store: SnapshotStore, query: SearchQuery, *,
     return fetch_planned(store, plan, limit=query.limit)
 
 
+def fetch_by_bin(store: SnapshotStore, bin_uris: list[str]) -> pd.DataFrame:
+    """Every specimen row for these BINs, straight from the snapshot.
+
+    Unlike :func:`fetch_rows`, this is not scoped to a plan's row set -- it is
+    for the rare case where a BIN's full membership matters more than the
+    search that found it, which today is exactly one caller: a grade-E group
+    whose sharing species did not itself match the search's taxa or geography
+    (see ``core.grouping``'s enrichment). A curator asked to see "everything in
+    the BIN", not "everything in the BIN that also matches what I typed".
+    """
+    bin_uris = [b for b in dict.fromkeys(bin_uris) if b]
+    projection = S.projection(store.physical_columns)
+    if not bin_uris:
+        return store.connection.execute(
+            f"SELECT {projection} FROM specimen s WHERE false"
+        ).df()
+    clause, params = _in_clause("bin_uri", bin_uris)
+    return store.connection.execute(
+        f"SELECT {projection} FROM specimen s WHERE {clause}", params
+    ).df()
+
+
 def missing_recordset_codes(store: SnapshotStore, codes: list[str]) -> list[str]:
     """Which requested codes matched nothing.
 

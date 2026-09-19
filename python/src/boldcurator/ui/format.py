@@ -7,9 +7,39 @@ kept here, in one place, so every screen agrees.
 
 from __future__ import annotations
 
+from urllib.parse import quote
+
 import pandas as pd
 
 from shiny import ui
+
+#: The public BOLD portal -- no API key, no login, works from an offline
+#: snapshot's data because it is just a link, not a fetch.
+BOLD_PORTAL = "https://portal.boldsystems.org"
+
+
+def bold_record_url(processid: str) -> str:
+    """One specimen record, e.g. ``GBMHO3680-19``."""
+    return f"{BOLD_PORTAL}/record/{quote(str(processid))}"
+
+
+def bold_bin_url(bin_uri: str) -> str:
+    """Every record BOLD holds in this BIN, e.g. ``BOLD:AAJ5773``.
+
+    The query syntax itself (``:``, ``[bin]``) is not percent-encoded --
+    matching the portal's own URLs exactly, which do not encode it either.
+    """
+    return f"{BOLD_PORTAL}/result?query={bin_uri}[bin]"
+
+
+def bold_species_url(species: str) -> str:
+    """Every record BOLD holds for this species, quoted for an exact match.
+
+    The quotes and the name are encoded (``%22``, ``%20``...); the trailing
+    ``[tax]`` is not, again matching the portal's own URLs.
+    """
+    quoted_name = quote('"' + species + '"')
+    return f"{BOLD_PORTAL}/result?query={quoted_name}[tax]"
 
 #: BAGS grade colours, matching the R app so the two are readable side by side.
 #: E and C are the ones that need work, so they are the ones that shout.
@@ -25,11 +55,26 @@ CONCORDANCE_COLOURS = {"Concordant": "#28a745", "Discordant": "#dc3545"}
 
 #: The columns a curator works with, in the order the R app shows them:
 #: annotations first, because that is what they are here to change.
+#: ``selected`` and ``checked`` are two different checkboxes -- see
+#: ``io.annotations``'s module docstring -- so both are always shown together.
 GROUP_COLUMNS = [
-    "selected", "flag", "updated_id", "curator_notes",
+    "selected", "checked", "flag", "updated_id", "curator_notes",
     "rank", "quality_score", "processid", "bin_uri",
     "species", "bags_grade", "identification", "identified_by", "country.ocean",
 ]
+
+#: Headers for ``GROUP_COLUMNS`` (and the specimen table's ``PREVIEW_COLUMNS``,
+#: a subset of the same names). "Rep." and "Check" carry the distinction
+#: ``GROUP_COLUMNS`` documents -- one is the persistent representative pick,
+#: the other a disposable bulk-edit selection.
+GROUP_LABELS = {
+    "selected": "Rep.", "checked": "Check", "flag": "Flag",
+    "updated_id": "Updated ID", "curator_notes": "Notes", "rank": "Rank",
+    "quality_score": "Score", "processid": "Process ID", "bin_uri": "BIN",
+    "species": "Species", "bags_grade": "BAGS", "identification": "ID",
+    "identified_by": "Identified by", "country.ocean": "Country/Ocean",
+    "inst": "Institution",
+}
 
 CHECKLIST_LABELS = {
     "species": "Species", "specimen_count": "Specimens", "bin_count": "BINs",
