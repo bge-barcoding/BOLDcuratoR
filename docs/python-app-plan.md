@@ -510,10 +510,18 @@ something a curator double-clicks, which is three separable decisions:
   re-verified on the machine that hit the original crash. The release
   workflow's own smoke-test steps (build a fixture, query it, start the GUI
   server and curl it) exist to catch exactly the `shinychat`-shaped class of
-  bug automatically, on real runners this sandbox doesn't have. Installer
-  wrapping (`create-dmg` on macOS, Inno Setup/NSIS on Windows) is **not**
-  done — the workflow ships a plain zip of the `--onedir` output, a real
-  double-click-and-it-runs deliverable, just not a polished installer.
+  bug automatically, on real runners this sandbox doesn't have. **Since
+  then**: "opens a browser tab" was reported as workable but not optimal,
+  so `desktop.py` now offers `--window native|browser-app|tab|auto` —
+  `browser-app` launches Edge/Chrome in `--app=` mode (no tabs/address bar,
+  looks native, never touches pythonnet) as the practical middle ground.
+  A Windows installer wrapping is also now done: `packaging/
+  windows-installer.iss` (Inno Setup, wired into the release workflow)
+  produces a `setup.exe` with a Start Menu entry, optional desktop
+  shortcut and uninstaller, alongside the plain zip. macOS installer
+  wrapping (`create-dmg`) is still **not** done. Neither the new window
+  modes' on-screen behavior nor the installer itself has been run on a
+  real Windows machine yet — see `python/packaging/README.md`.
 - [ ] 4.4 **Signing is a real cost, decide explicitly.** Unsigned builds hit
   Gatekeeper on macOS and SmartScreen on Windows — both show a scary warning
   with a manual override, not a hard block, so shipping unsigned is viable

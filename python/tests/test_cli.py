@@ -109,3 +109,35 @@ def test_unknown_snapshot_path_is_a_clean_error(tmp_path, capsys):
     code = main(["info", "--snapshot", str(tmp_path / "nope.duckdb")])
     assert code == 1
     assert "No snapshot at" in capsys.readouterr().err
+
+
+def test_desktop_threads_the_window_flag_through_to_launch(monkeypatch, tmp_path):
+    calls = {}
+
+    def fake_launch(snapshot, *, page_size, window):
+        calls["snapshot"] = snapshot
+        calls["page_size"] = page_size
+        calls["window"] = window
+
+    monkeypatch.setattr("boldcurator.desktop.launch", fake_launch)
+    snap = tmp_path / "s.duckdb"
+
+    code = main(["desktop", "--snapshot", str(snap), "--window", "browser-app"])
+
+    assert code == 0
+    assert calls == {"snapshot": snap, "page_size": 100, "window": "browser-app"}
+
+
+def test_desktop_defaults_to_auto_window_mode(monkeypatch):
+    calls = {}
+    monkeypatch.setattr("boldcurator.desktop.launch",
+                        lambda snapshot, **kw: calls.update(kw))
+
+    assert main(["desktop"]) == 0
+    assert calls["window"] == "auto"
+
+
+def test_desktop_rejects_an_unknown_window_mode(capsys):
+    with pytest.raises(SystemExit):
+        main(["desktop", "--window", "smoke-signal"])
+    assert "invalid choice" in capsys.readouterr().err

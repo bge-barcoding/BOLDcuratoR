@@ -27,6 +27,17 @@ codebase. Fixed by making the native window a **best effort, not a
 requirement**: `desktop.py` now catches a pywebview failure anywhere and
 falls back to opening the app in the system's default browser instead of
 crashing. Signing (4.4) is a deliberate no for now (project owner's call).
+**Since then**: the plain browser-tab fallback was "not the end of the world,
+but not optimal" per the project owner, so `desktop.py` now offers three
+window strategies (`--window native|browser-app|tab|auto`) -- `browser-app`
+launches a Chromium browser in `--app=` mode (no tabs/address bar, looks
+native, never touches pythonnet) as the practical middle ground between a
+native window and a bare tab. A second, independent Windows delivery
+mechanism was also built: an Inno Setup installer
+(`packaging/windows-installer.iss`) producing a real `setup.exe` with a
+Start Menu entry, optional desktop shortcut and uninstaller, wired into
+`python-release.yml`. Both are implemented and unit-tested but **not yet
+verified on a real Windows machine** -- see the new section below.
 
 ## NEXT SESSION — START HERE, in priority order
 
@@ -38,17 +49,21 @@ Windows machine that hit the original crash, then the rest of the release
 build's real-world verification:
 
 1. **Re-test on the Windows machine that hit the
-   `Python.Runtime.Loader.Initialize` crash.** A new build (with
-   `desktop.py`'s browser-fallback fix, plus `--collect-all pythonnet
-   --collect-all clr_loader` added as a first line of defense) needs to be
-   produced (trigger `python-release.yml`, or build locally per
-   `python/packaging/README.md`) and actually run on that machine. Two
-   acceptable outcomes: pywebview now works and a native window opens
-   (the `--collect-all` additions fixed it), or it still fails and the app
-   falls back to opening a browser tab instead of crashing (the resilience
-   fix worked even if the underlying pythonnet issue didn't get fixed).
-   Only a silent crash or the app not coming up at all would mean the fix
-   needs more work.
+   `Python.Runtime.Loader.Initialize` crash -- now with three window modes
+   and an installer to try.** A new build needs to be produced (trigger
+   `python-release.yml`, or build locally per `python/packaging/README.md`)
+   and actually run on that machine. Worth trying, in order: the plain zip
+   with `--window auto` (should now land on `browser-app` mode, a
+   chrome-less Edge/Chrome window, rather than the old plain browser tab,
+   since `native` is expected to still fail there); `--window browser-app`
+   forced, to confirm it never touches pythonnet; and the new
+   `BOLDcuratorSetup-*.exe` installer (Start Menu entry, optional desktop
+   shortcut, uninstaller) as the one-click alternative to unzipping. None of
+   this -- the `browser-app`/`tab` cascade logic, the icon, or the installer
+   script itself -- has been run on a real Windows machine yet; only the
+   fault-injection unit tests in `tests/test_desktop.py` have exercised the
+   cascade, and `windows-installer.iss` can't even be compiled outside
+   Windows (`ISCC.exe`), so this sandbox never got to try it at all.
    - **A second real-world issue surfaced while getting that build**: the
      matrix's Intel-macOS job (`macos-13`) queued forever, never picking up
      a runner, while the other three jobs started within seconds.
@@ -81,11 +96,69 @@ build's real-world verification:
      subset) -- ~0.4 s a pass, not worth fixing without a curator waiting on
      it.
 
-Before starting any of the above: `python -m pytest tests/ -q` (289 passing)
+Before starting any of the above: `python -m pytest tests/ -q` (308 passing)
 and `python parity/compare.py` (PASS) from a clean checkout, per "First, 60
 seconds of setup" below -- and drive any UI change through
 `tools/drive_ui.py` before believing it works, per "the rules this session
 cost the most to learn."
+
+## Windows delivery: browser-app window mode + Inno Setup installer
+
+Requested after the project owner tried a real Windows build of the
+pythonnet-crash fallback fix: it worked, but "opens up a browser tab, which
+isn't the end of the world, but not optimal." Scoped two options first (per
+explicit instruction -- discuss before building), then built both once
+approved ("Build both. Use a placeholder icon for now.").
+
+- [x] **A `--window` flag with three strategies, so a curator gets a
+  chrome-less window even when pywebview can't.** `desktop.py`:
+  `WINDOW_MODES = ("auto", "native", "browser-app", "tab")`. `browser-app`
+  (`_launch_browser_app`/`_find_chromium_browser`/`_chromium_candidates`)
+  launches Edge or Chrome as a plain subprocess with `--app=<url>
+  --window-size=... --user-data-dir=<isolated temp dir>` -- no tabs, no
+  address bar, its own taskbar entry, and critically **never touches
+  pythonnet/.NET at all**, so it cannot hit the
+  `Python.Runtime.Loader.Initialize` crash. `--window auto` (the default)
+  tries `native` -> `browser-app` -> `tab` in order, falling back silently;
+  a forced mode (`--window native`/`browser-app`/`tab`) raises instead of
+  falling back, so the three can be compared deliberately on one machine.
+  `cli.py`'s `desktop` subcommand gained `--window {auto,native,browser-app,
+  tab}` and no longer requires `pywebview` to be importable (only `shiny`/
+  `uvicorn`, since two of the three modes don't need it).
+  `tests/test_desktop.py` grew from 14 to 27 tests covering every
+  mode/failure combination, including the race-safe single-reader pattern
+  on the `resolved` queue (the native-window watcher thread must be the
+  only reader unless it never started); `tests/test_cli.py` gained 3 tests
+  for the flag itself. 308 tests pass total.
+- [x] **A second, independent Windows delivery mechanism: a real
+  installer.** `packaging/windows-installer.iss` (Inno Setup) wraps the
+  existing `dist/boldcurator/` `--onedir` output into a `setup.exe` with a
+  Start Menu entry, optional desktop shortcut, an uninstaller and an
+  Add/Remove Programs entry -- unsigned, per the existing plan-4.4 decision
+  (SmartScreen warning with a manual override, same as the plain `.exe`
+  already gets). `python-release.yml` installs Inno Setup via `choco` on
+  the Windows runner, compiles the script with the release version, and
+  uploads/releases the resulting `.exe` alongside the four platform zips.
+  A placeholder icon (`packaging/icon.ico`, a plain blue "BC" monogram,
+  generated with Pillow -- not a project dependency, just a one-off
+  generation step) stands in for real branding for now, used by both the
+  installer and the browser-app window.
+- **First real CI run of the installer step failed, and it wasn't a
+  sandbox-only bug**: `OutputBaseFilename=BOLDcuratorSetup-{#MyAppVersion}-x64`
+  was invalid because the workflow derived `MyAppVersion` from
+  `github.ref_name`, which is the release tag (`v1.2.3`, fine) on a real
+  release but the *branch name* on a manual `workflow_dispatch` run --
+  `claude/wonderful-newton-qw7llz` here, whose `/` isn't a legal filename
+  character. Fixed: only trust `github.ref` as a version when it actually
+  matches `refs/tags/vX.Y.Z`; anything else (a manual run, a branch build)
+  gets a fixed `0.0.0-dev` placeholder instead.
+- **Not verified anywhere yet** (this sandbox cannot get further): neither
+  window mode's actual on-screen behavior on a real Windows box, nor
+  whether the Inno Setup script now compiles cleanly end-to-end and
+  produces an installable `setup.exe` -- `ISCC.exe` is Windows-only, so
+  this can only be confirmed by a real CI run or a local Windows build.
+  See `python/packaging/README.md`'s "What has actually been verified"
+  section for the full, current list.
 
 ## Open issues from curator feedback, round 3 -- all six resolved
 
