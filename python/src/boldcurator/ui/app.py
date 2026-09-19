@@ -326,6 +326,17 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                         style="display:flex;gap:8px;align-items:center;"
                               "flex-wrap:wrap;margin-top:4px;",
                     ),
+                    ui.div(
+                        ui.input_checkbox("autosave", "Auto-save every",
+                                          value=False),
+                        ui.input_numeric("autosave_interval", None, value=1,
+                                         min=1, max=60, width="70px"),
+                        ui.tags.span("minute(s), under the name above (or "
+                                     "\"Auto-save\" if blank)",
+                                     class_="small text-muted"),
+                        style="display:flex;gap:8px;align-items:center;"
+                              "flex-wrap:wrap;margin-top:6px;",
+                    ),
                     ui.output_ui("session_status"),
                     style="margin-top:16px;padding:10px 14px;"
                           "background:#f8f9fa;border:1px solid #dee2e6;"
@@ -465,23 +476,61 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             list themselves afterwards."""
             ui.update_select("load_session_id", choices=_session_choices())
 
-        @reactive.effect
-        @reactive.event(input.save_session)
-        def _save_session():
-            name = (input.session_name() or "").strip()
-            session_id = _slugify(name) or f"session-{export_io.timestamp()}"
-            try:
-                saved = state.save_session(sessions, session_id, name=name)
-            except ValueError as exc:
-                session_msg.set(str(exc))
+        def _do_save(name: str, *, default_name: str, quiet_on_no_search: bool
+                    ) -> None:
+            """Shared by the Save button and the auto-save timer below --
+
+            same slugify-as-identity upsert either way, so a name typed once
+            covers both manual and scheduled saves of the same session.
+            ``quiet_on_no_search`` skips the "run a search first" message for
+            the timer, which fires on a schedule regardless of whether there
+            is anything to save yet.
+            """
+            if state.search is None:
+                if not quiet_on_no_search:
+                    session_msg.set("Run a search first.")
                 return
-            except ResultTooLargeToAnalyse as exc:
+            session_id = _slugify(name) or _slugify(default_name)
+            try:
+                saved = state.save_session(sessions, session_id,
+                                           name=name or default_name)
+            except (ValueError, ResultTooLargeToAnalyse) as exc:
                 session_msg.set(str(exc))
                 return
             ui.update_select("load_session_id", choices=_session_choices(),
                              selected=session_id)
             session_msg.set(f"Saved {saved.name or saved.session_id!r} -- "
                             f"{saved.record_count:,} records.")
+
+        @reactive.effect
+        @reactive.event(input.save_session)
+        def _save_session():
+            name = (input.session_name() or "").strip()
+            _do_save(name, default_name=f"session-{export_io.timestamp()}",
+                     quiet_on_no_search=False)
+
+        @reactive.effect
+        def _autosave_tick():
+            """Runs once at startup (autosave off, nothing to do) and then
+
+            once per interval for as long as the checkbox stays on --
+            `reactive.invalidate_later` has to be called on every run to keep
+            rescheduling itself, including the run that finds the checkbox
+            off, or it would never check again once turned off and back on.
+            `autosave_interval`/`session_name` are read isolated: changing
+            the interval or typing a name should not itself trigger a save,
+            only the timer firing or the checkbox being ticked should.
+            """
+            enabled = input.autosave()
+            with reactive.isolate():
+                minutes = max(1, int(input.autosave_interval() or 1))
+            if enabled:
+                reactive.invalidate_later(minutes * 60)
+            else:
+                return
+            with reactive.isolate():
+                name = (input.session_name() or "").strip()
+            _do_save(name, default_name="Auto-save", quiet_on_no_search=True)
 
         @reactive.effect
         @reactive.event(input.load_session)

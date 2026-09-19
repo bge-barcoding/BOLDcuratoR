@@ -12,26 +12,19 @@ pinned while scrolling, "Apply to checked" scoped to the current BAGS group,
 gap analysis on the Species screen, the CC-BY-SA 4.0 attribution requirement
 in the app and every export, and **session save/resume wired end to end**.
 Two full rounds of curator-reported bugs (9 issues) are fixed and verified
-live; **round 3 (6 issues) is open**, see below. 283 tests pass, the parity
-gate is green. `fetch_snapshot` (plan 5.1) and the desktop launcher +
-first-run setup screen (4.1a/4.2) are done. Once round 3 is closed, what's
-left is the actual installer build (4.3, wanted as an automated release CI
-workflow), signing (4.4), and the rest of distribution (Phase 5).
+live; **round 3 (6 issues) is now also closed** -- see below. 286 tests
+pass, the parity gate is green. `fetch_snapshot` (plan 5.1) and the desktop
+launcher + first-run setup screen (4.1a/4.2) are done. What's left is the
+actual installer build (4.3, wanted as an automated release CI workflow),
+signing (4.4), and the rest of distribution (Phase 5).
 
 ## NEXT SESSION — START HERE, in priority order
 
-**Round 3 curator feedback (6 issues) is open** -- see "Open issues from
-curator feedback, round 3" just below for the full list. Fix one at a time,
-one commit per item, verified live, same as rounds 1 and 2. Only once round
-3 is closed does it make sense to move on to packaging:
+No open curator-reported bugs right now -- three rounds are closed (see the
+"Open issues" sections below for what was wrong and how each was fixed, if
+a similar bug resurfaces). What's left is packaging and distribution:
 
-1. **Round 3, all six items** -- specimen tables showing all columns with
-   horizontal scroll; the Specimens tab's curation toolbar not fitting the
-   default window width; an xlsx download for gap analysis (and the species
-   checklist, possibly the same workbook); dropping mean quality from the
-   species checklist and share-of-result from the BIN dashboard; and a
-   scheduled (e.g. every-minute) auto-save for sessions.
-2. **CI workflow (plan 2.6) — still manual.** 283 tests and the parity
+1. **CI workflow (plan 2.6) — still manual.** 286 tests and the parity
    harness run only when someone remembers to. A GitHub Actions matrix
    (Linux/macOS/Windows) that installs, runs pytest and runs
    `parity/compare.py` needs no real snapshot: `conftest.py` builds the
@@ -40,7 +33,7 @@ one commit per item, verified live, same as rounds 1 and 2. Only once round
    real bug that only a browser run caught (see "the rules this session cost
    the most to learn" below); CI at least keeps the non-visual tests from
    silently regressing.
-3. **4.3 PyInstaller builds — not started.** `boldcurator desktop` is the
+2. **4.3 PyInstaller builds — not started.** `boldcurator desktop` is the
    entry point to bundle (`docs/python-app-plan.md` has the reasoning for
    PyInstaller over Briefcase, `--onedir` over `--onefile`). Needs actually
    running PyInstaller against this codebase for the first time, which
@@ -53,8 +46,8 @@ one commit per item, verified live, same as rounds 1 and 2. Only once round
    user wants releases built into executables automatically -- a CI
    workflow (GitHub Actions on tag/release) is the natural place, and can
    share most of its matrix setup with plan 2.6's test workflow.
-4. **4.5 Smoke test each installer once 4.3 exists.**
-5. **Also open, not urgent:**
+3. **4.5 Smoke test each installer once 4.3 exists.**
+4. **Also open, not urgent:**
    - The R app (not this rewrite) rejects 4% of real BOLD dataset codes --
      `mod_data_import_utils.R:50`'s `^DS-[A-Z0-9]+$` pattern; 544 of 13,706
      real `DS-` codes don't match. Live bug in the *shipped* app. The SQL to
@@ -64,13 +57,13 @@ one commit per item, verified live, same as rounds 1 and 2. Only once round
      subset) -- ~0.4 s a pass, not worth fixing without a curator waiting on
      it.
 
-Before starting any of the above: `python -m pytest tests/ -q` (283 passing)
+Before starting any of the above: `python -m pytest tests/ -q` (286 passing)
 and `python parity/compare.py` (PASS) from a clean checkout, per "First, 60
 seconds of setup" below -- and drive any UI change through
 `tools/drive_ui.py` before believing it works, per "the rules this session
 cost the most to learn."
 
-## Open issues from curator feedback, round 3
+## Open issues from curator feedback, round 3 -- all six resolved
 
 Fixing one at a time, one commit per item, each verified with new unit tests
 and a live browser run (`tools/drive_ui.py` plus ad-hoc Playwright checks)
@@ -133,8 +126,27 @@ before moving to the next.
    with it, and `ui/format.BIN_LABELS` no longer carries a "Share of
    result" entry. Verified live: no "Share of result" header on the BINs
    tab.
-6. [ ] **Session save should be schedulable** -- e.g. every minute,
-   automatically, not only on a manual click.
+6. [x] **Session save should be schedulable** -- e.g. every minute,
+   automatically, not only on a manual click. Fixed -- a checkbox +
+   interval (minutes) next to the existing Save/Load controls
+   (`ui/app.py`'s Session panel); an `_autosave_tick` reactive effect uses
+   `reactive.invalidate_later` to reschedule itself for as long as the
+   checkbox stays on. Saves under the same slugified-name identity as a
+   manual save (the text field above, or "Auto-save" if left blank), so a
+   scheduled and a manual save of the same name update one entry in place
+   rather than piling up. Refactored the Save button's own logic into a
+   shared `_do_save()` so both paths agree. Follows this codebase's
+   established isolate-what-you-don't-want-to-react-to rule: the checkbox
+   is read live (it should retrigger the effect), but the interval and
+   session-name fields are read inside `reactive.isolate()` so editing them
+   does not itself fire an extra save. No new unit tests -- Shiny's own
+   reactive scheduling isn't meaningfully unit-testable without a running
+   server, and the underlying save/upsert behaviour was already covered by
+   `test_session_resume.py`. Verified live instead, over real wall-clock
+   time: turning it on saves immediately, a second save lands exactly one
+   minute later (confirmed against the session's own `updated_at` in
+   `sessions.sqlite`), and unchecking it stops further ticks (no third
+   save in the following minute).
 
 ## Packaging: native window and first-run setup (4.1a/4.2) -- resolved
 
@@ -438,7 +450,7 @@ to learn" below for why that matters here specifically.
 cd C:\GitHub\BOLDcurator\python
 git pull
 pip install -e ".[dev,gui]"
-python -m pytest tests/ -q          # 283 passing
+python -m pytest tests/ -q          # 286 passing
 python parity/compare.py            # PASS
 
 python -m boldcurator.cli gui --snapshot "<the reordered snapshot>"
