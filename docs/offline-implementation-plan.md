@@ -1,6 +1,9 @@
 # Offline (DuckDB) Implementation Plan
 
-Status: planning, not yet implemented.
+Status: planning, not yet implemented. **Superseded by
+`docs/static-datapackage-plan.md`**, which keeps the backend abstraction below but
+corrects §4, §5 and §6 (gzip ingest, indexes, VACUUM, symlink swap, HAS_IMAGE) and
+adds hosting, concurrency and refresh-automation designs.
 Branch: `claude/offline-tsv-implementation-4NUEY`.
 
 ## 1. Goal

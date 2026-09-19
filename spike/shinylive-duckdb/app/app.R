@@ -1,0 +1,460 @@
+# spike/shinylive-duckdb/app/app.R
+#
+# Minimal shinylive app whose ONLY job is to answer: can webR + duckdb query a
+# few-hundred-MB snapshot fast enough to be usable, inside the 4 GB wasm ceiling?
+#
+# It is not a prototype of BOLDcuratoR. Every control here exists to produce a
+# number for the pass/fail table in README.md.
+
+library(shiny)
+
+`%||%` <- function(a, b) if (is.null(a)) b else a
+
+# --- configuration ------------------------------------------------------------
+# Fixture is served as a sibling of the app, or from an absolute URL. WORKERFS
+# wants a filesystem image (.data + .js.metadata) built by package_fixture.sh.
+FIXTURE_IMAGE <- Sys.getenv("SPIKE_FIXTURE_IMAGE", "fixtures/bold_spike_01.data")
+FIXTURE_DB    <- Sys.getenv("SPIKE_FIXTURE_DB",    "/bold/bold_spike_01.duckdb")
+MOUNTPOINT    <- "/bold"
+IDB_DIR       <- "/idb"
+# Copying into IDBFS means copying into MEMFS, i.e. into wasm linear memory.
+# Emscripten has a known out-of-memory failure doing this with large files, so
+# the probe refuses above this size. The 49 MB fixture is enough to establish
+# whether the cost scales 1:1; risking a dead tab at 441 MB proves nothing more.
+IDB_MAX_MB    <- 200
+
+in_webr <- function() isTRUE(requireNamespace("webr", quietly = TRUE)) &&
+                      identical(R.version$os, "emscripten")
+
+# --- memory probe -------------------------------------------------------------
+# The measurement that decides this spike is whether WORKERFS is lazy, i.e.
+# whether mounting a 400 MB file costs 400 MB of wasm linear memory. R cannot see
+# that from inside, so we read it from JS and push it back in as an input.
+#
+# performance.memory is Chrome-only and does not always account for WebAssembly
+# linear memory. Treat this readout as indicative and confirm against Chrome's
+# Task Manager (Shift+Esc), which is ground truth. README.md says the same.
+mem_probe_js <- HTML("
+function spikeMem() {
+  var out = {};
+  try {
+    if (performance && performance.memory) {
+      out.jsHeapMB = (performance.memory.usedJSHeapSize / 1048576).toFixed(1);
+      out.jsLimitMB = (performance.memory.jsHeapSizeLimit / 1048576).toFixed(1);
+    }
+  } catch (e) {}
+  // webR exposes its Emscripten module; its linear memory is the number we care about.
+  try {
+    var m = (window.webR && window.webR.Module) || (window.Module) || null;
+    if (m && m.HEAPU8 && m.HEAPU8.buffer) {
+      out.wasmMB = (m.HEAPU8.buffer.byteLength / 1048576).toFixed(1);
+    }
+  } catch (e) {}
+  return out;
+}
+setInterval(function () {
+  if (window.Shiny && Shiny.setInputValue) {
+    Shiny.setInputValue('browser_mem', spikeMem(), {priority: 'event'});
+  }
+}, 2000);
+")
+
+ui <- fluidPage(
+  tags$head(tags$script(mem_probe_js)),
+  titlePanel("shinylive + webR + duckdb spike"),
+  p(tags$em("Measures whether a browser-side DuckDB snapshot is viable. Not a prototype.")),
+  sidebarLayout(
+    sidebarPanel(
+      width = 4,
+      h4("1. Mount"),
+      actionButton("mount", "Mount fixture", class = "btn-primary"),
+      verbatimTextOutput("mount_status"),
+      tags$hr(),
+      h4("2. Query"),
+      textInput("taxon", "Taxon (any rank)", value = "Insecta"),
+      numericInput("limit", "Row limit", value = 5000, min = 100, step = 1000),
+      actionButton("go", "Run query", class = "btn-success"),
+      tags$hr(),
+      h4("3. Stability"),
+      numericInput("n_rep", "Consecutive queries", value = 20, min = 2, max = 200),
+      actionButton("bench", "Run benchmark"),
+      tags$hr(),
+      h4("4. Persistence (IDBFS)"),
+      actionButton("idb", "Probe IDBFS"),
+      tags$small(tags$br(), "Run AFTER mounting. Run again after a reload."),
+      verbatimTextOutput("idb_status"),
+      tags$hr(),
+      h4("5. DuckDB extensions"),
+      actionButton("exts", "List extensions"),
+      tags$small(tags$br(), "Is httpfs present? Decides whether range requests are possible."),
+      verbatimTextOutput("ext_status"),
+      tags$hr(),
+      h4("Browser memory"),
+      verbatimTextOutput("mem"),
+      tags$small("Confirm against Chrome Task Manager (Shift+Esc) — ground truth.")
+    ),
+    mainPanel(
+      width = 8,
+      verbatimTextOutput("timing"),
+      tags$hr(),
+      tableOutput("resolved"),
+      tags$hr(),
+      tableOutput("results")
+    )
+  )
+)
+
+# webr::mount() in a browser takes a URL, not a path: a relative source is only
+# supported under Node. Inside webR the fetch happens in a web worker, so a bare
+# "fixtures/x.data" resolves against the worker script's location, not the page,
+# and 404s as "Can't download Emscripten filesystem image metadata".
+#
+# session$clientData carries the page's own URL, so the absolute URL can be built
+# at runtime and works unchanged on localhost and on GitHub Pages (where the site
+# sits under a /repo/ subpath).
+#
+# The catch: shinylive does NOT serve the app from the site root. It runs it at a
+# virtual /app_<id>/ path intercepted by a service worker, and clientData reports
+# that path. The fixtures are not in that virtual filesystem -- they are ordinary
+# static files beside index.html -- so a URL built under /app_<id>/ is handed to
+# the service worker, which cannot resolve it and never settles the fetch. The
+# symptom is a mount that HANGS rather than failing. Dropping the app_ segment
+# gets back to the directory the web server actually serves from.
+#
+# Setting SPIKE_FIXTURE_IMAGE to a full http(s) URL bypasses all of this.
+# The decisive measurement, read from inside the worker rather than guessed from
+# the outside. Chrome's Task Manager gives the whole tab, and performance.memory
+# is per-thread, so neither can say whether a mounted image lands in wasm linear
+# memory (hard 4 GB ceiling) or outside it.
+#
+# webr::eval_js() evaluates in the webR worker context by default, which is where
+# Emscripten's Module lives. It goes through emscripten_run_script_int and so
+# returns an int -- hence dividing to MB inside the JS rather than in R.
+# eval_js() is marked experimental upstream, so every failure degrades to NA
+# rather than taking the mount down with it.
+wasm_mb <- function() {
+  if (!in_webr()) return(NA_real_)
+  v <- try(webr::eval_js(
+    "(typeof Module !== 'undefined' && Module.HEAPU8) ? (Module.HEAPU8.buffer.byteLength / 1048576) | 0 : -1"
+  ), silent = TRUE)
+  if (inherits(v, "try-error")) return(NA_real_)
+  v <- suppressWarnings(as.numeric(v)[1])
+  if (is.na(v) || v < 0) NA_real_ else v
+}
+
+fmt_mb <- function(x) if (is.na(x)) "n/a" else paste0(round(x), " MB")
+
+absolute_url <- function(session, path) {
+  if (grepl("^https?://", path)) return(path)
+  cd   <- session$clientData
+  host <- cd$url_hostname %||% "localhost"
+  port <- cd$url_port %||% ""
+  if (nzchar(port)) host <- paste0(host, ":", port)
+  dir  <- sub("[^/]*$", "", cd$url_pathname %||% "/")   # page path minus the filename
+  dir  <- sub("app_[^/]*/$", "", dir)                   # ... minus shinylive's virtual app segment
+  if (!nzchar(dir)) dir <- "/"
+  paste0(cd$url_protocol %||% "http:", "//", host, dir, sub("^/+", "", path))
+}
+
+server <- function(input, output, session) {
+  rv <- reactiveValues(con = NULL, status = "Not mounted.", timing = "", bench = NULL,
+                       idb = "Not run. Mount a fixture first, then press Probe IDBFS.",
+                       exts = "Not run.")
+
+  output$mem <- renderText({
+    m <- input$browser_mem
+    if (is.null(m)) return("waiting for probe...")
+    paste0(
+      "MAIN THREAD ONLY -- webR runs in a worker this cannot see.\n",
+      "For wasm memory read the mount status box.\n",
+      "page JS heap used  : ", m$jsHeapMB  %||% "n/a", " MB\n",
+      "page JS heap limit : ", m$jsLimitMB %||% "n/a", " MB")
+  })
+
+  observeEvent(input$mount, {
+    rv$status <- "Mounting..."
+    # An environment rather than a local plus a superassignment: the try() body
+    # below evaluates in a frame that `<<-` would step straight past, silently
+    # leaving the local unchanged. Mutating an environment works from any frame.
+    st <- new.env(parent = emptyenv())
+    st$variant <- NA_integer_
+    # Initialised, not left unset: the local (non-webR) path never assigns these,
+    # and is.na(NULL) is logical(0), which makes `if` an error rather than FALSE.
+    st$wasm_before <- st$wasm_mounted <- st$wasm_opened <- NA_real_
+    # Resolved out here, not inside try(), so the failure message can name it.
+    image_url <- if (in_webr()) absolute_url(session, FIXTURE_IMAGE) else FIXTURE_IMAGE
+    # Published before the attempt, not after: a mount that hangs never reaches
+    # the success or failure branch, and the URL is the whole diagnosis.
+    rv$status <- paste0("Mounting...\nimage url: ", image_url)
+    st$wasm_before <- wasm_mb()
+    t0 <- Sys.time()
+    res <- try({
+      if (in_webr()) {
+        # WORKERFS is the whole question: does it stream from the Blob, or does
+        # it pull the file into linear memory? Watch the wasm number above.
+        dir.create(MOUNTPOINT, showWarnings = FALSE, recursive = TRUE)
+        # webR fetches image_url and the sibling <stem>.js.metadata beside it, so
+        # both files must be served and must differ only in extension.
+        # webr::mount()'s argument names have moved between webR versions. Try the
+        # documented shapes rather than betting the spike on one of them; whichever
+        # succeeds is recorded in the status box.
+        # Check against https://docs.r-wasm.org/webr/latest/mounting.html
+        variants <- list(
+          function() webr::mount(mountpoint = MOUNTPOINT, source = image_url, type = "WORKERFS"),
+          function() webr::mount(mountpoint = MOUNTPOINT, source = image_url),
+          function() webr::mount(MOUNTPOINT, image_url, "WORKERFS")
+        )
+        mounted <- FALSE; errs <- character()
+        for (k in seq_along(variants)) {
+          ok <- try(variants[[k]](), silent = TRUE)
+          if (!inherits(ok, "try-error")) { mounted <- TRUE; st$variant <- k; break }
+          errs <- c(errs, paste0("  [", k, "] ", conditionMessage(attr(ok, "condition"))))
+        }
+        if (!mounted) stop("webr::mount failed, all variants:\n", paste(errs, collapse = "\n"))
+        # Sampled here, before dbConnect: this is "after mount, before any query",
+        # the row the whole spike turns on.
+        st$wasm_mounted <- wasm_mb()
+      }
+      library(DBI); library(duckdb)
+      # shiny::runApp("app") sets the working directory to app/, so a path relative
+      # to the project root does NOT resolve here -- hence the "../". Pass an
+      # absolute path in SPIKE_LOCAL_DB, or one relative to app/.
+      path <- if (in_webr()) FIXTURE_DB else Sys.getenv("SPIKE_LOCAL_DB", "../fixtures/bold_spike_01.duckdb")
+      con  <- dbConnect(duckdb::duckdb(), dbdir = path, read_only = TRUE)
+      meta <- dbGetQuery(con, "SELECT key, value FROM _meta")
+      nrec <- dbGetQuery(con, "SELECT count(*) n FROM specimen")$n
+      # Opening the database and counting rows is already real work, so this is
+      # separated from the mount-only figure above.
+      st$wasm_opened <- wasm_mb()
+      list(con = con, meta = meta, nrec = nrec, path = path)
+    }, silent = TRUE)
+
+    el <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+    if (inherits(res, "try-error")) {
+      # A failure here IS a result. Record the exact message; if WORKERFS is the
+      # blocker this is the sentence that decides 4B vs 4C.
+      rv$status <- paste0("FAILED after ", round(el, 1), "s\n",
+                          "image url: ", image_url, "\n",
+                          "(check the Network tab for a 404 on that URL or its .js.metadata sibling)\n",
+                          as.character(res))
+      return(invisible())
+    }
+    rv$con <- res$con
+    rv$status <- paste0(
+      "Mounted in ", round(el, 1), "s\n",
+      "path     : ", res$path, "\n",
+      "image    : ", image_url, "\n",
+      "mount    : ", if (is.na(st$variant)) "n/a (local)" else paste("webr::mount variant", st$variant), "\n",
+      "specimens: ", format(res$nrec, big.mark = ","), "\n",
+      "wasm     : ", fmt_mb(st$wasm_before), " before -> ", fmt_mb(st$wasm_mounted),
+                     " mounted -> ", fmt_mb(st$wasm_opened), " opened\n",
+      "wasm delta from mount alone: ",
+        if (is.na(st$wasm_mounted) || is.na(st$wasm_before)) "n/a"
+        else paste0(round(st$wasm_mounted - st$wasm_before), " MB"), "\n",
+      paste(sprintf("%-12s: %s", res$meta$key, res$meta$value), collapse = "\n"))
+  })
+
+  # Two-step resolve-then-query, exactly as Phase 3.3 specifies: the taxon table
+  # tells us WHICH rank column to filter on, so step 2 is a single-column
+  # equality that zone maps can prune -- not an OR across ten columns.
+  resolve_taxon <- function(con, name) {
+    dbGetQuery(con,
+      "SELECT taxon_lc, taxon_name, taxon_rank, n_records FROM taxon WHERE taxon_lc = ?",
+      params = list(tolower(trimws(name))))
+  }
+  RANK_COLS <- c(kingdom = "kingdom", phylum = "phylum", class = "class",
+                 order = "order_", family = "family", subfamily = "subfamily",
+                 genus = "genus", species = "species", subspecies = "subspecies")
+
+  run_query <- function(con, name, limit) {
+    t_res <- system.time(res <- resolve_taxon(con, name))[["elapsed"]]
+    if (nrow(res) == 0) return(list(resolved = res, rows = NULL, t_resolve = t_res, t_query = NA))
+    # Rank name comes from a fixed whitelist -- never interpolate user text into
+    # an identifier position. The value itself is bound as a parameter.
+    cols  <- unname(RANK_COLS[res$taxon_rank])
+    keep  <- !is.na(cols)
+    cols  <- cols[keep]
+    names_ <- res$taxon_name[keep]          # each column pairs with its own name
+    if (length(cols) == 0) return(list(resolved = res, rows = NULL, t_resolve = t_res, t_query = NA))
+    where <- paste(sprintf('%s = ?', cols), collapse = " OR ")
+    sql <- sprintf("SELECT * FROM specimen WHERE %s LIMIT %d", where, as.integer(limit))
+    t_q <- system.time(
+      rows <- dbGetQuery(con, sql, params = as.list(names_))
+    )[["elapsed"]]
+    list(resolved = res, rows = rows, t_resolve = t_res, t_query = t_q)
+  }
+
+  observeEvent(input$go, {
+    req(rv$con)
+    out <- run_query(rv$con, input$taxon, input$limit)
+    g <- gc(verbose = FALSE)
+    rv$timing <- paste0(
+      "resolve : ", sprintf("%.3f s", out$t_resolve), "\n",
+      "query   : ", if (is.na(out$t_query)) "not run (taxon not found)"
+                    else sprintf("%.3f s", out$t_query), "\n",
+      "rows    : ", if (is.null(out$rows)) 0 else nrow(out$rows), "\n",
+      "R memory: ", round(sum(g[, 2]), 1), " MB\n",
+      "wasm    : ", fmt_mb(wasm_mb()))
+    rv$resolved <- out$resolved
+    rv$results  <- if (is.null(out$rows)) NULL else utils::head(out$rows, 50)
+  })
+
+  # --- extension probe --------------------------------------------------------
+  # Decides between the two ways of avoiding a whole-snapshot download:
+  #
+  #   httpfs present -> DuckDB can range-request row groups out of one large
+  #                     Parquet on static hosting. No partitioning to build or
+  #                     maintain.
+  #   httpfs absent  -> partition at build time and fetch one partition per
+  #                     query, routed by the `taxon` table.
+  #
+  # The webR duckdb build links parquet and core_functions (visible in its compile
+  # flags); httpfs is not among them, and extension autoloading needs a wasm build
+  # of the extension to fetch. Worth two minutes to confirm rather than assume.
+  output$ext_status <- renderText(rv$exts)
+
+  observeEvent(input$exts, {
+    res <- try({
+      # Its own in-memory connection, so this works before anything is mounted --
+      # which also means DBI/duckdb may not be attached yet.
+      library(DBI); library(duckdb)
+      con <- dbConnect(duckdb::duckdb())
+      on.exit(try(dbDisconnect(con, shutdown = TRUE), silent = TRUE), add = TRUE)
+      e <- dbGetQuery(con, "SELECT extension_name, loaded, installed FROM duckdb_extensions() ORDER BY extension_name")
+      have <- function(x) isTRUE(x %in% e$extension_name)
+      paste0(
+        "httpfs : ", if (have("httpfs")) "PRESENT -> range requests are on the table"
+                     else "ABSENT  -> partition at build time instead", "\n",
+        "parquet: ", if (have("parquet")) "present" else "ABSENT (partitions would have to ship as .duckdb)", "\n\n",
+        paste(sprintf("%-22s loaded=%-5s installed=%s",
+                      e$extension_name, e$loaded, e$installed), collapse = "\n"))
+    }, silent = TRUE)
+    rv$exts <- if (inherits(res, "try-error")) paste0("FAILED\n", as.character(res)) else res
+  })
+
+  # --- IDBFS probe ------------------------------------------------------------
+  # The plan assumes IDBFS can cache the snapshot so it downloads once. But
+  # Emscripten's IDBFS syncs between MEMFS and IndexedDB, so its contents live in
+  # wasm LINEAR MEMORY -- the very thing WORKERFS avoids. If that holds, caching
+  # the snapshot this way trades a re-download for the 4 GB ceiling, which is a
+  # bad trade and would mean the caching layer has to be HTTP-level instead.
+  #
+  # Measured on the 49 MB fixture deliberately: enough to establish whether the
+  # cost is ~1:1 with file size, without risking an out-of-memory tab at 441 MB.
+  output$idb_status <- renderText(rv$idb)
+
+  observeEvent(input$idb, {
+    lines <- character()
+    say <- function(...) lines <<- c(lines, paste0(...))
+
+    res <- try({
+      if (!in_webr()) stop("IDBFS only exists under webR; this is the local R fallback.")
+      w0 <- wasm_mb()
+
+      dir.create(IDB_DIR, showWarnings = FALSE, recursive = TRUE)
+      t0 <- Sys.time()
+      webr::mount(mountpoint = IDB_DIR, type = "IDBFS")
+      # populate = TRUE pulls anything already in IndexedDB into the filesystem.
+      # This is what a second visit would pay.
+      webr::syncfs(TRUE)
+      t_pop <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+      w1 <- wasm_mb()
+
+      target <- file.path(IDB_DIR, basename(FIXTURE_DB))
+      say("mount + syncfs(populate): ", sprintf("%.1f s", t_pop))
+      say("wasm: ", fmt_mb(w0), " -> ", fmt_mb(w1),
+          "  (delta ", if (is.na(w1) || is.na(w0)) "n/a" else paste0(round(w1 - w0), " MB"), ")")
+
+      if (file.exists(target)) {
+        say("")
+        say("CACHED ALREADY: ", target)
+        say("size: ", sprintf("%.1f MB", file.size(target) / 1024^2))
+        say("")
+        say("=> The snapshot survived the reload. The wasm delta above is what")
+        say("   restoring it costs in LINEAR MEMORY on every visit.")
+      } else {
+        say("")
+        say("Not cached yet. Copying the mounted database into IDBFS...")
+        src <- FIXTURE_DB
+        if (!file.exists(src)) stop("Mount a fixture first -- ", src, " is not there.")
+        sz <- file.size(src) / 1024^2
+        if (sz > IDB_MAX_MB) {
+          stop(sprintf(paste0(
+            "Refusing to copy %.0f MB into IDBFS (limit %d MB).\n",
+            "IDBFS is MEMFS plus persistence, so this copies the image into wasm\n",
+            "linear memory, which is the documented way to kill the tab at this\n",
+            "size. Point app.R at bold_spike_01 and re-export: 49 MB establishes\n",
+            "whether the cost scales 1:1, which is all this probe needs to show."),
+            sz, IDB_MAX_MB))
+        }
+        t1 <- Sys.time()
+        ok <- file.copy(src, target, overwrite = TRUE)
+        t_copy <- as.numeric(difftime(Sys.time(), t1, units = "secs"))
+        w2 <- wasm_mb()
+        if (!ok) stop("file.copy into IDBFS failed")
+
+        t2 <- Sys.time()
+        webr::syncfs(FALSE)   # persist to IndexedDB
+        t_sync <- as.numeric(difftime(Sys.time(), t2, units = "secs"))
+        w3 <- wasm_mb()
+
+        say("copied ", sprintf("%.1f MB", sz), " in ", sprintf("%.1f s", t_copy))
+        say("syncfs(persist): ", sprintf("%.1f s", t_sync))
+        say("wasm: ", fmt_mb(w1), " -> ", fmt_mb(w2), " after copy -> ", fmt_mb(w3), " after sync")
+        say("wasm delta from the copy alone: ",
+            if (is.na(w2) || is.na(w1)) "n/a" else paste0(round(w2 - w1), " MB"),
+            "   (image is ", sprintf("%.0f MB", sz), ")")
+        say("")
+        say("=> If that delta is ~the image size, IDBFS holds the snapshot in")
+        say("   linear memory and is the WRONG cache for it. Reload and press")
+        say("   Probe IDBFS again to see what a second visit costs.")
+      }
+      TRUE
+    }, silent = TRUE)
+
+    if (inherits(res, "try-error")) {
+      rv$idb <- paste0("FAILED\n", paste(lines, collapse = "\n"), "\n", as.character(res))
+    } else {
+      rv$idb <- paste(lines, collapse = "\n")
+    }
+  })
+
+  # Does memory grow across repeated queries, or is it stable? A slow leak is the
+  # difference between "works in a demo" and "survives a three-hour practical".
+  observeEvent(input$bench, {
+    req(rv$con)
+    n <- as.integer(input$n_rep)
+    rows <- lapply(seq_len(n), function(i) {
+      out <- run_query(rv$con, input$taxon, input$limit)
+      g <- gc(verbose = FALSE)
+      data.frame(i = i,
+                 resolve_s = round(out$t_resolve, 3),
+                 query_s   = round(out$t_query, 3),
+                 rows      = if (is.null(out$rows)) 0L else nrow(out$rows),
+                 R_mem_MB  = round(sum(g[, 2]), 1))
+    })
+    df <- do.call(rbind, rows)
+    rv$bench <- df
+    rv$timing <- paste0(
+      "benchmark: ", n, " consecutive queries\n",
+      "query s  : min ", min(df$query_s, na.rm = TRUE),
+      "  median ", median(df$query_s, na.rm = TRUE),
+      "  max ", max(df$query_s, na.rm = TRUE), "\n",
+      "R mem MB : first ", df$R_mem_MB[1], "  last ", df$R_mem_MB[n],
+      "  delta ", round(df$R_mem_MB[n] - df$R_mem_MB[1], 1))
+  })
+
+  output$mount_status <- renderText(rv$status)
+  output$timing       <- renderText(rv$timing)
+  output$resolved     <- renderTable({ rv$resolved })
+  output$results      <- renderTable({
+    if (!is.null(rv$bench)) rv$bench else rv$results
+  })
+
+  session$onSessionEnded(function() {
+    if (!is.null(isolate(rv$con))) try(DBI::dbDisconnect(isolate(rv$con)), silent = TRUE)
+  })
+}
+
+
+shinyApp(ui, server)

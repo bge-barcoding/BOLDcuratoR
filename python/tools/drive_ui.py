@@ -1,0 +1,190 @@
+#!/usr/bin/env python3
+"""Click through the running UI in a real browser, and report what happened.
+
+**This is not optional colour.** Two controls in the Phase 3.1 spike -- the
+descending toggle and the rows-per-page select -- rendered perfectly, accepted
+clicks and did nothing, because their inputs were read inside
+``reactive.isolate()`` and so took no reactive dependency on them. Every unit
+test passed. The bugs were obvious on the first click and invisible to
+everything else, and a third of the same family (a pager that kept reporting
+the old page count) turned up on the next run.
+
+Start the app, then drive it::
+
+    python -m boldcurator.cli gui --snapshot fixture.duckdb --port 8765 &
+    python tools/drive_ui.py --out /tmp/shots
+
+Needs a browser, which the test suite deliberately does not::
+
+    pip install playwright && playwright install chromium
+
+Exits non-zero if any check fails.
+"""
+
+from __future__ import annotations
+
+import argparse
+import time
+from pathlib import Path
+
+SETTLE = 2.0          # seconds to let Shiny round-trip after an interaction
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--url", default="http://127.0.0.1:8765/")
+    parser.add_argument("--out", type=Path, default=Path("ui-screenshots"))
+    parser.add_argument("--taxon", default="Lepidoptera")
+    parser.add_argument("--browser", default=None,
+                        help="path to a chromium binary, if playwright's own "
+                             "download is not where it expects it")
+    args = parser.parse_args(argv)
+    args.out.mkdir(parents=True, exist_ok=True)
+
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        print("playwright is not installed: pip install playwright && "
+              "playwright install chromium")
+        return 2
+
+    failures: list[str] = []
+
+    def check(name: str, ok: bool, detail: str = "") -> None:
+        print(f"  [{'PASS' if ok else 'FAIL'}] {name}"
+              f"{'  -- ' + detail if detail else ''}")
+        if not ok:
+            failures.append(name)
+
+    with sync_playwright() as pw:
+        launch = {"executable_path": args.browser} if args.browser else {}
+        browser = pw.chromium.launch(**launch)
+        page = browser.new_page(viewport={"width": 1700, "height": 1050})
+        js_errors: list[str] = []
+        page.on("pageerror", lambda e: js_errors.append(str(e)))
+        page.goto(args.url, wait_until="networkidle")
+
+        def table_text(selector: str) -> str:
+            """Only the table.
+
+            The toolbar holds a flag <select> whose options include every flag
+            name, so matching against the whole panel's text reports a
+            success for an annotation that never rendered.
+            """
+            table = page.locator(f"{selector} table")
+            return table.inner_text() if table.count() else ""
+
+        def show(name: str, settle: float = 3.0) -> None:
+            # has-text, not text-is: the priority grades carry a bullet in
+            # their label, so an exact match finds nothing.
+            page.click(f"a.nav-link:has-text('{name}')")
+            time.sleep(settle)
+
+        # -- the pre-check, before anything is fetched
+        page.fill("#user", "Driver")
+        page.fill("#taxa", args.taxon)
+        page.click("#check")
+        time.sleep(SETTLE)
+        sized = page.locator("#estimate_box").inner_text()
+        check("the pre-check sizes the search", "Matching records" in sized,
+              " ".join(sized.split())[:90])
+        page.screenshot(path=str(args.out / "00-input.png"), full_page=True)
+
+        # a geographic filter must visibly narrow it
+        page.fill("#countries", "France")
+        page.click("#check")
+        time.sleep(SETTLE)
+        check("a country filter narrows the pre-check",
+              page.locator("#estimate_box").inner_text() != sized)
+        page.fill("#countries", "")
+        page.check("input[name='continents'][value='Europe']")
+        page.click("#check")
+        time.sleep(SETTLE)
+        check("a continent can be ticked",
+              "Matching records" in page.locator("#estimate_box").inner_text())
+        page.uncheck("input[name='continents'][value='Europe']")
+
+        # -- search
+        page.click("#search")
+        time.sleep(SETTLE * 2.5)
+        check("search lands on the species checklist",
+              "Species" in page.locator("a.nav-link.active").inner_text())
+        check("the checklist has rows", bool(table_text("#species_body")))
+        page.screenshot(path=str(args.out / "01-species.png"), full_page=True)
+
+        show("BINs")
+        check("the BIN dashboard has rows", bool(table_text("#bins_body")))
+        page.screenshot(path=str(args.out / "02-bins.png"), full_page=True)
+
+        # -- the grade screens, and the group navigator
+        for grade in ("E", "C", "A"):
+            show(f"BAGS {grade}")
+            groups = page.locator(f"#group_{grade} option").count()
+            body = page.locator(f"#grade_{grade}_body").inner_text()
+            if "No species graded" in body:
+                check(f"grade {grade} reports an empty grade cleanly", True,
+                      "no species at this grade")
+                continue
+            check(f"grade {grade} splits into groups", groups >= 1,
+                  f"{groups} groups")
+            first = page.locator(f"#grade_{grade}_body strong").first.inner_text()
+            if groups > 1:
+                page.click(f"#next_{grade}")
+                time.sleep(SETTLE)
+                moved = page.locator(f"#grade_{grade}_body strong").first.inner_text()
+                check(f"grade {grade} Next moves to another problem",
+                      moved != first, f"{first} -> {moved}")
+                page.click(f"#prev_{grade}")
+                time.sleep(SETTLE)
+            page.screenshot(path=str(args.out / f"03-bags-{grade}.png"),
+                            full_page=True)
+
+        # -- annotate one group, and prove it stays in that group
+        show("BAGS C") if page.locator("#group_C").count() else show("BAGS E")
+        grade = "C" if page.locator("#group_C").count() else "E"
+        first = page.locator(f"#grade_{grade}_body strong").first.inner_text()
+        page.click(f"#selall_{grade}")
+        time.sleep(SETTLE)
+        page.select_option(f"#g{grade}_flag", "synonym")
+        page.fill(f"#g{grade}_note", "driven by drive_ui")
+        page.click(f"#g{grade}_apply")
+        time.sleep(SETTLE * 1.5)
+        annotated = table_text(f"#grade_{grade}_body")
+        check("the flag lands in the group's table", "synonym" in annotated)
+        check("the note lands in the group's table", "driven by drive_ui" in annotated)
+        page.screenshot(path=str(args.out / "04-annotated.png"), full_page=True)
+
+        if page.locator(f"#group_{grade} option").count() > 1:
+            page.click(f"#next_{grade}")
+            time.sleep(SETTLE * 1.5)
+            other = table_text(f"#grade_{grade}_body")
+            check("the next group is untouched",
+                  "synonym" not in other and "driven by drive_ui" not in other)
+
+        # -- the paged specimen table
+        show("Specimens", settle=SETTLE * 1.5)
+        header = page.locator("#specimens_body table thead").inner_text()
+        check("the specimen table carries the BAGS grade once analysed",
+              "bags_grade" in header, header.replace("\n", " "))
+        before = table_text("#specimens_body")[:200]
+        page.click("#next_")
+        time.sleep(SETTLE)
+        check("paging moves to different rows",
+              table_text("#specimens_body")[:200] != before)
+        page.select_option("#sort", "processid")
+        time.sleep(SETTLE * 1.5)
+        page.check("#descending")
+        time.sleep(SETTLE * 1.5)
+        check("sorting the specimen table works", bool(table_text("#specimens_body")))
+        page.screenshot(path=str(args.out / "05-specimens.png"), full_page=True)
+
+        check("no javascript errors", not js_errors, "; ".join(js_errors))
+        browser.close()
+
+    print(f"\n{len(failures)} failed" if failures else "\nall checks passed")
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
