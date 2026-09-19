@@ -122,10 +122,13 @@ def main(argv: list[str] | None = None) -> int:
         check("search lands on the species checklist",
               "Species" in page.locator("a.nav-link.active").inner_text())
         check("the checklist has rows", bool(table_text("#species_body")))
-        gap_text = table_text("#species_body")
+        page.screenshot(path=str(args.out / "01-species.png"), full_page=True)
+
+        show("Gap analysis")
+        gap_text = table_text("#gap_body")
         check("gap analysis reports on the taxon actually typed",
               args.taxon in gap_text and ("Found" in gap_text or "Missing" in gap_text))
-        page.screenshot(path=str(args.out / "01-species.png"), full_page=True)
+        page.screenshot(path=str(args.out / "01b-gap-analysis.png"), full_page=True)
 
         show("BINs")
         check("the BIN dashboard has rows", bool(table_text("#bins_body")))

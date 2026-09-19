@@ -351,6 +351,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 ),
                 value="input",
             ),
+            ui.nav_panel("Gap analysis", ui.output_ui("gap_body"), value="gap"),
             ui.nav_panel("Species", ui.output_ui("species_body"), value="species"),
             ui.nav_panel("BINs", ui.output_ui("bins_body"), value="bins"),
             *[_grade_panel(g) for g in GRADES],
@@ -398,7 +399,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             """
             @reactive.effect
             @reactive.event(input[input_id])
-            def _sort(input_id=input_id, sort_state=sort_state):
+            def _sort():
                 column = input[input_id]()
                 if not column:
                     return
@@ -450,7 +451,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             for value in group_index.values():
                 value.set(0)
             if state.search is not None:
-                ui.update_navs("nav", selected="species")
+                ui.update_navset("nav", selected="species")
             touch()
 
         # -- session save/resume (plan 3.8) ---------------------------------
@@ -545,7 +546,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             offset.set(0)
             for value in group_index.values():
                 value.set(0)
-            ui.update_navs("nav", selected="species")
+            ui.update_navset("nav", selected="species")
             session_msg.set(" ".join([text] + warnings))
             touch()
 
@@ -654,6 +655,42 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 touch()
             return result
 
+        # -- gap analysis -----------------------------------------------------
+        #
+        # Round 4, item 5: its own tab, above Species -- it was crowding the
+        # checklist, and "did the search find every taxon typed" is a
+        # different question from "here is every species found."
+
+        @output
+        @render.ui
+        def gap_body():
+            def body(search):
+                gaps = search.gap_analysis(store)
+                # Gap analysis only has something to say when taxa were
+                # actually typed -- a dataset/project-code-only search has no
+                # "did the search find what I typed" question to answer.
+                if not len(gaps):
+                    return ui.div(
+                        "No taxa were typed in this search -- nothing to check "
+                        "against.", class_="text-muted")
+                found = int((gaps["status"] == "Found").sum())
+                missing = int((gaps["status"] == "Missing").sum())
+                return ui.div(
+                    ui.tags.span(
+                        "Every taxon typed, matched against synonyms too, and "
+                        "whether the search actually found it.",
+                        class_="text-muted"),
+                    ui.div(
+                        value_box(f"{found:,}", "Found", "#28a745"),
+                        value_box(f"{missing:,}", "Missing", "#dc3545"),
+                        style="display:flex;gap:10px;margin:10px 0 12px;"
+                              "flex-wrap:wrap;",
+                    ),
+                    ui.HTML(_gap_html(_sorted_by(gaps, gap_sort),
+                                      sort_state=gap_sort.get())),
+                )
+            return _needs_analysis(body)
+
         # -- species checklist ---------------------------------------------
 
         @output
@@ -671,39 +708,12 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                                                  errors="ignore"),
                     checklist_sort)
                 counts = search.grade_counts(store)
-                gaps = search.gap_analysis(store)
-                # Gap analysis only has something to say when taxa were
-                # actually typed -- a dataset/project-code-only search has no
-                # "did the search find what I typed" question to answer.
-                gap_section = ui.div()
-                if len(gaps):
-                    found = int((gaps["status"] == "Found").sum())
-                    missing = int((gaps["status"] == "Missing").sum())
-                    gap_section = ui.div(
-                        ui.tags.strong("Gap analysis"),
-                        ui.tags.span(
-                            "  — every taxon typed, matched against synonyms "
-                            "too, and whether the search actually found it",
-                            style="opacity:.9;"),
-                        ui.div(
-                            value_box(f"{found:,}", "Found", "#28a745"),
-                            value_box(f"{missing:,}", "Missing", "#dc3545"),
-                            style="display:flex;gap:10px;margin:10px 0 12px;"
-                                  "flex-wrap:wrap;",
-                        ),
-                        ui.HTML(_gap_html(_sorted_by(gaps, gap_sort),
-                                          sort_state=gap_sort.get())),
-                        style="background:#f8f9fa;border:1px solid #dee2e6;"
-                              "border-radius:5px;padding:10px 14px;"
-                              "margin-bottom:16px;",
-                    )
                 return ui.div(
                     ui.div(
                         *[value_box(f"{counts.get(g, 0):,}", f"Grade {g}",
                                     GRADE_COLOURS[g]) for g in GRADES],
                         style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap;",
                     ),
-                    gap_section,
                     ui.download_button("dl_species_analysis",
                                        "Download species analysis (xlsx)",
                                        class_="btn-sm mb-2"),
@@ -734,8 +744,6 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                                   "Concordant BINs", "#28a745"),
                         value_box(f"{summary['discordant_bins']:,}",
                                   "Discordant BINs", "#dc3545"),
-                        value_box(f"{summary['shared_bins']:,}",
-                                  "BINs with >1 species", "#f0ad4e"),
                         style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap;",
                     ),
                     ui.download_button("dl_bin_analysis",
@@ -834,12 +842,12 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         def _register_grade(grade: str):
             @output(id=f"grade_{grade}_body")
             @render.ui
-            def _body(grade=grade):
+            def _body():
                 return _grade_body(grade)
 
             @reactive.effect
             @reactive.event(input[f"prev_{grade}"])
-            def _prev(grade=grade):
+            def _prev():
                 group_index[grade].set(max(0, group_index[grade].get() - 1))
                 ui.update_select(f"group_{grade}",
                                  selected=str(group_index[grade].get()))
@@ -847,7 +855,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
 
             @reactive.effect
             @reactive.event(input[f"next_{grade}"])
-            def _next(grade=grade):
+            def _next():
                 search = state.search
                 if search is None:
                     return
@@ -859,7 +867,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
 
             @reactive.effect
             @reactive.event(input[f"group_{grade}"])
-            def _pick(grade=grade):
+            def _pick():
                 chosen = input[f"group_{grade}"]()
                 if chosen is not None and str(chosen).isdigit():
                     group_index[grade].set(int(chosen))
@@ -867,7 +875,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
 
             @reactive.effect
             @reactive.event(input[f"selall_{grade}"])
-            def _check_group(grade=grade):
+            def _check_group():
                 group = _current_group(grade)
                 if group is not None:
                     # Replaces the checked set rather than adding to it.
@@ -883,7 +891,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
 
             @reactive.effect
             @reactive.event(input[f"clear_{grade}"])
-            def _clear_group(grade=grade):
+            def _clear_group():
                 group = _current_group(grade)
                 if group is not None:
                     for pid in group.specimens["processid"]:
@@ -892,7 +900,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
 
             @reactive.effect
             @reactive.event(input[f"g{grade}_apply"])
-            def _apply_group(grade=grade):
+            def _apply_group():
                 group = _current_group(grade)
                 scope = ({str(pid) for pid in group.specimens["processid"]}
                         if group is not None else set())
@@ -1197,7 +1205,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             @render.download_button(
                 filename=lambda: (f"{_TSV_FILENAME_STEM[kind]}_"
                                   f"{export_io.timestamp()}.tsv"))
-            def _handler(kind=kind):
+            def _handler():
                 search = state.search
                 if search is None:
                     yield from _empty_download("run a search first")
@@ -1224,7 +1232,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 filename=lambda: (
                     f"{'selected_' if selected_only else ''}"
                     f"sequences_{export_io.timestamp()}.fasta"))
-            def _handler(selected_only=selected_only):
+            def _handler():
                 search = state.search
                 if search is None:
                     yield from _empty_download("run a search first")
