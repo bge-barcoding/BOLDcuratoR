@@ -445,30 +445,40 @@ plus one per build tool) and `python -m boldcurator.cli` works from a plain
 `pip install -e .`. What Phase 4 actually still needs is turning that into
 something a curator double-clicks, which is three separable decisions:
 
-- [ ] **4.1a Window vs. browser tab.** The plan's original "opens in the
-  browser" outcome is the zero-dependency option: the installed app starts
-  the Shiny server and opens the user's default browser to it. It works, but
-  leaves a console window running the server and nothing to double-click to
-  quit — closing the browser tab does not stop it. The alternative is
-  wrapping the same server in [`pywebview`](https://pywebview.flowrl.com/) —
-  a small, pure-Python native window around a webview (WKWebView on macOS,
-  no extra runtime; WebView2 on Windows, preinstalled on current Win10/11) —
-  so the app looks and behaves like a normal desktop app and closing its
-  window stops the server. One added dependency, a day or so of wiring
-  (start the Shiny server in a background thread, point a `webview.Window`
-  at `http://127.0.0.1:<port>`, stop the server in the window's `closed`
-  event). **Recommend pywebview** for a curator-facing tool — this is a
-  non-developer audience and "there's a terminal window, don't close it" is
-  a real support cost. Needs a decision, not a default.
-- [ ] **4.2 First-run flow**: no snapshot configured → a setup screen with
-  three paths in, matching how curators will actually have the data (see
-  "Packaging and data loading" below for the design): a file picker for an
-  existing `.duckdb`, a download (via the new `fetch_snapshot` machinery,
-  §5.1, below), or pointing at a raw BOLD `.tsv.gz` package to build
-  in-app. Store the resolved path in a platform config dir (e.g.
-  `platformdirs.user_config_dir("boldcurator")`) so it is only asked once.
-  Not built yet — blocked on 4.1a, since the setup screen's shape (a Shiny
-  page vs. a native dialog) depends on it.
+- [x] **4.1a Window vs. browser tab — decided: native window.** The plan's
+  original "opens in the browser" outcome was the zero-dependency option,
+  but leaves a console window running the server and nothing to
+  double-click to quit. **Decided with the project owner: wrap the server
+  in [`pywebview`](https://pywebview.flowrl.com/)** — a small, pure-Python
+  native window around a webview (WKWebView on macOS, no extra runtime;
+  WebView2 on Windows, preinstalled on current Win10/11) — so the app looks
+  and behaves like a normal desktop app and closing its window stops the
+  server. Built in `src/boldcurator/desktop.py`: starts the Shiny app as a
+  plain ASGI app under `uvicorn` in a background thread (not
+  `shiny.run_app`, which blocks and owns signal handling), opens a
+  `pywebview` window at the local URL, stops the server when the window
+  closes. `pywebview` is imported lazily inside the functions that actually
+  open a window, so config persistence and server lifecycle
+  (`tests/test_desktop.py`) stay testable without it — this sandbox has no
+  native webview backend to run it against (WKWebView/WebView2 are present
+  by default on macOS/Windows only), so the window-opening code itself is
+  **not verified live here**; that needs a machine of the target OS, same
+  as 4.3.
+- [x] **4.2 First-run flow — decided: two paths, not three.** No snapshot
+  configured → `src/boldcurator/ui/setup.py`, an ordinary Shiny app (so it
+  *is* fully testable, unlike the `pywebview` wrapper around it — driven
+  live with Playwright against a plain `uvicorn` server) offering an
+  existing `.duckdb` file's path (checked with `SnapshotStore` before being
+  accepted) or a URL/`manifest.json`/Zenodo id downloaded via
+  `fetch_snapshot` (§5.1) with a live progress readout. **The third path —
+  building from a raw BOLD `.tsv.gz` in-app — was decided against for v1**
+  (see "Packaging and data loading" below): it stays a documented
+  `tools/build_snapshot.py` step for whoever maintains the snapshot, not a
+  GUI feature, since that ~24-minute background build is a maintainer's
+  job, not a curator's. The resolved path is stored in
+  `~/.boldcurator/config.json` (plain JSON, not `platformdirs` — consistent
+  with `DEFAULT_SESSIONS_PATH`'s own choice not to add that dependency for
+  the core CLI) so this only happens once.
 - [ ] 4.3 **PyInstaller, not Briefcase.** Both were named as options
   originally; PyInstaller is the better fit now that the shape is settled
   (a local web server plus an optional pywebview window, not a Toga-native
@@ -537,21 +547,17 @@ first-run screen (4.2):
    point the app at BOLDcuratoR's Zenodo concept DOI once, and every future
    launch's "check for updates" (5.3) is a no-op until a new snapshot is
    actually published.
-3. **Build one from a raw BOLD `.tsv.gz` package.** `tools/build_snapshot.py`
-   already does this (Phase 0) — what is missing is wiring it in as a
-   first-run option: pick the `.tsv.gz`, run the builder as a background
-   job with a progress readout, land on the same "snapshot ready" state as
-   paths 1 and 2. This path is for whoever maintains the snapshot (they
+3. **Build one from a raw BOLD `.tsv.gz` package — decided: stays CLI-only
+   for v1.** `tools/build_snapshot.py` already does this (Phase 0); the
+   first-run screen (`ui/setup.py`) deliberately does **not** offer it as a
+   third option. This path is for whoever maintains the snapshot (they
    already have the raw package from BOLD directly), not the typical
    curator — a full ingest measured **~24 minutes** and needs several GB of
    free disk (`python/PROGRESS.md`'s "Where the real data stands" section
-   has the measured figures), which is worth surfacing plainly before
-   starting, not after. **Open question**: build this into the GUI for v1,
-   or leave it as the documented `tools/build_snapshot.py` CLI step for the
-   one or two people who will ever use it, and give curators only paths 1-2
-   in the first-run screen. Leaning toward the latter for v1 — it is real
-   UI work (a progress screen for a 24-minute background job) for an
-   audience of maintainers, who are comfortable with a CLI already.
+   has the measured figures). Building a progress screen for a 24-minute
+   background job is real UI work for an audience of one or two people who
+   are comfortable with a CLI already; the project owner agreed it is not
+   worth it for v1. Revisit if that audience or its size changes.
 
 ---
 

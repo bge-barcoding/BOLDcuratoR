@@ -12,38 +12,44 @@ pinned while scrolling, "Apply to checked" scoped to the current BAGS group,
 gap analysis on the Species screen, the CC-BY-SA 4.0 attribution requirement
 in the app and every export, and **session save/resume wired end to end**.
 Two full rounds of curator-reported bugs (9 issues) are fixed and verified
-live. 275 tests pass, the parity gate is green. `fetch_snapshot` (plan 5.1)
-is done. What's left is packaging (Phase 4) and the rest of distribution
-(Phase 5) -- getting this in front of curators.
+live. 283 tests pass, the parity gate is green. `fetch_snapshot` (plan 5.1)
+and the desktop launcher + first-run setup screen (4.1a/4.2) are done. What's
+left is the actual installer build (4.3), signing (4.4), and the rest of
+distribution (Phase 5) -- getting this in front of curators.
 
 ## NEXT SESSION — START HERE, in priority order
 
 No open curator-reported bugs right now — both feedback rounds are closed
 (see the two "Open issues" sections below for what was wrong and how each was
-fixed, if a similar bug resurfaces). Phase 3 is now entirely done, so what's
-left is packaging and distribution -- everything between here and a curator
-double-clicking an installer. **A design pass happened this session** (see
-`docs/python-app-plan.md`'s new "Packaging and data loading" section) and
-one real decision is waiting on the project owner before 4.1a/4.2/4.3 can
-be built: native window (pywebview) vs. plain browser tab. 4.4 (code
-signing) needs a budget decision too, but does not block getting an unsigned
-build in front of curators for testing.
+fixed, if a similar bug resurfaces). Phase 3 is entirely done, and this
+session closed the three decisions that were blocking packaging: **native
+window** (pywebview, not a browser tab), **unsigned builds for now** (no
+signing budget spent yet), and **the raw-TSV-to-snapshot build stays a
+maintainer-only CLI step**, not a GUI feature. `desktop.py` and `ui/setup.py`
+implement the first two; nothing changed for the third (it was already
+`tools/build_snapshot.py`, undisturbed). What's left is the actual build:
 
-1. **CI workflow (plan 2.6) — still manual.** 275 tests and the parity
+1. **CI workflow (plan 2.6) — still manual.** 283 tests and the parity
    harness run only when someone remembers to. A GitHub Actions matrix
    (Linux/macOS/Windows) that installs, runs pytest and runs
    `parity/compare.py` needs no real snapshot: `conftest.py` builds the
    fixture, and `tests/make_fake_package.py` generates the source. Worth
    doing before the GUI grows further -- every session so far has shipped a
    real bug that only a browser run caught (see "the rules this session cost
-   the most to learn" below); CI at least keeps the 275 non-visual tests from
+   the most to learn" below); CI at least keeps the 283 non-visual tests from
    silently regressing.
-2. **Packaging (Phase 4) — blocked on one decision.** `docs/python-app-plan.md`
-   lays out the recommendation (pywebview + PyInstaller, not Briefcase) and
-   why; 4.1a (window vs. browser tab) needs a yes/no before 4.2 (first-run
-   flow) and 4.3 (the actual installer builds) can start, since the
-   first-run screen's shape depends on it.
-3. **Also open, not urgent:**
+2. **4.3 PyInstaller builds — not started.** `boldcurator desktop` is the
+   entry point to bundle (`docs/python-app-plan.md` has the reasoning for
+   PyInstaller over Briefcase, `--onedir` over `--onefile`). Needs actually
+   running PyInstaller against this codebase for the first time, which
+   nothing here has done yet -- DuckDB's compiled extension and pywebview's
+   native backend are the two things most likely to need a hook or a
+   `--collect-all`, going by how both packages are usually packaged. **Not
+   verified in this sandbox** -- no display server here to smoke-test even a
+   built executable, let alone build native mac/Windows installers from a
+   Linux container. First real test needs a machine of the target OS.
+3. **4.5 Smoke test each installer once 4.3 exists.**
+4. **Also open, not urgent:**
    - The R app (not this rewrite) rejects 4% of real BOLD dataset codes --
      `mod_data_import_utils.R:50`'s `^DS-[A-Z0-9]+$` pattern; 544 of 13,706
      real `DS-` codes don't match. Live bug in the *shipped* app. The SQL to
@@ -53,11 +59,56 @@ build in front of curators for testing.
      subset) -- ~0.4 s a pass, not worth fixing without a curator waiting on
      it.
 
-Before starting any of the above: `python -m pytest tests/ -q` (275 passing)
+Before starting any of the above: `python -m pytest tests/ -q` (283 passing)
 and `python parity/compare.py` (PASS) from a clean checkout, per "First, 60
 seconds of setup" below -- and drive any UI change through
 `tools/drive_ui.py` before believing it works, per "the rules this session
 cost the most to learn."
+
+## Packaging: native window and first-run setup (4.1a/4.2) -- resolved
+
+Three decisions were blocking packaging; the project owner made all three
+this session: **native window** over a plain browser tab, **unsigned
+builds** for curator testing rather than paying for signing up front, and
+**the raw-TSV-to-snapshot build stays a CLI-only, maintainer step** rather
+than a GUI feature. The first two are built:
+
+- `desktop.py` -- `boldcurator desktop` wraps the same Shiny app
+  `boldcurator gui` runs in a native `pywebview` window instead of a
+  browser tab: starts the app as a plain ASGI app under `uvicorn` in a
+  background thread (not `shiny.run_app`, which blocks and owns signal
+  handling), opens a window pointed at it, and stops the server when the
+  window closes. `pywebview` is imported lazily, inside the functions that
+  actually open a window -- config persistence and server lifecycle stay
+  testable without it, which matters here specifically: `pywebview` needs a
+  native webview backend (WKWebView/WebView2, present by default on macOS/
+  Windows) this Linux sandbox does not have, so none of it could otherwise
+  be exercised at all.
+- `ui/setup.py` -- the first-run screen (plan 4.2), shown once when no
+  snapshot is configured yet (`desktop.load_snapshot_path` returns `None`,
+  reading `~/.boldcurator/config.json`). Two tabs: an existing `.duckdb`
+  file's path (opened and checked with `SnapshotStore` before being
+  accepted), or a URL/manifest.json/Zenodo id downloaded via
+  `build.fetch_snapshot` in a background thread with a live progress
+  readout. Deliberately does **not** offer building from a raw `.tsv.gz` --
+  see `docs/python-app-plan.md`'s "Packaging and data loading" section for
+  why that stays `tools/build_snapshot.py`. It is an ordinary Shiny app, so
+  -- unlike the pywebview wrapper around it -- it is fully testable the same
+  way every other screen in this app is.
+
+New tests: `tests/test_desktop.py` (8 cases -- config persistence,
+`run_server`'s start/serve/stop lifecycle against a trivial ASGI app, and
+`launch()`'s orchestration logic against a fake `webview` module injected
+into `sys.modules`, since the real one isn't installable here). Verified
+live: the setup screen itself needs no `pywebview` at all (it is just
+another Shiny app), so it was driven directly with Playwright against a
+plain `uvicorn` server -- a missing file is reported, a real snapshot is
+accepted and described, a failed download reports why, and a real download
+against a local HTTP server completes and is accepted (5/5 checks). The
+`pywebview` window wrapper itself (`desktop.py`'s `launch`/`_run_setup`) is
+**not** verified live in this sandbox -- there is no display server and no
+native webview backend to run it against; that needs an actual macOS or
+Windows machine, which is also what 4.3 (the PyInstaller build) needs.
 
 ## Session save/resume (plan 3.8) -- resolved
 
@@ -316,7 +367,7 @@ to learn" below for why that matters here specifically.
 cd C:\GitHub\BOLDcurator\python
 git pull
 pip install -e ".[dev,gui]"
-python -m pytest tests/ -q          # 275 passing
+python -m pytest tests/ -q          # 283 passing
 python parity/compare.py            # PASS
 
 python -m boldcurator.cli gui --snapshot "<the reordered snapshot>"
@@ -759,11 +810,14 @@ surfacing in the UI rather than letting a curator assume otherwise.
 - [x] 5.1 `tools/fetch_snapshot.py` / `boldcurator fetch-snapshot` -- URL,
       manifest.json or Zenodo record/concept id; no-op when the snapshot id
       is unchanged
-- [ ] 4.1a window vs. browser tab (pywebview recommended) -- **blocked on a
-      project-owner decision**, see `docs/python-app-plan.md`
-- [ ] 4.2 first-run flow (blocked on 4.1a)
-- [ ] 4.3 PyInstaller builds on a CI matrix (blocked on 4.1a/4.2)
-- [ ] 4.4 signing -- **blocked on a budget decision**, not required to ship
+- [x] 4.1a window vs. browser tab -- **decided: native window.**
+      `desktop.py` wraps the Shiny app in a `pywebview` window
+- [x] 4.2 first-run flow -- `ui/setup.py`; existing file or a
+      fetch_snapshot-backed download; the raw-TSV path stays CLI-only
+      (`tools/build_snapshot.py`), by decision, not built into the GUI
+- [ ] 4.3 PyInstaller builds on a CI matrix -- not started; needs a machine
+      of the target OS to smoke-test against, which this sandbox is not
+- [ ] 4.4 signing -- **decided: unsigned for now**, not required to ship
       an unsigned build for curator testing
 - [ ] 4.5 installer smoke test
 - [ ] 5.2 publish to Zenodo -- blocked on having an account/community
