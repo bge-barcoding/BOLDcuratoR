@@ -539,6 +539,14 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
                         merge_annotations(group.specimens, state.annotations),
                         state.annotations),
                     group_sort)
+                # "Apply to checked" (and the count below) must act only on
+                # this group's own records -- Annotations.working is one
+                # global set, and checking rows via the per-row checkbox
+                # (rather than "Check this group", which replaces it) could
+                # otherwise leave an earlier group's checks live and get them
+                # annotated together with this one's.
+                group_pids = {str(pid) for pid in group.specimens["processid"]}
+                checked_here = state.annotations.working & group_pids
                 # A/B/D group one species at a time; C/E group one BIN at a
                 # time (species split across BINs, or a BIN shared between
                 # species) -- "problem" told a curator neither.
@@ -583,8 +591,11 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
                             ui.input_action_button(f"clear_{grade}",
                                                    "Clear checked",
                                                    class_="btn-sm"),
-                            ui.div(f"{len(state.annotations.working):,} "
-                                   "checked",
+                            ui.div(f"{len(checked_here):,} checked here"
+                                   + (f" ({len(state.annotations.working):,} "
+                                      "checked in total)"
+                                      if len(state.annotations.working)
+                                      > len(checked_here) else ""),
                                    class_="small text-muted pt-1"),
                             style="display:flex;flex-direction:column;gap:4px;",
                         ),
@@ -661,7 +672,10 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
             @reactive.effect
             @reactive.event(input[f"g{grade}_apply"])
             def _apply_group(grade=grade):
-                _apply(f"g{grade}")
+                group = _current_group(grade)
+                scope = ({str(pid) for pid in group.specimens["processid"]}
+                        if group is not None else set())
+                _apply(f"g{grade}", scope=scope)
 
         def _current_group(grade: str):
             search = state.search
@@ -677,11 +691,21 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
 
         # -- annotation, shared by every screen ----------------------------
 
-        def _apply(prefix: str) -> None:
+        def _apply(prefix: str, scope: set[str] | None = None) -> None:
             """Flag/note/update the *checked* records, never the
             representative pick -- see ``io.annotations``'s module docstring.
+
+            ``scope``, when given, restricts this to records that are both
+            checked AND in ``scope`` -- the current BAGS group, so a check
+            left over from a different group (checked individually, not via
+            "Check this group", which replaces the whole set) never gets
+            annotated alongside it. The Specimens tab passes no scope: it is
+            one continuous table across pages, not a different table per
+            page, so a checked-then-paged-away record is still meant to be
+            included.
             """
-            checked = sorted(state.annotations.working)
+            working = state.annotations.working
+            checked = sorted(working if scope is None else working & scope)
             if not checked:
                 status.set("Nothing checked.")
                 touch()

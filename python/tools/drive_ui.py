@@ -163,6 +163,32 @@ def main(argv: list[str] | None = None) -> int:
             check("the next group is untouched",
                   "synonym" not in other and "driven by drive_ui" not in other)
 
+            # -- a per-row check left in one group must not leak into
+            # "Apply to checked" in another. Only "Check this group" (just
+            # used above) replaces the whole checked set; the per-row
+            # checkbox adds to it, so start clean in both groups first.
+            page.click(f"#clear_{grade}")            # currently group 2
+            time.sleep(SETTLE)
+            page.click(f"#prev_{grade}")
+            time.sleep(SETTLE)
+            page.click(f"#clear_{grade}")             # and group 1
+            time.sleep(SETTLE)
+            page.locator(f"#grade_{grade}_body .bc-row-check").first.click()
+            time.sleep(SETTLE)
+            page.click(f"#next_{grade}")
+            time.sleep(SETTLE)
+            page.locator(f"#grade_{grade}_body .bc-row-check").first.click()
+            time.sleep(SETTLE)
+            page.select_option(f"#g{grade}_flag", "data_issue")
+            page.click(f"#g{grade}_apply")
+            time.sleep(SETTLE * 1.5)
+            check("apply to checked reaches the current group's own check",
+                  "data_issue" in table_text(f"#grade_{grade}_body"))
+            page.click(f"#prev_{grade}")
+            time.sleep(SETTLE * 1.5)
+            check("a check left in a different group is not swept into that apply",
+                  "data_issue" not in table_text(f"#grade_{grade}_body"))
+
         # -- the paged specimen table
         show("Specimens", settle=SETTLE * 1.5)
         header = page.locator("#specimens_body table thead").inner_text()

@@ -34,13 +34,20 @@ Found using the round-1 fixes. Fixing one at a time, one commit per item.
    with clicks dispatched via JS on a checkbox already inside the scrolled
    viewport -- `page.click()` on an off-screen element scrolls it into view
    first, which would have hidden this exact bug from the test.
-2. [ ] **"Apply to checked" reaches across groups/BINs/species.** Checking a
-   few rows in one BAGS group, moving to another group, checking more there
-   without clearing first, then applying, touches both groups' checked
-   records at once -- because `Annotations.working` is one global set and
-   only the "Check this group" *button* (not the per-row checkbox) replaces
-   it. Apply (and the "N checked" count) should be scoped to what is
-   currently on screen.
+2. [x] **"Apply to checked" reaches across groups/BINs/species.** Fixed for
+   the BAGS screens -- `_apply(prefix, scope=...)` now restricts "Apply to
+   checked" to records that are both checked AND in the current group's own
+   specimens; a check left over from a different group (checked individually,
+   not via "Check this group", which already replaced the whole set) is
+   simply not touched. The "N checked" line now reads "N checked here" and,
+   only when there is a difference, adds "(M checked in total)" so leftover
+   checks elsewhere are visible rather than silently invisible. The Specimens
+   tab is deliberately **not** scoped this way: it is one continuous table
+   across pages, not a different table per page, so a record checked and then
+   paged away from is still meant to be included when applying. Verified live
+   with two new `tools/drive_ui.py` checks: a check made in group 1, a
+   different check made in group 2, apply while viewing group 2 -- only group
+   2's table shows the new flag.
 3. [ ] **Sorting should cover Rep./Check/Flag/Updated ID/Notes too.** The BAGS
    group tables already sort by Flag/Updated ID/Notes (just not Rep./Check);
    the Specimens tab sorts by none of the five, because
