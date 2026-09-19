@@ -24,6 +24,18 @@ testing -- stay importable without it, and without whatever native webview
 backend the platform needs (present by default on macOS/Windows; on Linux
 it needs a system WebKitGTK or Qt install this project does not otherwise
 require).
+
+**The native window is a best effort, not a hard requirement.** On Windows,
+every one of pywebview's backends (winforms, edgechromium, mshtml) bridges
+through pythonnet/.NET, and that bridge has a long, still-open history of
+fragile, environment-specific failures once frozen by PyInstaller --
+``RuntimeError: Failed to resolve Python.Runtime.Loader.Initialize`` is a
+real one, hit on a real curator's machine, not a hypothetical
+(r0x0r/pywebview#1215, #1292, #1638; see ``packaging/README.md``). A curator
+looking at a plain browser tab is a far better outcome than one looking at
+a crash, so a native-window failure here is never fatal: both ``launch()``
+and the setup screen below fall back to opening the system's default
+browser and carrying on from there.
 """
 
 from __future__ import annotations
@@ -99,31 +111,69 @@ def run_server(app, *, host: str = "127.0.0.1", port: int | None = None):
     return f"http://{host}:{port}", stop
 
 
+def _open_in_browser(url: str, reason: BaseException) -> None:
+    import webbrowser
+
+    print(f"Native window unavailable ({reason}); opening {url} in your "
+          "default browser instead.")
+    webbrowser.open(url)
+
+
 def _run_setup(config_path: Path) -> Path:
-    """Show the setup window until it resolves a snapshot path, or quit."""
+    """Show the setup window until it resolves a snapshot path, or quit.
+
+    ``resolved`` has exactly one reader: either the watcher thread (started
+    as soon as a window exists, since it has to be running before
+    ``webview.start()`` blocks) or, if a window was never created at all,
+    this function directly. Never both -- if ``webview.start()`` itself
+    fails (this project's real-world case: pythonnet fails deep inside it,
+    after the window and the watcher already exist), the watcher is still
+    the one waiting on the queue, so this falls back to the browser and
+    *joins* the watcher rather than reading the queue a second time, which
+    would race it.
+    """
     from .ui.setup import create_setup_app
 
     resolved: "queue.Queue[Path | None]" = queue.Queue()
     app = create_setup_app(resolved)
     url, stop = run_server(app)
 
-    import webview
-
-    window = webview.create_window("BOLDcurator -- set up", url,
-                                   width=760, height=640)
-    window.events.closed += lambda: resolved.put(None)
-
+    window = None
+    watcher = None
     box: dict[str, Path | None] = {}
+    try:
+        import webview
 
-    def _watch() -> None:
-        box["path"] = resolved.get()
-        window.destroy()
+        window = webview.create_window("BOLDcurator -- set up", url,
+                                       width=760, height=640)
+        window.events.closed += lambda: resolved.put(None)
 
-    threading.Thread(target=_watch, daemon=True).start()
-    webview.start()
+        def _watch(window=window) -> None:
+            box["path"] = resolved.get()
+            try:
+                window.destroy()
+            except Exception:
+                pass  # already gone -- webview.start() itself failed below
+
+        watcher = threading.Thread(target=_watch, daemon=True)
+        watcher.start()
+        webview.start()
+    except Exception as exc:
+        _open_in_browser(url, exc)
+        print("Complete setup there, then return to this console.")
+
+    if watcher is not None:
+        # The watcher is the queue's one legitimate reader once it exists
+        # (started before webview.start(), which needs it running while it
+        # blocks) -- reading the queue again here too would race it.
+        watcher.join()
+        path = box.get("path")
+    else:
+        # No window was ever created, so nothing else is reading this --
+        # block here until the browser-based setup app resolves one.
+        path = resolved.get()
     stop()
 
-    path = box.get("path")
     if path is None:
         raise SystemExit("Setup was closed before a snapshot was chosen.")
     save_snapshot_path(path, config_path)
@@ -154,5 +204,13 @@ def launch(snapshot_path: str | Path | None = None, *,
 
         webview.create_window("BOLDcurator", url, width=1400, height=900)
         webview.start()
+    except Exception as exc:
+        _open_in_browser(url, exc)
+        print("Press Ctrl+C here to quit.")
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            pass
     finally:
         stop()
