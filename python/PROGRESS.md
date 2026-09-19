@@ -10,6 +10,35 @@ grouping bug is fixed. Every table sorts by clicking its column headers,
 links out to the BOLD portal, and keeps its annotation columns frozen while
 scrolling. 238 tests pass, the parity gate is green.**
 
+## Open issues from curator feedback, round 2 (in progress)
+
+Found using the round-1 fixes. Fixing one at a time, one commit per item.
+
+1. [ ] **The Rep./Check/Flag/Updated ID/Notes column headings scroll away
+   vertically**, unlike the other headings, which stay pinned. Likely cause:
+   `position:sticky` was only ever applied to the `<thead>` element for
+   top-pinning (unreliable across browsers for `<thead>`/`<tr>`) while the
+   five frozen-left columns' own `<th>` additionally set `position:sticky`
+   for `left` -- two different sticky mechanisms on the same header row.
+   **Also:** checking a row snaps the table's scroll back to the top: every
+   interaction re-renders the whole table as one HTML string
+   (`ui.HTML(...)`), which replaces the scrolling `<div>` and any browser
+   loses scroll position on a replaced element. Likely the same underlying
+   cause as the header issue, or fixable the same way (JS-side scroll
+   save/restore keyed to the output's DOM id).
+2. [ ] **"Apply to checked" reaches across groups/BINs/species.** Checking a
+   few rows in one BAGS group, moving to another group, checking more there
+   without clearing first, then applying, touches both groups' checked
+   records at once -- because `Annotations.working` is one global set and
+   only the "Check this group" *button* (not the per-row checkbox) replaces
+   it. Apply (and the "N checked" count) should be scoped to what is
+   currently on screen.
+3. [ ] **Sorting should cover Rep./Check/Flag/Updated ID/Notes too.** The BAGS
+   group tables already sort by Flag/Updated ID/Notes (just not Rep./Check);
+   the Specimens tab sorts by none of the five, because
+   `SpecimenTable.sort_by` only knows how to fetch a physical snapshot
+   column, and these five are annotation-only.
+
 ## Open issues from curator feedback -- all six resolved
 
 Reported after the previous session's fixes landed; fixed one at a time, one
