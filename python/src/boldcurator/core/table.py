@@ -157,6 +157,15 @@ class SpecimenTable:
         frame = process_specimen_data(frame, sort=False)
         frame = score_and_rank(frame)
         frame = merge_annotations(frame, self.annotations)
+        # Not one of merge_annotations's six columns -- "checked" (the working
+        # selection) has no curatorial meaning to export, but the table still
+        # needs to render it. See io.annotations's module docstring for why it
+        # is not the same thing as "selected".
+        if len(frame):
+            working = self.annotations.working
+            frame["checked"] = [str(p) in working for p in frame["processid"]]
+        else:
+            frame["checked"] = pd.Series(dtype=bool)
         return Page(rows=frame, offset=offset, page_size=self.page_size,
                     total_rows=self.total_rows)
 
@@ -184,39 +193,54 @@ class SpecimenTable:
         ordered = self._processids.reindex(self._order)
         return [str(p) for p in ordered]
 
-    # -- selection ---------------------------------------------------------
+    # -- the representative pick --------------------------------------------
+    #
+    # Persistent: auto-filled (core.selection, best per BIN x country) and
+    # curator-overridable, one record at a time via its own checkbox
+    # (ui/app.py's ROW_REP_CLASS). Nothing below ever bulk-clears it -- see
+    # io.annotations's module docstring for why representative and working
+    # selection must not share a store.
 
     @property
     def selected_count(self) -> int:
         return len(self.annotations.selected)
 
-    def set_selected(self, processids, selected: bool = True) -> None:
+    # -- the working selection -----------------------------------------------
+    #
+    # Disposable: exists only to gather targets for apply_flag/apply_note/
+    # apply_updated_id. "Check page/all", "Clear checked" and the per-row
+    # ROW_CHECK_CLASS checkbox all act here, never on the representative pick.
+
+    @property
+    def checked_count(self) -> int:
+        return len(self.annotations.working)
+
+    def set_checked(self, processids, checked: bool = True) -> None:
         for processid in processids:
-            processid = str(processid)
-            if selected:
-                self.annotations.set_selected(processid, user=self.user)
-            else:
-                self.annotations.unset_selected(processid)
+            self.annotations.set_working(str(processid), selected=checked)
 
-    def select_page(self, offset: int = 0, *, selected: bool = True) -> int:
-        """Select (or clear) every record on one page.  Returns how many."""
+    def check_page(self, offset: int = 0, *, checked: bool = True) -> int:
+        """Check (or uncheck) every record on one page.  Returns how many."""
         ids = self.page_processids(offset)
-        self.set_selected(ids, selected)
+        self.set_checked(ids, checked)
         return len(ids)
 
-    def select_all(self, *, selected: bool = True) -> int:
-        """Select (or clear) every record in the result.  Returns how many."""
+    def check_all(self, *, checked: bool = True) -> int:
+        """Check (or uncheck) every record in the result.  Returns how many."""
         ids = self.all_processids()
-        self.set_selected(ids, selected)
+        self.set_checked(ids, checked)
         return len(ids)
 
-    def clear_selection(self) -> None:
-        self.annotations.selected.clear()
+    def clear_checked(self) -> None:
+        self.annotations.clear_working()
 
     # -- bulk annotation ---------------------------------------------------
+    #
+    # Acts on the working selection (self.annotations.working) by default, or
+    # on an explicit processid list -- never on the representative pick.
 
     def apply_flag(self, flag: str, processids=None) -> int:
-        """Flag the selection (or a given set).  Returns how many changed.
+        """Flag the checked records (or a given set).  Returns how many changed.
 
         An empty flag clears, which is what the R dropdown's "None" does.
         """
@@ -226,14 +250,14 @@ class SpecimenTable:
         return len(targets)
 
     def apply_note(self, note: str, processids=None) -> int:
-        """Set a curator note on the selection.  Empty text clears it."""
+        """Set a curator note on the checked records.  Empty text clears it."""
         targets = self._targets(processids)
         for processid in targets:
             self.annotations.set_note(processid, note, user=self.user)
         return len(targets)
 
     def apply_updated_id(self, text: str, processids=None) -> int:
-        """Set a corrected identification on the selection."""
+        """Set a corrected identification on the checked records."""
         targets = self._targets(processids)
         for processid in targets:
             self.annotations.set_updated_id(processid, text, user=self.user)
@@ -241,5 +265,5 @@ class SpecimenTable:
 
     def _targets(self, processids) -> list[str]:
         if processids is None:
-            return sorted(self.annotations.selected)
+            return sorted(self.annotations.working)
         return [str(p) for p in processids]

@@ -39,6 +39,7 @@ from .format import (
     CONCORDANCE_COLOURS,
     GRADE_COLOURS,
     GROUP_COLUMNS,
+    GROUP_LABELS,
     present,
     value_box,
 )
@@ -51,7 +52,7 @@ PAGE_SIZES = [25, 50, 100, 250, 500]
 #: ``bags_grade`` is absent until a summary screen has been opened -- see
 #: ``SearchState.grade_lookup``.
 PREVIEW_COLUMNS = [
-    "selected", "flag", "curator_notes", "updated_id",
+    "selected", "checked", "flag", "curator_notes", "updated_id",
     "processid", "species", "bin_uri", "country.ocean",
     "quality_score", "rank", "bags_grade", "inst", "identified_by",
 ]
@@ -86,12 +87,31 @@ def _stream_file(path: Path, tmpdir: tempfile.TemporaryDirectory):
         tmpdir.cleanup()
 
 
+def _with_checked(frame: pd.DataFrame, annotations) -> pd.DataFrame:
+    """Add the ``checked`` column -- ``Annotations.working``, not ``selected``.
+
+    Not part of ``merge_annotations``: that function's six columns are exactly
+    what an export ships, and the working selection is UI scratch space with
+    no curatorial meaning to export or persist.
+    """
+    if frame is None or len(frame) == 0:
+        return frame if frame is not None else pd.DataFrame()
+    out = frame.copy()
+    working = annotations.working
+    out["checked"] = [str(p) in working for p in out.get("processid", [])]
+    return out
+
+
 def _annotation_controls(prefix: str) -> list:
     """Flag / note / corrected-ID, plus Apply. Repeated per screen, so shared.
 
     Explicit widths, because these sit in a flex row: a Shiny input is a block
     element and will otherwise take the full width and stack, turning a
     one-line toolbar into half a screen of form.
+
+    "Apply to checked" acts on ``Annotations.working`` -- the disposable
+    bulk-edit selection, not the representative pick. See ``io.annotations``'s
+    module docstring.
     """
     return [
         ui.div(ui.input_select(f"{prefix}_flag", "Flag",
@@ -101,7 +121,7 @@ def _annotation_controls(prefix: str) -> list:
                class_="mb-0"),
         ui.div(ui.input_text(f"{prefix}_updated_id", "Corrected identification",
                              width="220px"), class_="mb-0"),
-        ui.input_action_button(f"{prefix}_apply", "Apply to selection",
+        ui.input_action_button(f"{prefix}_apply", "Apply to checked",
                                class_="btn-primary btn-sm"),
     ]
 
@@ -148,8 +168,13 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
         # first. Delegating to `document` sidesteps that entirely.
         ui.tags.script(f"""
             document.addEventListener('change', function(e) {{
-                if (e.target && e.target.classList.contains('{ROW_CHECKBOX_CLASS}')) {{
-                    Shiny.setInputValue('row_select',
+                if (!e.target) return;
+                if (e.target.classList.contains('{ROW_CHECK_CLASS}')) {{
+                    Shiny.setInputValue('row_check',
+                        {{pid: e.target.dataset.pid, checked: e.target.checked}},
+                        {{priority: 'event'}});
+                }} else if (e.target.classList.contains('{ROW_REP_CLASS}')) {{
+                    Shiny.setInputValue('row_rep',
                         {{pid: e.target.dataset.pid, checked: e.target.checked}},
                         {{priority: 'event'}});
                 }}
@@ -327,8 +352,10 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
                 ui.div(
                     value_box(f"{plan.expanded_records:,}", "Records", "#2c7fb8"),
                     value_box(f"{plan.seed_bins:,}", "BINs", "#6c757d"),
-                    value_box(f"{len(state.annotations.selected):,}", "Selected",
-                              "#28a745"),
+                    value_box(f"{len(state.annotations.selected):,}",
+                              "Representative", "#28a745"),
+                    value_box(f"{len(state.annotations.working):,}", "Checked",
+                              "#f0ad4e"),
                     value_box(
                         f"{len(state.annotations.annotated_processids()):,}",
                         "Annotated", "#6f42c1"),
@@ -347,9 +374,19 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
             if search is None:
                 return ui.div("Run a search first.", class_="text-muted")
             try:
-                return render_body(search)
+                was_ready = search.analysis_is_ready
+                result = render_body(search)
             except ResultTooLargeToAnalyse as exc:
                 return ui.div(str(exc), class_="alert alert-warning py-2 px-3")
+            if not was_ready and search.analysis_is_ready:
+                # The analysis (and its one-time auto-selection) just ran for
+                # the first time. That mutates state.annotations directly, not
+                # through a reactive.Value, so search_summary's Representative/
+                # Checked/Annotated counts -- which have no dependency of their
+                # own on it -- would otherwise sit at their pre-search values
+                # until some unrelated click happened to touch() again.
+                touch()
+            return result
 
         # -- species checklist ---------------------------------------------
 
@@ -406,7 +443,9 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
                                   class_="text-muted")
                 index = min(group_index[grade].get(), len(groups) - 1)
                 group = groups[index]
-                rows = merge_annotations(group.specimens, state.annotations)
+                rows = _with_checked(
+                    merge_annotations(group.specimens, state.annotations),
+                    state.annotations)
                 return ui.row(
                     ui.column(4, ui.div(
                         ui.div(f"{len(groups):,} "
@@ -439,12 +478,13 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
                         ui.div(
                             ui.div(
                                 ui.input_action_button(
-                                    f"selall_{grade}", "Select this group",
+                                    f"selall_{grade}", "Check this group",
                                     class_="btn-sm"),
-                                ui.input_action_button(f"clear_{grade}", "Clear",
+                                ui.input_action_button(f"clear_{grade}",
+                                                       "Clear checked",
                                                        class_="btn-sm"),
-                                ui.div(f"{len(state.annotations.selected):,} "
-                                       "selected",
+                                ui.div(f"{len(state.annotations.working):,} "
+                                       "checked",
                                        class_="small text-muted pt-1"),
                                 style="display:flex;flex-direction:column;gap:4px;",
                             ),
@@ -495,16 +535,18 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
 
             @reactive.effect
             @reactive.event(input[f"selall_{grade}"])
-            def _select_group(grade=grade):
+            def _check_group(grade=grade):
                 group = _current_group(grade)
                 if group is not None:
-                    # Replaces the selection rather than adding to it. "Apply
-                    # to selection" acts on whatever is selected, so if this
-                    # accumulated, annotating the second problem would silently
-                    # re-annotate the first -- which is the opposite of working
-                    # through one problem at a time.
-                    state.annotations.selected.clear()
-                    state.annotations_select(group)
+                    # Replaces the checked set rather than adding to it.
+                    # "Apply to checked" acts on whatever is checked, so if
+                    # this accumulated, annotating the second problem would
+                    # silently re-annotate the first -- which is the opposite
+                    # of working through one problem at a time. This never
+                    # touches the representative pick (annotations.selected).
+                    state.annotations.clear_working()
+                    for pid in group.specimens["processid"]:
+                        state.annotations.set_working(str(pid))
                     touch()
 
             @reactive.effect
@@ -513,7 +555,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
                 group = _current_group(grade)
                 if group is not None:
                     for pid in group.specimens["processid"]:
-                        state.annotations.unset_selected(str(pid))
+                        state.annotations.set_working(str(pid), selected=False)
                     touch()
 
             @reactive.effect
@@ -536,22 +578,25 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
         # -- annotation, shared by every screen ----------------------------
 
         def _apply(prefix: str) -> None:
-            selected = sorted(state.annotations.selected)
-            if not selected:
-                status.set("Nothing selected.")
+            """Flag/note/update the *checked* records, never the
+            representative pick -- see ``io.annotations``'s module docstring.
+            """
+            checked = sorted(state.annotations.working)
+            if not checked:
+                status.set("Nothing checked.")
                 touch()
                 return
             user = (input.user() or "").strip()
             flag = input[f"{prefix}_flag"]() or ""
             note = (input[f"{prefix}_note"]() or "").strip()
             updated = (input[f"{prefix}_updated_id"]() or "").strip()
-            for pid in selected:
+            for pid in checked:
                 state.annotations.set_flag(pid, flag, user=user)
                 if note:
                     state.annotations.set_note(pid, note, user=user)
                 if updated:
                     state.annotations.set_updated_id(pid, updated, user=user)
-            status.set(f"Annotated {len(selected):,} records")
+            status.set(f"Annotated {len(checked):,} records")
             touch()
 
         # -- the paged specimen table --------------------------------------
@@ -564,7 +609,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
                 return ui.div("Run a search first.", class_="text-muted")
             table = search.table
             page = table.page(offset.get())
-            rows = page.rows
+            rows = page.rows  # already carries both "selected" and "checked"
             lookup = search.grade_lookup()
             if lookup:
                 rows = rows.copy()
@@ -589,11 +634,11 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
                                  class_="small text-nowrap"),
                     ui.input_action_button("next_", "›", class_="btn-sm"),
                     ui.input_action_button("last", "»", class_="btn-sm"),
-                    ui.input_action_button("select_page", "Select page",
+                    ui.input_action_button("select_page", "Check page",
                                            class_="btn-sm"),
-                    ui.input_action_button("select_all", "Select all",
+                    ui.input_action_button("select_all", "Check all",
                                            class_="btn-sm"),
-                    ui.input_action_button("clear_selection", "Clear",
+                    ui.input_action_button("clear_selection", "Clear checked",
                                            class_="btn-sm"),
                     *_annotation_controls("sp"),
                     style="display:flex;align-items:end;gap:10px;flex-wrap:wrap;"
@@ -677,35 +722,56 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
 
         @reactive.effect
         @reactive.event(input.select_page)
-        def _select_page():
+        def _check_page():
+            """"Check page": the working selection, not the representative
+            pick -- see io.annotations's module docstring.
+            """
             if state.search is not None:
-                state.search.table.select_page(offset.get())
+                state.search.table.check_page(offset.get())
                 touch()
 
         @reactive.effect
         @reactive.event(input.select_all)
-        def _select_all():
+        def _check_all():
             if state.search is not None:
-                n = state.search.table.select_all()
-                status.set(f"Selected all {n:,} records")
+                n = state.search.table.check_all()
+                status.set(f"Checked all {n:,} records")
                 touch()
 
         @reactive.effect
         @reactive.event(input.clear_selection)
-        def _clear_selection():
-            state.annotations.selected.clear()
+        def _clear_checked():
+            state.annotations.clear_working()
             touch()
 
         @reactive.effect
-        @reactive.event(input.row_select)
-        def _row_select():
-            """One record's own checkbox, on the specimen table or any group.
+        @reactive.event(input.row_check)
+        def _row_check():
+            """One record's own "checked" box, on the specimen table or any
 
-            The bulk buttons (page / group / all) still exist; this is what
-            lets a curator select a handful out of a group without pulling in
-            everything else in it.
+            group. This is the disposable bulk-edit selection -- "Apply to
+            checked" acts on it, and clearing it never touches the
+            representative pick. The bulk buttons (check page / group / all)
+            still exist; this is what lets a curator check a handful out of a
+            group without pulling in everything else in it.
             """
-            payload = input.row_select()
+            payload = input.row_check()
+            pid = str((payload or {}).get("pid") or "")
+            if not pid or state.search is None:
+                return
+            state.annotations.set_working(pid, selected=bool(payload.get("checked")))
+            touch()
+
+        @reactive.effect
+        @reactive.event(input.row_rep)
+        def _row_rep():
+            """One record's own "representative" box.
+
+            This is the persistent pick -- auto-filled on a fresh search,
+            overridable here one record at a time. Nothing bulk ever touches
+            it; see io.annotations's module docstring.
+            """
+            payload = input.row_rep()
             pid = str((payload or {}).get("pid") or "")
             if not pid or state.search is None:
                 return
@@ -837,14 +903,6 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
                 return
             yield from _stream_file(written, tmpdir)
 
-        # AppState does not know about groups; give it the one helper it needs
-        # rather than letting the UI reach into Annotations row by row.
-        def _annotations_select(group) -> None:
-            for pid in group.specimens["processid"]:
-                state.annotations.set_selected(str(pid),
-                                               user=(input.user() or "").strip())
-        state.annotations_select = _annotations_select  # type: ignore[attr-defined]
-
     return App(app_ui, server)
 
 
@@ -929,16 +987,30 @@ def _bins_html(frame: pd.DataFrame) -> str:
     return _table(frame, BIN_LABELS, cell)
 
 
-#: The class a row checkbox carries, so one delegated listener (attached once,
-#: to ``document`` -- see the script in ``create_app``) catches every row's
-#: click regardless of how many times the table around it has re-rendered.
-ROW_CHECKBOX_CLASS = "bc-row-select"
+#: The classes the two per-row checkboxes carry, so one delegated listener
+#: (attached once, to ``document`` -- see the script in ``create_app``)
+#: catches every row's click regardless of how many times the table around it
+#: has re-rendered. **They are not the same checkbox.**
+#:
+#: ``ROW_REP_CLASS`` toggles ``Annotations.selected`` -- the *representative*
+#: pick (auto-filled, best per BIN x country, what "Download Selected"
+#: exports). It persists for the life of the result.
+#:
+#: ``ROW_CHECK_CLASS`` toggles ``Annotations.working`` -- a disposable,
+#: session-scratch selection that exists only to gather targets for the
+#: "Apply to checked" toolbar. The bulk buttons (check page / group / all,
+#: Clear) act on this one, never on the representative pick -- see
+#: ``io.annotations``'s module docstring for why conflating the two was a bug.
+ROW_REP_CLASS = "bc-row-rep"
+ROW_CHECK_CLASS = "bc-row-check"
 
 
-def _checkbox_cell(pid: object, checked: bool) -> str:
+def _checkbox_cell(pid: object, checked: bool, css_class: str, *,
+                   title: str = "") -> str:
     pid = _escape(pid)
     mark = "checked" if checked else ""
-    return (f"<td><input type='checkbox' class='{ROW_CHECKBOX_CLASS}' "
+    attr = f" title='{_escape(title)}'" if title else ""
+    return (f"<td><input type='checkbox' class='{css_class}'{attr} "
             f"data-pid='{pid}' {mark}></td>")
 
 
@@ -950,11 +1022,14 @@ def _group_html(frame: pd.DataFrame, columns: list[str] | None = None,
     the specimen table shows a different set, and applying the group layout to
     an already-narrowed frame silently dropped the columns the caller picked.
 
-    **The ``selected`` column is a real checkbox, one per record.** Before
-    this, the only way to select anything was "select this whole group /
-    page / result" -- there was no way to work a single record, or a handful,
-    out of a larger group. The bulk buttons stay; this adds the record-level
-    choice under them.
+    **Two real checkboxes per record: "Rep." and "Check".** "Rep." is the
+    representative pick; "Check" is the disposable bulk-edit selection. They
+    used to be the same checkbox, which is why clearing a bulk selection could
+    silently wipe out a curator's (or auto-selection's) representative picks.
+    ``frame`` must already carry both ``selected`` (representative,
+    ``merge_annotations``) and ``checked`` (working, added by the caller from
+    ``Annotations.working`` -- it has no curatorial meaning to persist, so it
+    is not one of ``merge_annotations``'s six columns).
     """
     shown = present(frame, columns or GROUP_COLUMNS)
     has_pid = "processid" in shown.columns
@@ -963,14 +1038,21 @@ def _group_html(frame: pd.DataFrame, columns: list[str] | None = None,
         if column == "selected":
             chosen = not _is_missing(value) and bool(value)
             if has_pid:
-                return _checkbox_cell(row["processid"], chosen)
+                return _checkbox_cell(row["processid"], chosen, ROW_REP_CLASS,
+                                      title="Representative specimen")
+            return f"<td>{'✔' if chosen else ''}</td>"
+        if column == "checked":
+            chosen = not _is_missing(value) and bool(value)
+            if has_pid:
+                return _checkbox_cell(row["processid"], chosen, ROW_CHECK_CLASS,
+                                      title="Checked for bulk flag/note/update")
             return f"<td>{'✔' if chosen else ''}</td>"
         if column == "bags_grade" and not _is_missing(value) and value:
             return _chip(value, GRADE_COLOURS.get(str(value), "#adb5bd"))
         if column == "flag" and not _is_missing(value) and value:
             return _chip(value, "#6f42c1")
         return None
-    return _table(shown, cell=cell, limit=limit)
+    return _table(shown, GROUP_LABELS, cell=cell, limit=limit)
 
 
 def run(snapshot: str | Path, *, host: str = "127.0.0.1", port: int = 8000,

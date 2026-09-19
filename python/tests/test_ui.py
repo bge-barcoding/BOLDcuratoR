@@ -101,31 +101,52 @@ def test_missing_values_render_as_blank_rather_than_raising():
 
 
 def test_a_record_can_be_selected_on_its_own_not_only_the_whole_group():
-    """The point of the per-row checkbox: pick one record out of a group.
+    """The point of the per-row checkboxes: pick one record out of a group.
 
     Before this, "selected" rendered as a plain check mark and the only ways
-    to change a selection were "select this whole group / page / result" --
-    there was no way to act on a handful of records out of a larger group.
+    to change it were "select this whole group / page / result" -- there was
+    no way to act on a handful of records out of a larger group. There are now
+    two independent checkboxes per row -- "Rep." (the representative pick,
+    ``ROW_REP_CLASS``) and "Check" (the disposable bulk-edit selection,
+    ``ROW_CHECK_CLASS``) -- see io.annotations's module docstring for why they
+    must not be the same one.
     """
     import pandas as pd
 
-    from boldcurator.ui.app import ROW_CHECKBOX_CLASS, _group_html
+    from boldcurator.ui.app import ROW_CHECK_CLASS, ROW_REP_CLASS, _group_html
 
     frame = pd.DataFrame({
         "processid": ["P1", "P2"],
         "species": ["Danaus plexippus", "Danaus chrysippus"],
         "bin_uri": ["BOLD:A", "BOLD:A"],
-        "selected": [True, False],
+        "selected": [True, False],   # representative: P1 only
+        "checked": [False, True],    # working: P2 only
     })
     html = _group_html(frame)
 
-    assert html.count(f"class='{ROW_CHECKBOX_CLASS}'") == 2
-    assert "data-pid='P1'" in html and "data-pid='P2'" in html
-    # P1 is selected, P2 is not -- exactly one checkbox carries `checked`.
-    p1_row = html.split("data-pid='P1'")[1].split("</tr>")[0]
-    p2_row = html.split("data-pid='P2'")[1].split("</tr>")[0]
-    assert "checked" in p1_row.split(">")[0]
-    assert "checked" not in p2_row.split(">")[0]
+    assert html.count(f"class='{ROW_REP_CLASS}'") == 2
+    assert html.count(f"class='{ROW_CHECK_CLASS}'") == 2
+
+    def row(pid: str) -> str:
+        marker = f"data-pid='{pid}'"
+        start = html.index(marker)
+        # walk back/forward to the enclosing <tr>...</tr>
+        tr_start = html.rindex("<tr>", 0, start)
+        tr_end = html.index("</tr>", start)
+        return html[tr_start:tr_end]
+
+    p1, p2 = row("P1"), row("P2")
+    # P1 is the representative but not checked.
+    assert f"class='{ROW_REP_CLASS}'" in p1.split(f"class='{ROW_CHECK_CLASS}'")[0]
+    rep_cell_p1 = p1.split(f"class='{ROW_REP_CLASS}'")[1].split(">")[0]
+    check_cell_p1 = p1.split(f"class='{ROW_CHECK_CLASS}'")[1].split(">")[0]
+    assert "checked" in rep_cell_p1
+    assert "checked" not in check_cell_p1
+    # P2 is checked but not the representative.
+    rep_cell_p2 = p2.split(f"class='{ROW_REP_CLASS}'")[1].split(">")[0]
+    check_cell_p2 = p2.split(f"class='{ROW_CHECK_CLASS}'")[1].split(">")[0]
+    assert "checked" not in rep_cell_p2
+    assert "checked" in check_cell_p2
 
 
 def test_an_empty_frame_renders_a_message_not_a_broken_table():
@@ -177,6 +198,7 @@ def test_the_specimen_table_renders_the_columns_it_says_it_does(store):
     """`_group_html` used to re-filter to the BAGS layout, silently dropping
     whatever columns the caller had chosen."""
     from boldcurator.ui.app import PREVIEW_COLUMNS, _group_html
+    from boldcurator.ui.format import GROUP_LABELS
     from boldcurator.ui.state import AppState
 
     state = AppState(store, page_size=5)
@@ -190,7 +212,8 @@ def test_the_specimen_table_renders_the_columns_it_says_it_does(store):
     html = _group_html(rows, columns=PREVIEW_COLUMNS, limit=len(rows))
     header = html.split("<tbody>")[0]
     for column in PREVIEW_COLUMNS:
-        assert f">{column}<" in header, f"{column} missing from the rendered header"
+        label = GROUP_LABELS.get(column, column)
+        assert f">{label}<" in header, f"{column} missing from the rendered header"
 
 
 def test_the_priority_grades_are_marked_in_the_navigation():
@@ -243,11 +266,13 @@ def test_auto_selection_never_overwrites_a_curator_s_own_choice(store):
     }, "an existing selection is a curator's, and analysis must leave it alone"
 
 
-def test_selecting_a_group_replaces_the_selection_rather_than_adding(store):
+def test_checking_a_group_replaces_the_checked_set_rather_than_adding(store):
     """Otherwise annotating the second problem re-annotates the first.
 
-    The screens exist so a curator works one problem at a time; a selection
-    that accumulates across groups quietly defeats that.
+    The screens exist so a curator works one problem at a time; a checked set
+    that accumulates across groups quietly defeats that. This is the working
+    selection ("Check this group" / "Apply to checked"), not the
+    representative pick -- see io.annotations's module docstring.
     """
     from boldcurator.ui.state import AppState
 
@@ -256,16 +281,16 @@ def test_selecting_a_group_replaces_the_selection_rather_than_adding(store):
     groups = state.search.groups(store, "C")
     assert len(groups) >= 2
 
-    def select(group):
-        state.annotations.selected.clear()
+    def check(group):
+        state.annotations.clear_working()
         for pid in group.specimens["processid"]:
-            state.annotations.set_selected(str(pid))
+            state.annotations.set_working(str(pid))
 
-    select(groups[0])
-    first = set(state.annotations.selected)
-    select(groups[1])
-    second = set(state.annotations.selected)
+    check(groups[0])
+    first = set(state.annotations.working)
+    check(groups[1])
+    second = set(state.annotations.working)
 
     assert second and not (first & second), "the two groups must not overlap"
-    assert set(state.annotations.selected) == second, \
-        "selecting a group must not leave the previous group selected"
+    assert set(state.annotations.working) == second, \
+        "checking a group must not leave the previous group checked"

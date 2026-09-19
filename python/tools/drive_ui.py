@@ -24,6 +24,7 @@ Exits non-zero if any check fails.
 from __future__ import annotations
 
 import argparse
+import re
 import time
 from pathlib import Path
 
@@ -166,7 +167,7 @@ def main(argv: list[str] | None = None) -> int:
         show("Specimens", settle=SETTLE * 1.5)
         header = page.locator("#specimens_body table thead").inner_text()
         check("the specimen table carries the BAGS grade once analysed",
-              "bags_grade" in header, header.replace("\n", " "))
+              "BAGS" in header, header.replace("\n", " "))
         before = table_text("#specimens_body")[:200]
         page.click("#next_")
         time.sleep(SETTLE)
@@ -178,6 +179,26 @@ def main(argv: list[str] | None = None) -> int:
         time.sleep(SETTLE * 1.5)
         check("sorting the specimen table works", bool(table_text("#specimens_body")))
         page.screenshot(path=str(args.out / "05-specimens.png"), full_page=True)
+
+        # -- clearing the checked/working selection must not touch the
+        # representative pick (auto-selected best per BIN x country) -- see
+        # io.annotations's module docstring for why the two are separate.
+        def value_box_count(label: str) -> int:
+            show("Data Input", settle=1.5)
+            body = page.locator("#search_summary").inner_text()
+            match = re.search(rf"([\d,]+)\s*\n?{label}", body)
+            return int(match.group(1).replace(",", "")) if match else -1
+
+        before_rep = value_box_count("Representative")
+        show("Specimens", settle=1.5)
+        page.click("#select_all")    # "Check all"
+        time.sleep(SETTLE)
+        page.click("#clear_selection")   # "Clear checked"
+        time.sleep(SETTLE)
+        after_rep = value_box_count("Representative")
+        check("clearing the checked selection leaves the representative pick alone",
+              before_rep > 0 and before_rep == after_rep,
+              f"{before_rep} -> {after_rep}")
 
         check("no javascript errors", not js_errors, "; ".join(js_errors))
         browser.close()

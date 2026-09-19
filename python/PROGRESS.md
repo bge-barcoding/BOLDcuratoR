@@ -13,17 +13,25 @@ grouping bug is fixed. 233 tests pass, the parity gate is green.**
 Reported after the previous session's fixes landed. Fixing in order, one
 commit per item where the change is self-contained.
 
-1. [ ] **"Clear" clears the representative selection too.** There are really
-   two different "selected" states sharing one checkbox: the *representative*
-   pick (auto-selected best per BIN x country, what "Download Selected"
-   exports, meant to persist) and a *working* selection (temporary, for
-   choosing which rows to flag/note/update in bulk). R never conflated them --
-   its only per-row "selected" checkbox *is* the representative pick, and
-   flag/note/updated-ID are separate per-row inline inputs, not a bulk-apply
-   button at all. This app's bulk "Apply to selection" is a Python-side
-   substitute for that (a static HTML table can't easily carry live per-cell
-   inputs), so it needs its own, separate, clearable selection rather than
-   reusing the representative one.
+1. [x] **"Clear" clears the representative selection too.** Fixed --
+   `Annotations` now has two stores: `selected` (the persistent representative
+   pick -- auto-filled, curator-overridable one record at a time via its own
+   "Rep." checkbox) and `working` (the disposable bulk-edit selection --
+   "Check page/group/all", "Clear checked" and "Apply to checked" all act only
+   on this one). Each record gets two independent checkboxes in every table.
+   See `io/annotations.py`'s module docstring for the reasoning (R never had
+   this problem: its one per-row checkbox *is* the representative pick, and
+   flag/note/updated-ID are separate per-row inline inputs there, not a
+   bulk-apply button). Caught and fixed in passing: `search_summary`'s
+   Representative/Checked/Annotated counts could go stale after a fresh
+   search, because auto-selection mutates `Annotations` directly rather than
+   through a `reactive.Value` -- `_needs_analysis` now nudges a re-render the
+   first time a result's analysis (and its auto-selection) actually runs.
+   Regression tests: `test_table.py`'s
+   `test_clearing_checked_leaves_the_representative_pick_alone` and
+   `test_ui.py`'s per-row-checkbox test; confirmed live with
+   `tools/drive_ui.py`'s new "clearing the checked selection leaves the
+   representative pick alone" check (44 -> 44).
 2. [ ] **Sort is a dropdown, not click-the-column-header.** Only exists on the
    Specimens tab; BAGS group tables aren't sortable at all.
 3. [ ] **BAGS "problems to work through" should say species/BINs.** A/B/D
@@ -34,8 +42,6 @@ commit per item where the change is self-contained.
    updated_id should stay visible while the rest scrolls sideways.
 6. [ ] **BAGS tabs waste horizontal space.** The specimen table under the
    group list should use the tab's full width.
-
----
 
 ---
 

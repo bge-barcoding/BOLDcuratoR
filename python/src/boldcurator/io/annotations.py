@@ -4,6 +4,21 @@ Ported from ``R/utils/annotation_utils.R`` and the four stores in
 ``R/modules/state/state_manager.R:171-174``.  Each is a mapping from
 ``processid`` to a small record carrying the value plus who set it and when;
 deleting an annotation removes the key, exactly as assigning ``NULL`` does in R.
+
+**``selected`` vs ``working`` -- two different things share the word
+"selected" and must not share a store.**  ``selected`` is the *representative*
+pick: what :mod:`core.selection` auto-fills (best specimen per BIN x country)
+and what "Download Selected" exports, meant to persist for the life of the
+result.  R's own per-row checkbox (``mod_bags_grading_server.R``'s
+``input$specimen_select``) *is* this, and R never had a second kind --  its
+flag/note/updated-ID are separate per-row inline inputs, committed
+individually, not gathered by selecting rows first. This app's bulk "apply to
+selection" toolbar is a substitute for that (a static HTML table cannot easily
+carry live per-cell inputs the way a DT widget can), and it needs its own,
+disposable selection -- ``working`` -- so that clearing it, or checking a
+different handful of rows to flag next, can never silently drop a curator's
+representative picks. ``working`` is UI scratch space: it is not exported and
+not written to a saved session (:mod:`io.session`).
 """
 
 from __future__ import annotations
@@ -60,6 +75,9 @@ class Annotations:
     flags: dict[str, dict] = field(default_factory=dict)
     updated_ids: dict[str, dict] = field(default_factory=dict)
     curator_notes: dict[str, dict] = field(default_factory=dict)
+    #: The temporary "checked, to flag/note/update in bulk" set. See the
+    #: module docstring -- this is deliberately not ``selected``.
+    working: set[str] = field(default_factory=set)
 
     # -- mutation ----------------------------------------------------------
 
@@ -70,6 +88,16 @@ class Annotations:
 
     def unset_selected(self, processid: str) -> None:
         self.selected.pop(processid, None)
+
+    def set_working(self, processid: str, *, selected: bool = True) -> None:
+        """Check or uncheck a record for the bulk-edit toolbar."""
+        if selected:
+            self.working.add(processid)
+        else:
+            self.working.discard(processid)
+
+    def clear_working(self) -> None:
+        self.working.clear()
 
     def set_flag(self, processid: str, flag: str, *, user: str = "",
                  species: str = "") -> None:
@@ -120,6 +148,9 @@ class Annotations:
 
     def selected_processids(self) -> set[str]:
         return set(self.selected)
+
+    def working_processids(self) -> set[str]:
+        return set(self.working)
 
     def manual_selections(self) -> dict[str, dict]:
         return {k: v for k, v in self.selected.items() if not v.get("auto_selected")}

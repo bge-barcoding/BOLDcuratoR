@@ -41,7 +41,8 @@ def test_a_page_never_holds_more_than_a_page(table):
 
 def test_pages_are_scored_and_annotated_like_the_pipeline(table, store):
     page = table.page(0)
-    for column in ("quality_score", "rank", "criteria_met", "selected", "flag"):
+    for column in ("quality_score", "rank", "criteria_met", "selected", "checked",
+                   "flag"):
         assert column in page.rows.columns
     # the same rows through the whole-result path must score identically
     full = fetch_planned(store, table.plan)
@@ -99,27 +100,48 @@ def test_sorting_reaches_rows_that_are_not_on_the_first_page(table, store):
     assert highest == max(str(p) for p in every["processid"])
 
 
-def test_selection_survives_paging(table):
-    table.select_page(0)
-    assert table.selected_count == min(table.page_size, table.total_rows)
+def test_checked_selection_survives_paging(table):
+    table.check_page(0)
+    assert table.checked_count == min(table.page_size, table.total_rows)
     first_page_ids = set(table.page_processids(0))
     # move away and back
     table.page(table.page_size)
     page = table.page(0)
-    assert set(page.rows.loc[page.rows["selected"], "processid"].astype(str)) == \
+    assert set(page.rows.loc[page.rows["checked"], "processid"].astype(str)) == \
         first_page_ids
 
 
-def test_select_all_covers_rows_never_rendered(table):
-    n = table.select_all()
+def test_check_all_covers_rows_never_rendered(table):
+    n = table.check_all()
     assert n == table.total_rows
-    assert table.selected_count == table.total_rows
-    table.clear_selection()
-    assert table.selected_count == 0
+    assert table.checked_count == table.total_rows
+    table.clear_checked()
+    assert table.checked_count == 0
 
 
-def test_bulk_flag_applies_to_the_selection_not_the_page(table):
-    table.select_all()
+def test_clearing_checked_leaves_the_representative_pick_alone(table):
+    """The bug report: "Clear" used to wipe out representative picks too.
+
+    Checking and the representative pick are different stores -- see
+    io.annotations's module docstring. Nothing that acts on "checked" may
+    ever touch "selected" (the representative pick).
+    """
+    ids = table.page_processids(0)[:3]
+    table.annotations.set_selected(ids[0], user="auto", auto_selected=True)
+    table.check_all()
+    assert table.checked_count == table.total_rows
+    assert table.annotations.selected_processids() == {ids[0]}
+
+    table.clear_checked()
+    assert table.checked_count == 0
+    assert table.annotations.selected_processids() == {ids[0]}, (
+        "clearing the checked/working selection must not touch the "
+        "representative pick"
+    )
+
+
+def test_bulk_flag_applies_to_the_checked_set_not_the_page(table):
+    table.check_all()
     changed = table.apply_flag("id_uncertain")
     assert changed == table.total_rows
     page = table.page(table.page_size)      # a page never rendered before
@@ -127,15 +149,15 @@ def test_bulk_flag_applies_to_the_selection_not_the_page(table):
 
 
 def test_an_empty_flag_clears_it(table):
-    table.select_page(0)
+    table.check_page(0)
     table.apply_flag("id_uncertain")
     table.apply_flag("")
     assert (table.page(0).rows["flag"] == "").all()
 
 
-def test_bulk_note_and_updated_id_land_on_the_selected_rows(table):
+def test_bulk_note_and_updated_id_land_on_the_checked_rows(table):
     ids = table.page_processids(0)[:3]
-    table.set_selected(ids)
+    table.set_checked(ids)
     table.apply_note("checked against the type series")
     table.apply_updated_id("Danaus plexippus")
     page = table.page(0)
@@ -147,7 +169,7 @@ def test_bulk_note_and_updated_id_land_on_the_selected_rows(table):
 
 
 def test_an_unknown_flag_is_refused(table):
-    table.select_page(0)
+    table.check_page(0)
     with pytest.raises(ValueError, match="Unknown flag"):
         table.apply_flag("definitely not a flag")
 
@@ -162,7 +184,7 @@ def test_an_empty_result_pages_without_blowing_up(store):
     page = table.page(0)
     assert len(page.rows) == 0
     assert list(page.rows.columns), "an empty page still needs its columns"
-    assert table.select_all() == 0
+    assert table.check_all() == 0
 
 
 def test_offsets_past_the_end_clamp_rather_than_erroring(table):

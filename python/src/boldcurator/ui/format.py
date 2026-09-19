@@ -25,11 +25,26 @@ CONCORDANCE_COLOURS = {"Concordant": "#28a745", "Discordant": "#dc3545"}
 
 #: The columns a curator works with, in the order the R app shows them:
 #: annotations first, because that is what they are here to change.
+#: ``selected`` and ``checked`` are two different checkboxes -- see
+#: ``io.annotations``'s module docstring -- so both are always shown together.
 GROUP_COLUMNS = [
-    "selected", "flag", "updated_id", "curator_notes",
+    "selected", "checked", "flag", "updated_id", "curator_notes",
     "rank", "quality_score", "processid", "bin_uri",
     "species", "bags_grade", "identification", "identified_by", "country.ocean",
 ]
+
+#: Headers for ``GROUP_COLUMNS`` (and the specimen table's ``PREVIEW_COLUMNS``,
+#: a subset of the same names). "Rep." and "Check" carry the distinction
+#: ``GROUP_COLUMNS`` documents -- one is the persistent representative pick,
+#: the other a disposable bulk-edit selection.
+GROUP_LABELS = {
+    "selected": "Rep.", "checked": "Check", "flag": "Flag",
+    "updated_id": "Updated ID", "curator_notes": "Notes", "rank": "Rank",
+    "quality_score": "Score", "processid": "Process ID", "bin_uri": "BIN",
+    "species": "Species", "bags_grade": "BAGS", "identification": "ID",
+    "identified_by": "Identified by", "country.ocean": "Country/Ocean",
+    "inst": "Institution",
+}
 
 CHECKLIST_LABELS = {
     "species": "Species", "specimen_count": "Specimens", "bin_count": "BINs",
