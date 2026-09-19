@@ -14,6 +14,7 @@ from pathlib import Path
 from .build.fetch_snapshot import add_fetch_args
 from .core.pipeline import SizeLimitExceeded, parse_lines, run_search
 from .data.snapshot import SnapshotError, SnapshotStore
+from .desktop import WINDOW_MODES
 
 
 def _add_snapshot_arg(p: argparse.ArgumentParser) -> None:
@@ -333,20 +334,25 @@ def cmd_fetch_snapshot(args: argparse.Namespace) -> int:
 
 
 def cmd_desktop(args: argparse.Namespace) -> int:
-    """Launch the packaged app: a native window, not a browser tab.
+    """Launch the packaged app in a window, not a plain browser tab.
 
     Imported here, not at module scope, for the same reason ``cmd_gui`` is --
-    it needs the ``desktop`` extra (Shiny plus ``pywebview``), which most
-    installs (the CLI, the parity harness) never need.
+    it needs the ``desktop`` extra (Shiny, uvicorn), which most installs
+    (the CLI, the parity harness) never need. ``pywebview`` specifically is
+    *not* checked for here even though it is part of the same extra: modes
+    other than ``native`` don't need it, and its real history of fragility
+    once frozen on Windows (see ``packaging/README.md``) is exactly why
+    ``--window`` exists.
     """
     try:
-        import webview  # noqa: F401  -- proves the desktop extra is installed
+        import shiny  # noqa: F401  -- proves the desktop extra is installed
+        import uvicorn  # noqa: F401
         from .desktop import launch
     except ImportError as exc:
         print(f"The desktop app needs the optional dependencies: "
               f"pip install -e \".[desktop]\"\n  ({exc})")
         return 1
-    launch(args.snapshot, page_size=args.page_size)
+    launch(args.snapshot, page_size=args.page_size, window=args.window)
     return 0
 
 
@@ -378,12 +384,20 @@ def build_parser() -> argparse.ArgumentParser:
     fetch_snapshot.set_defaults(func=cmd_fetch_snapshot)
 
     desktop = sub.add_parser(
-        "desktop", help="launch the packaged app in a native window")
+        "desktop", help="launch the packaged app in a window, not a browser tab")
     desktop.add_argument("--snapshot", type=Path, default=None,
                          help="snapshot .duckdb file; omit to use the saved "
                               "one, or run the first-run setup screen if "
                               "none is saved yet")
     desktop.add_argument("--page-size", type=int, default=100)
+    desktop.add_argument(
+        "--window", choices=list(WINDOW_MODES), default="auto",
+        help="how to show the app: native (pywebview), browser-app (a "
+             "Chromium browser in --app mode -- no tabs/address bar, but "
+             "launched as a plain subprocess, so it never touches "
+             "pywebview's fragile Windows backend), tab (a plain browser "
+             "tab), or auto (try native, then browser-app, then tab, "
+             "falling back silently -- the default)")
     desktop.set_defaults(func=cmd_desktop)
 
     resolve = sub.add_parser("resolve", help="resolve taxon names to ranks")

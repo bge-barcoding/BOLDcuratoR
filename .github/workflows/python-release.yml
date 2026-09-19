@@ -95,6 +95,25 @@ jobs:
           name: boldcurator-${{ matrix.name }}
           path: python/dist/boldcurator
 
+      # A second, independent way to deliver the Windows build: a real
+      # setup.exe (Start Menu entry, optional desktop shortcut, an
+      # uninstaller) wrapping the same dist/boldcurator/ output above --
+      # see packaging/windows-installer.iss and packaging/README.md.
+      - name: Build the Windows installer (Inno Setup)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          $version = "${{ github.ref_name }}" -replace '^v', ''
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" `
+            "/DMyAppVersion=$version" packaging\windows-installer.iss
+
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
+        with:
+          name: boldcurator-windows-installer
+          path: python/packaging/Output/*.exe
+
   release:
     if: startsWith(github.ref, 'refs/tags/')
     needs: build
@@ -107,16 +126,25 @@ jobs:
         with:
           path: artifacts
 
-      - name: Zip each platform's build
+      - name: Zip each platform's onedir build; stage the Windows installer as-is
         run: |
           mkdir -p release
           for d in artifacts/*/; do
             name=$(basename "$d")
+            if [ "$name" = "boldcurator-windows-installer" ]; then
+              cp "$d"*.exe release/ 2>/dev/null || true
+              continue
+            fi
             chmod +x "$d"boldcurator* 2>/dev/null || true
             (cd "$d" && zip -rq "$OLDPWD/release/${name}.zip" .)
           done
 
+      - name: List what's about to be released
+        run: ls -la release/
+
       - uses: softprops/action-gh-release@v2
         with:
-          files: release/*.zip
+          files: |
+            release/*.zip
+            release/*.exe
           generate_release_notes: true

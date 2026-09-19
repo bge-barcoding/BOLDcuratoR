@@ -149,7 +149,7 @@ def test_launch_runs_setup_when_nothing_is_configured(
     config = tmp_path / "config.json"
     monkeypatch.setattr(desktop, "run_server",
                         lambda app, **kw: ("http://x/", lambda: None))
-    monkeypatch.setattr(desktop, "_run_setup", lambda config_path: (
+    monkeypatch.setattr(desktop, "_run_setup", lambda config_path, **kw: (
         desktop.save_snapshot_path(store.path, config_path) or store.path))
 
     desktop.launch(config_path=config)
@@ -172,6 +172,9 @@ def test_launch_falls_back_to_the_browser_when_the_window_fails_to_start(
                         lambda app, **kw: ("http://x/", lambda: None))
     fake_webview.start = lambda: (_ for _ in ()).throw(
         RuntimeError("Failed to resolve Python.Runtime.Loader.Initialize"))
+    # No Chromium browser either, in "auto" mode -- forces the cascade all
+    # the way down to a plain tab, which is what this test checks.
+    monkeypatch.setattr(desktop, "_launch_browser_app", lambda url, **kw: None)
     opened = {}
     monkeypatch.setattr("webbrowser.open", lambda url: opened.setdefault("url", url))
     monkeypatch.setattr(desktop.time, "sleep",
@@ -180,6 +183,120 @@ def test_launch_falls_back_to_the_browser_when_the_window_fails_to_start(
     desktop.launch(store.path, config_path=config)
 
     assert opened["url"] == "http://x/"
+
+
+def test_launch_uses_a_browser_app_window_when_native_fails(
+    fake_webview, tmp_path, store, monkeypatch
+):
+    """The middle rung of the "auto" cascade: native fails, but a Chromium
+
+    browser is available, so that's what shows -- no plain tab needed.
+    """
+    config = tmp_path / "config.json"
+    monkeypatch.setattr(desktop, "run_server",
+                        lambda app, **kw: ("http://x/", lambda: None))
+    fake_webview.start = lambda: (_ for _ in ()).throw(
+        RuntimeError("Failed to resolve Python.Runtime.Loader.Initialize"))
+    launched = {}
+
+    class FakeProc:
+        def wait(self):
+            launched["waited"] = True
+
+    def fake_launch_browser_app(url, **kw):
+        launched["url"] = url
+        return FakeProc()
+
+    monkeypatch.setattr(desktop, "_launch_browser_app", fake_launch_browser_app)
+    monkeypatch.setattr("webbrowser.open",
+                        lambda url: pytest.fail("should not fall back to a plain tab"))
+
+    desktop.launch(store.path, config_path=config)
+
+    assert launched["url"] == "http://x/"
+    assert launched["waited"] is True
+
+
+def test_launch_with_window_browser_app_skips_pywebview_entirely(
+    tmp_path, store, monkeypatch
+):
+    """Forcing --window browser-app must not even touch pywebview -- the
+
+    whole point is being usable when pywebview itself is broken.
+    """
+    config = tmp_path / "config.json"
+    monkeypatch.setattr(desktop, "run_server",
+                        lambda app, **kw: ("http://x/", lambda: None))
+    launched = {}
+
+    class FakeProc:
+        def wait(self):
+            launched["waited"] = True
+
+    def fake_launch_browser_app(url, **kw):
+        launched["url"] = url
+        return FakeProc()
+
+    monkeypatch.setattr(desktop, "_launch_browser_app", fake_launch_browser_app)
+    # A "webview" module that would raise if imported/used at all.
+    broken = types.ModuleType("webview")
+
+    def _boom(*a, **k):
+        raise AssertionError("native window should never be attempted")
+    broken.create_window = _boom
+    broken.start = _boom
+    monkeypatch.setitem(sys.modules, "webview", broken)
+
+    desktop.launch(store.path, config_path=config, window="browser-app")
+
+    assert launched["url"] == "http://x/"
+    assert launched["waited"] is True
+
+
+def test_launch_with_window_browser_app_raises_when_none_found(tmp_path, store, monkeypatch):
+    """Forced modes never silently fall back -- that would defeat the point
+
+    of forcing one to compare it.
+    """
+    config = tmp_path / "config.json"
+    monkeypatch.setattr(desktop, "run_server",
+                        lambda app, **kw: ("http://x/", lambda: None))
+    monkeypatch.setattr(desktop, "_launch_browser_app", lambda url, **kw: None)
+
+    with pytest.raises(RuntimeError, match="no Chromium-based browser"):
+        desktop.launch(store.path, config_path=config, window="browser-app")
+
+
+def test_launch_with_window_native_raises_when_it_fails(fake_webview, tmp_path, store, monkeypatch):
+    config = tmp_path / "config.json"
+    monkeypatch.setattr(desktop, "run_server",
+                        lambda app, **kw: ("http://x/", lambda: None))
+    fake_webview.start = lambda: (_ for _ in ()).throw(RuntimeError("boom"))
+
+    with pytest.raises(RuntimeError, match="boom"):
+        desktop.launch(store.path, config_path=config, window="native")
+
+
+def test_launch_with_window_tab_never_touches_webview(tmp_path, store, monkeypatch):
+    config = tmp_path / "config.json"
+    monkeypatch.setattr(desktop, "run_server",
+                        lambda app, **kw: ("http://x/", lambda: None))
+    opened = {}
+    monkeypatch.setattr("webbrowser.open", lambda url: opened.setdefault("url", url))
+    monkeypatch.setattr(desktop.time, "sleep",
+                        lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
+    broken = types.ModuleType("webview")
+    broken.create_window = lambda *a, **k: pytest.fail("native should not be tried")
+    monkeypatch.setitem(sys.modules, "webview", broken)
+
+    desktop.launch(store.path, config_path=config, window="tab")
+
+    assert opened["url"] == "http://x/"
+
+
+def test_show_window_blocking_rejects_an_unknown_mode():
+    with pytest.raises(ValueError, match="Unknown window mode"):
+        desktop._show_window_blocking("http://x/", window="carrier-pigeon")
 
 
 def test_run_setup_falls_back_to_the_browser_when_the_window_fails_to_start(
@@ -204,6 +321,7 @@ def test_run_setup_falls_back_to_the_browser_when_the_window_fails_to_start(
 
     monkeypatch.setattr("boldcurator.ui.setup.create_setup_app",
                         fake_create_setup_app)
+    monkeypatch.setattr(desktop, "_launch_browser_app", lambda url, **kw: None)
     opened = {}
     monkeypatch.setattr("webbrowser.open", lambda url: opened.setdefault("url", url))
 
@@ -231,6 +349,7 @@ def test_run_setup_falls_back_when_the_window_cannot_even_be_created(
 
     monkeypatch.setattr("boldcurator.ui.setup.create_setup_app",
                         fake_create_setup_app)
+    monkeypatch.setattr(desktop, "_launch_browser_app", lambda url, **kw: None)
     monkeypatch.setattr("webbrowser.open", lambda url: None)
     # No fake_webview fixture here -- "webview" stays whatever real module
     # (if any) is on sys.path; make create_window itself the failure.
@@ -243,3 +362,136 @@ def test_run_setup_falls_back_when_the_window_cannot_even_be_created(
     path = desktop._run_setup(config)
 
     assert path == store.path
+
+
+def test_run_setup_with_window_browser_app_skips_pywebview_entirely(
+    tmp_path, store, monkeypatch
+):
+    monkeypatch.setattr(desktop, "run_server",
+                        lambda app, **kw: ("http://x/", lambda: None))
+
+    def fake_create_setup_app(resolved):
+        resolved.put(store.path)
+        return object()
+
+    monkeypatch.setattr("boldcurator.ui.setup.create_setup_app", fake_create_setup_app)
+    launched = {}
+
+    def fake_launch_browser_app(url, **kw):
+        launched["url"] = url
+        return object()
+
+    monkeypatch.setattr(desktop, "_launch_browser_app", fake_launch_browser_app)
+    broken = types.ModuleType("webview")
+    broken.create_window = lambda *a, **k: pytest.fail("native should not be tried")
+    monkeypatch.setitem(sys.modules, "webview", broken)
+
+    config = tmp_path / "config.json"
+    path = desktop._run_setup(config, window="browser-app")
+
+    assert path == store.path
+    assert launched["url"] == "http://x/"
+
+
+def test_run_setup_with_window_browser_app_raises_when_none_found(
+    tmp_path, store, monkeypatch
+):
+    monkeypatch.setattr(desktop, "run_server",
+                        lambda app, **kw: ("http://x/", lambda: None))
+    monkeypatch.setattr(desktop, "_launch_browser_app", lambda url, **kw: None)
+
+    with pytest.raises(RuntimeError, match="no Chromium-based browser"):
+        desktop._run_setup(tmp_path / "config.json", window="browser-app")
+
+
+def test_run_setup_with_window_tab(tmp_path, store, monkeypatch):
+    monkeypatch.setattr(desktop, "run_server",
+                        lambda app, **kw: ("http://x/", lambda: None))
+
+    def fake_create_setup_app(resolved):
+        resolved.put(store.path)
+        return object()
+
+    monkeypatch.setattr("boldcurator.ui.setup.create_setup_app", fake_create_setup_app)
+    opened = {}
+    monkeypatch.setattr("webbrowser.open", lambda url: opened.setdefault("url", url))
+
+    path = desktop._run_setup(tmp_path / "config.json", window="tab")
+
+    assert path == store.path
+    assert opened["url"] == "http://x/"
+
+
+def test_run_setup_rejects_an_unknown_window_mode(tmp_path, monkeypatch):
+    monkeypatch.setattr(desktop, "run_server",
+                        lambda app, **kw: ("http://x/", lambda: None))
+    monkeypatch.setattr("boldcurator.ui.setup.create_setup_app", lambda resolved: object())
+
+    with pytest.raises(ValueError, match="Unknown window mode"):
+        desktop._run_setup(tmp_path / "config.json", window="carrier-pigeon")
+
+
+# -- browser-app discovery/launch, independent of the window-mode plumbing ---
+
+
+def test_find_chromium_browser_checks_absolute_paths_first(tmp_path, monkeypatch):
+    fake_edge = tmp_path / "msedge.exe"
+    fake_edge.write_bytes(b"")
+    monkeypatch.setattr(desktop, "_chromium_candidates", lambda: [str(fake_edge), "chrome"])
+
+    assert desktop._find_chromium_browser() == str(fake_edge)
+
+
+def test_find_chromium_browser_falls_back_to_path(monkeypatch):
+    monkeypatch.setattr(desktop, "_chromium_candidates",
+                        lambda: [r"C:\nowhere\msedge.exe", "definitely-not-a-real-browser-xyz",
+                                 "sh"])
+    # "sh" is virtually guaranteed to exist on any POSIX test runner and
+    # stands in for a browser found via PATH rather than an absolute path.
+    found = desktop._find_chromium_browser()
+    assert found is not None and found.endswith("sh")
+
+
+def test_find_chromium_browser_returns_none_when_nothing_matches(monkeypatch):
+    monkeypatch.setattr(desktop, "_chromium_candidates",
+                        lambda: ["definitely-not-a-real-browser-xyz"])
+    assert desktop._find_chromium_browser() is None
+
+
+def test_launch_browser_app_passes_app_mode_flags(monkeypatch):
+    monkeypatch.setattr(desktop, "_find_chromium_browser", lambda: "/usr/bin/fake-edge")
+    calls = {}
+
+    class FakePopen:
+        def __init__(self, args):
+            calls["args"] = args
+
+    monkeypatch.setattr(desktop.subprocess, "Popen", FakePopen)
+
+    result = desktop._launch_browser_app("http://x/", width=800, height=600)
+
+    assert isinstance(result, FakePopen)
+    args = calls["args"]
+    assert args[0] == "/usr/bin/fake-edge"
+    assert "--app=http://x/" in args
+    assert "--window-size=800,600" in args
+    assert any(a.startswith("--user-data-dir=") for a in args)
+
+
+def test_launch_browser_app_returns_none_without_a_browser(monkeypatch):
+    monkeypatch.setattr(desktop, "_find_chromium_browser", lambda: None)
+    assert desktop._launch_browser_app("http://x/") is None
+
+
+def test_chromium_candidates_are_platform_specific(monkeypatch):
+    monkeypatch.setattr(desktop.sys, "platform", "win32")
+    windows = desktop._chromium_candidates()
+    assert any("msedge" in c.lower() for c in windows)
+
+    monkeypatch.setattr(desktop.sys, "platform", "darwin")
+    mac = desktop._chromium_candidates()
+    assert any("Microsoft Edge.app" in c for c in mac)
+
+    monkeypatch.setattr(desktop.sys, "platform", "linux")
+    linux = desktop._chromium_candidates()
+    assert "google-chrome" in linux
