@@ -258,8 +258,10 @@ def test_column_headers_are_clickable_and_carry_the_sort_arrow():
 
 
 def test_a_column_left_out_of_sortable_renders_a_plain_header():
-    """"selected"/"checked" are never worth a click-to-sort header -- they
-    already show as a checkbox in every row.
+    """A caller can still restrict which columns are clickable (the specimen
+
+    table does, for columns SpecimenTable.sort_by can't fetch server-side);
+    _table must honour that rather than making everything clickable.
     """
     import pandas as pd
 
@@ -270,7 +272,26 @@ def test_a_column_left_out_of_sortable_renders_a_plain_header():
     header = html.split("<tbody>")[0]
     excluded_cell = header.split("selected")[0].split("<th")[-1]
     assert "cursor:pointer" not in excluded_cell, "excluded column must not be clickable"
-    assert header.count(f"class='{SORT_HEADER_CLASS}'") == 1
+
+
+def test_group_tables_default_to_sorting_by_rep_and_check_too():
+    """Flag/Updated ID/Notes were already sortable in a BAGS group table;
+
+    Rep./Check (selected/checked) were the two left out. A group table is
+    already fully in memory, so there is no reason a boolean column can't
+    sort like any other.
+    """
+    import pandas as pd
+
+    from boldcurator.ui.app import SORT_HEADER_CLASS, _group_html
+
+    frame = pd.DataFrame({
+        "selected": [True, False], "checked": [False, True],
+        "processid": ["P1", "P2"], "species": ["A", "B"],
+    })
+    html = _group_html(frame, sort_input="group_sort_click")
+    header = html.split("<tbody>")[0]
+    assert header.count(f"class='{SORT_HEADER_CLASS}'") == 4
 
 
 def test_the_fixture_exercises_every_grade_the_screens_show(store):

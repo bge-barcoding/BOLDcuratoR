@@ -199,6 +199,14 @@ def main(argv: list[str] | None = None) -> int:
         time.sleep(SETTLE)
         check("paging moves to different rows",
               table_text("#specimens_body")[:200] != before)
+        # The five annotation columns are sortable on the specimen table too,
+        # not only a stored/physical one -- SpecimenTable.sort_by fetches
+        # nothing from the database for these, it reads Annotations directly.
+        for label in ("Rep.", "Check", "Flag", "Updated ID", "Notes"):
+            check(f'the "{label}" column header is sortable',
+                  page.locator("#specimens_body th.bc-sort-th",
+                              has_text=label).count() >= 1)
+
         # Click-a-column-header sorting, not a dropdown: click the "Process
         # ID" header twice (ascending, then descending) and check the order
         # actually changes each time.
@@ -214,6 +222,21 @@ def main(argv: list[str] | None = None) -> int:
         descending = table_text("#specimens_body")[:200]
         check("clicking the same header again reverses the order",
               descending != ascending)
+
+        # Sorting by "Rep." (the representative pick) must surface the
+        # auto-selected rows, not silently do nothing -- this is the one
+        # annotation column with a real answer to check for correctness
+        # (True sorts after False; the representative picks are True).
+        rep_header = page.locator("#specimens_body th.bc-sort-th", has_text="Rep.")
+        rep_header.click()
+        time.sleep(SETTLE)
+        rep_header.click()   # descending: True (checked) first
+        time.sleep(SETTLE * 1.5)
+        first_row_rep = page.locator(
+            "#specimens_body tbody tr").first.locator("td").first.locator(
+            "input").is_checked()
+        check("sorting by Rep. surfaces the representative picks",
+              first_row_rep)
         page.screenshot(path=str(args.out / "05-specimens.png"), full_page=True)
 
         # -- click-a-column-header sorting on a BAGS group table too

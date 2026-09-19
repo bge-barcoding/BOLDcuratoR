@@ -92,6 +92,50 @@ def test_sorting_by_a_computed_column_is_refused_not_ignored(table):
     assert "processid" in table.sortable_columns
 
 
+# -- sorting by an annotation column: no database fetch involved -----------
+
+
+def test_annotation_columns_are_sortable_without_touching_the_snapshot(table):
+    for column in ("selected", "checked", "flag", "updated_id", "curator_notes"):
+        assert column in table.sortable_columns
+
+
+def test_sorting_by_selected_puts_the_representative_picks_first(table):
+    ids = table.page_processids(0)[:2]
+    table.annotations.set_selected(ids[0])
+    table.sort_by("selected", descending=True)
+    top = table.page(0).rows
+    assert bool(top["selected"].iloc[0]) is True
+    assert str(top["processid"].iloc[0]) == ids[0]
+
+
+def test_sorting_by_checked_reaches_rows_never_rendered(table):
+    ids = table.page_processids(0)[:1]
+    table.set_checked(ids)
+    table.sort_by("checked", descending=True)
+    assert str(table.page(0).rows["processid"].iloc[0]) == ids[0]
+    assert bool(table.page(0).rows["checked"].iloc[0]) is True
+
+
+def test_sorting_by_flag_groups_the_flagged_records_together(table):
+    ids = table.page_processids(0)[:3]
+    table.apply_flag("id_uncertain", ids)
+    table.sort_by("flag", descending=True)  # non-empty strings sort after ""
+    top = {str(p) for p in table.page(0).rows["processid"].iloc[:3]}
+    assert top == set(ids)
+
+
+def test_sorting_by_updated_id_and_notes_uses_what_the_table_shows(table):
+    ids = table.page_processids(0)[:2]
+    table.set_checked(ids)
+    table.apply_note("checked against the type series")
+    table.apply_updated_id("Danaus plexippus")
+    for column in ("updated_id", "curator_notes"):
+        table.sort_by(column, descending=True)
+        top = {str(p) for p in table.page(0).rows["processid"].iloc[:2]}
+        assert top == set(ids), f"sorting by {column} should surface the edited rows"
+
+
 def test_sorting_reaches_rows_that_are_not_on_the_first_page(table, store):
     """The sort key comes from the snapshot, not from the visible page."""
     table.sort_by("processid", descending=True)

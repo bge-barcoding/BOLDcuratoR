@@ -41,6 +41,15 @@ DERIVED_COLUMNS = frozenset({
     "data_source", "import_date",
 })
 
+#: Columns that live only in ``Annotations``, not the snapshot. Sorting by one
+#: doesn't touch the database at all: every processid the plan resolves to is
+#: already known (``all_processids``), and each annotation store is a small,
+#: sparse dict already held in memory -- unlike ``DERIVED_COLUMNS``, this is
+#: cheap regardless of result size.
+ANNOTATION_SORT_COLUMNS = frozenset({
+    "selected", "checked", "flag", "updated_id", "curator_notes",
+})
+
 DEFAULT_PAGE_SIZE = 100
 
 
@@ -112,7 +121,8 @@ class SpecimenTable:
 
     @property
     def sortable_columns(self) -> list[str]:
-        return [c for c in self.store.app_columns if c not in DERIVED_COLUMNS]
+        return [c for c in self.store.app_columns if c not in DERIVED_COLUMNS] \
+            + list(ANNOTATION_SORT_COLUMNS)
 
     # -- ordering ----------------------------------------------------------
 
@@ -120,11 +130,16 @@ class SpecimenTable:
         """Order the whole result by one stored column.
 
         ``None`` restores the plan's order, which is the snapshot's physical
-        (taxonomic) order and needs no fetch at all.
+        (taxonomic) order and needs no fetch at all. A column in
+        ``ANNOTATION_SORT_COLUMNS`` sorts by ``self.annotations`` instead of
+        the snapshot -- see :meth:`_sort_by_annotation`.
         """
         if column is None:
             self._order = np.asarray(self.plan.row_ids)
             self.sort_column, self.sort_descending = None, False
+            return
+        if column in ANNOTATION_SORT_COLUMNS:
+            self._sort_by_annotation(column, descending=descending)
             return
         if column in DERIVED_COLUMNS:
             raise ValueError(
@@ -138,6 +153,32 @@ class SpecimenTable:
             column, ascending=not descending, kind="stable", na_position="last"
         )
         self._order = ordered[ROW_ID_COLUMN].to_numpy()
+        self.sort_column, self.sort_descending = column, bool(descending)
+
+    def _sort_by_annotation(self, column: str, *, descending: bool) -> None:
+        """Order the whole result by a curator annotation, not a snapshot column.
+
+        No database fetch: ``all_processids`` (cached) already has every
+        processid in the plan, keyed by rowid, and each annotation store is a
+        small dict already in memory. ``selected``/``checked`` sort by
+        membership (bool); the rest reuse ``Annotations.to_frame``, the exact
+        columns ``merge_annotations`` renders, so a curator sorting by "Flag"
+        gets the same values they see in the table.
+        """
+        self.all_processids()  # ensures self._processids is populated
+        ids_by_rowid = self._processids
+        processids = [str(p) for p in ids_by_rowid]
+        if column == "selected":
+            key = pd.Series([p in self.annotations.selected for p in processids])
+        elif column == "checked":
+            key = pd.Series([p in self.annotations.working for p in processids])
+        else:
+            key = self.annotations.to_frame(processids)[column]
+        order = pd.DataFrame({"key": key.to_numpy(), "rid": ids_by_rowid.index.to_numpy()})
+        order = order.sort_values(
+            "key", ascending=not descending, kind="stable", na_position="last"
+        )
+        self._order = order["rid"].to_numpy()
         self.sort_column, self.sort_descending = column, bool(descending)
 
     # -- paging ------------------------------------------------------------

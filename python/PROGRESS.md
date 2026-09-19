@@ -6,11 +6,13 @@ Branch: `claude/wonderful-newton-qw7llz`. Plan:
 **State: Phases 0–2 complete and fast. Phase 3 has all six screens working,
 the eight downloads are wired, record selection is per-row (not just
 whole-group), auto-selection runs on a fresh search, and a real grade-E
-grouping bug is fixed. Every table sorts by clicking its column headers,
-links out to the BOLD portal, and keeps its annotation columns frozen while
-scrolling. 238 tests pass, the parity gate is green.**
+grouping bug is fixed. Every table sorts by clicking its column headers
+(including the five annotation columns), links out to the BOLD portal, keeps
+its annotation columns frozen and pinned to the top while scrolling, and
+"Apply to checked" is scoped to the current BAGS group. 245 tests pass, the
+parity gate is green.**
 
-## Open issues from curator feedback, round 2 (in progress)
+## Open issues from curator feedback, round 2 -- all three resolved
 
 Found using the round-1 fixes. Fixing one at a time, one commit per item.
 
@@ -48,11 +50,21 @@ Found using the round-1 fixes. Fixing one at a time, one commit per item.
    with two new `tools/drive_ui.py` checks: a check made in group 1, a
    different check made in group 2, apply while viewing group 2 -- only group
    2's table shows the new flag.
-3. [ ] **Sorting should cover Rep./Check/Flag/Updated ID/Notes too.** The BAGS
-   group tables already sort by Flag/Updated ID/Notes (just not Rep./Check);
-   the Specimens tab sorts by none of the five, because
-   `SpecimenTable.sort_by` only knows how to fetch a physical snapshot
-   column, and these five are annotation-only.
+3. [x] **Sorting should cover Rep./Check/Flag/Updated ID/Notes too.** Fixed --
+   `SpecimenTable` now has an `ANNOTATION_SORT_COLUMNS` path
+   (`_sort_by_annotation`) that sorts by `Annotations` directly instead of
+   fetching from the snapshot: every processid the plan resolves to is
+   already known (`all_processids`, cached) and each annotation store is a
+   small dict already in memory, so this costs nothing regardless of result
+   size -- unlike `DERIVED_COLUMNS`, which stays refused because those really
+   do need scoring the whole result. `sortable_columns` includes the five, so
+   the Specimens tab picks them up automatically. The BAGS group tables
+   (already fully in memory) now default to sorting by every shown column,
+   including the two checkbox ones, rather than excluding `selected`/
+   `checked` specifically. Also removed a dead `ui.update_select("sort", ...)`
+   left over from the dropdown round 1 replaced. Verified live: all five
+   headers are clickable on the specimen table, and sorting by "Rep."
+   descending surfaces the representative picks first.
 
 ## Open issues from curator feedback -- all six resolved
 
@@ -183,7 +195,7 @@ to learn" below for why that matters here specifically.
 cd C:\GitHub\BOLDcurator\python
 git pull
 pip install -e ".[dev,gui]"
-python -m pytest tests/ -q          # 238 passing
+python -m pytest tests/ -q          # 245 passing
 python parity/compare.py            # PASS
 
 python -m boldcurator.cli gui --snapshot "<the reordered snapshot>"

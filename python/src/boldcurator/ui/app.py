@@ -380,10 +380,6 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
             for value in group_index.values():
                 value.set(0)
             if state.search is not None:
-                ui.update_select("sort",
-                                 choices=["(result order)"]
-                                 + state.search.table.sortable_columns,
-                                 selected="(result order)")
                 ui.update_navs("nav", selected="species")
             touch()
 
@@ -1281,11 +1277,6 @@ def _checkbox_cell(pid: object, checked: bool, css_class: str, *,
             f"data-pid='{pid}' {mark}></td>")
 
 
-#: Never worth a click-to-sort header: booleans that already show as a
-#: checkbox in every row, so sorting by them just clusters ticked rows.
-_UNSORTABLE_GROUP_COLUMNS = frozenset({"selected", "checked"})
-
-
 def _group_html(frame: pd.DataFrame, columns: list[str] | None = None,
                 limit: int = 500, *, sort_input: str | None = None,
                 sortable: frozenset[str] | None = None,
@@ -1305,17 +1296,19 @@ def _group_html(frame: pd.DataFrame, columns: list[str] | None = None,
     ``Annotations.working`` -- it has no curatorial meaning to persist, so it
     is not one of ``merge_annotations``'s six columns).
 
-    ``sortable`` defaults to every shown column but the two checkboxes -- fine
-    for a group table, which is already fully in memory. The specimen table
-    passes its own narrower set (``SpecimenTable.sortable_columns``): sorting
-    it means fetching one column for the *whole* result, so a computed column
-    (``quality_score``, ``rank``, ``bags_grade``...) is refused there, not
-    silently sorted by something else.
+    ``sortable`` defaults to every shown column, including the two checkbox
+    columns (True/False sorts perfectly well) -- fine for a group table,
+    which is already fully in memory. The specimen table passes its own set
+    (``SpecimenTable.sortable_columns``): sorting a *stored* column there means
+    fetching it for the whole result, so a genuinely computed one
+    (``quality_score``, ``rank``, ``bags_grade``...) is refused, not silently
+    sorted by something else -- annotation columns (``selected``, ``flag``...)
+    are cheap there too and are included the same way.
     """
     shown = present(frame, columns or GROUP_COLUMNS)
     has_pid = "processid" in shown.columns
     if sortable is None:
-        sortable = frozenset(shown.columns) - _UNSORTABLE_GROUP_COLUMNS
+        sortable = frozenset(shown.columns)
 
     def cell(column, value, row):
         if column == "selected":
