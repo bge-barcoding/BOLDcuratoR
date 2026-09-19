@@ -33,6 +33,7 @@ from ..core.pipeline import (
 from ..core import selection
 from ..core.ranking import score_and_rank
 from ..core.summaries import build_species_checklist
+from ..core.summaries import gap_analysis as _gap_analysis
 from ..core.table import SpecimenTable
 from ..data.queries import (
     SearchPlan,
@@ -73,6 +74,10 @@ class SearchState:
     table: SpecimenTable
     query_label: str = ""
     warnings: list[str] = field(default_factory=list)
+    #: The taxa textarea, as synonym groups (first name per line is the valid
+    #: one) -- kept so gap analysis can report against what was actually
+    #: typed, not the flat, de-duplicated list the query itself ran on.
+    taxonomy_groups: list[list[str]] = field(default_factory=list)
     #: The session's one annotation store, so a fresh search's auto-selection
     #: (see :meth:`analysis`) lands where the specimen table and every BAGS
     #: group already look for it.
@@ -110,7 +115,8 @@ class SearchState:
             # auto_select=False: analyse_plan's own auto-select can't see the
             # session's Annotations object, so it is done just below instead,
             # against the one store the rest of the app reads and writes.
-            self._analysis = analyse_plan(store, self.plan, auto_select=False)
+            self._analysis = analyse_plan(store, self.plan, auto_select=False,
+                                          taxonomy_groups=self.taxonomy_groups)
             if self.annotations is not None:
                 chosen = selection.auto_select_best_specimens(
                     self._analysis.specimens, existing=self.annotations.selected)
@@ -121,6 +127,17 @@ class SearchState:
     def checklist(self, store: SnapshotStore):
         result = self.analysis(store)
         return build_species_checklist(result.specimens, result.bags_grades)
+
+    def gap_analysis(self, store: SnapshotStore):
+        """Found/Missing per taxon typed, against what the search returned.
+
+        Reports against ``result.taxonomy_groups`` -- the taxa textarea, kept
+        as synonym groups precisely so this can report on the name a curator
+        actually typed rather than the flat, de-duplicated list the search
+        itself ran on.
+        """
+        result = self.analysis(store)
+        return _gap_analysis(result.taxonomy_groups, result.specimens)
 
     def groups(self, store: SnapshotStore, grade: str) -> list[SpecimenGroup]:
         """The groups for one grade, cached -- a curator revisits a tab often."""
@@ -262,9 +279,12 @@ class AppState:
                dataset_text: str, project_text: str):
         """Turn the form into a query, or explain why it cannot be one.
 
-        Returns ``(query, resolution, warnings, error)``. Every field is parsed
-        the way the CLI parses it -- one value per line, blanks dropped -- so
-        the two cannot drift.
+        Returns ``(query, resolution, warnings, error, groups)``. Every field
+        is parsed the way the CLI parses it -- one value per line, blanks
+        dropped -- so the two cannot drift. ``groups`` is the taxa textarea as
+        synonym groups (first name in each line is the valid one), kept
+        separately from the flat, de-duplicated ``names`` the query itself
+        runs on so gap analysis can report against what was actually typed.
         """
         groups = parse_taxa_input(taxa_text)
         names = flatten_taxa(groups)
@@ -305,10 +325,10 @@ class AppState:
         if query.is_empty():
             if names:
                 return None, resolution, warnings, (
-                    "None of those names are in this snapshot.")
+                    "None of those names are in this snapshot."), groups
             return None, resolution, warnings, (
-                "Type a taxon name, or a dataset or project code.")
-        return query, resolution, warnings, ""
+                "Type a taxon name, or a dataset or project code."), groups
+        return query, resolution, warnings, "", groups
 
     def estimate(self, taxa_text: str = "", countries_text: str = "",
                  continents: list[str] | None = None, dataset_text: str = "",
@@ -318,7 +338,7 @@ class AppState:
         Counts only -- this is the pre-check the whole design rests on, and it
         costs a fraction of a second even for an order of two million records.
         """
-        query, resolution, warnings, error = self._build(
+        query, resolution, warnings, error, _groups = self._build(
             taxa_text, countries_text, continents or [], dataset_text, project_text)
         if query is None:
             return {"error": error, "warnings": warnings}
@@ -336,7 +356,7 @@ class AppState:
                    continents: list[str] | None = None, dataset_text: str = "",
                    project_text: str = "") -> str:
         """Plan a search from the form. Returns a human-readable status line."""
-        query, resolution, warnings, error = self._build(
+        query, resolution, warnings, error, groups = self._build(
             taxa_text, countries_text, continents or [], dataset_text, project_text)
         if query is None:
             self.search = None
@@ -361,6 +381,7 @@ class AppState:
                                 annotations=self.annotations, user=self.user),
             query_label=label,
             warnings=warnings,
+            taxonomy_groups=groups,
             annotations=self.annotations,
         )
         return (f"{plan.expanded_records:,} records "

@@ -24,6 +24,10 @@ CHECKLIST_COLUMNS = [
     "bags_grade", "countries", "mean_quality_score",
 ]
 
+GAP_ANALYSIS_COLUMNS = [
+    "input_taxon", "status", "matched_species", "specimen_count", "notes",
+]
+
 
 def build_species_checklist(
     specimens: pd.DataFrame,
@@ -72,3 +76,74 @@ def build_species_checklist(
         },
         columns=CHECKLIST_COLUMNS,
     )
+
+
+def gap_analysis(
+    taxonomy_groups: list[list[str]],
+    specimens: pd.DataFrame,
+) -> pd.DataFrame:
+    """One row per taxon the curator typed: did the search actually find it?
+
+    ``perform_gap_analysis`` (``mod_species_analysis_utils.R:58-104``), with
+    the same synonym handling: ``taxonomy_groups`` is one group per line of
+    the taxa textarea, first name is the valid one and the rest are synonyms
+    (``core.pipeline.parse_taxa_input``). A group matches on **any** name in
+    it -- the valid name is tried first, so "matched via synonym" only shows
+    when a synonym is what actually found it.
+
+    Species-level lookup only: a curator typed a species (or a synonym of
+    one), and this answers "is that name, under any of its synonyms, among
+    the species this search actually turned up" -- a family or order in the
+    group would never appear as a ``species`` value to match against, which
+    mirrors R exactly (it does the same case-insensitive equality against
+    ``specimen_data$species`` regardless of rank).
+
+    The R loop is over BOTH input taxa and, for a miss, effectively the whole
+    specimen frame (`` == `` scans it per name). Groups are few -- a curator
+    types dozens of taxa at most -- so only that loop is Python; the count and
+    "first original-case spelling" per species are computed once, vectorised,
+    before it.
+    """
+    labels = [", ".join(group) for group in taxonomy_groups]
+    if not taxonomy_groups:
+        return pd.DataFrame(columns=GAP_ANALYSIS_COLUMNS)
+
+    if specimens is None or len(specimens) == 0:
+        return pd.DataFrame(
+            {
+                "input_taxon": labels,
+                "status": "Missing",
+                "matched_species": "",
+                "specimen_count": 0,
+                "notes": "No specimen data available",
+            },
+            columns=GAP_ANALYSIS_COLUMNS,
+        )
+
+    species = to_text(column_or_missing(specimens, "species")).str.strip()
+    named = species[species != ""]
+    lowered = named.str.lower()
+
+    counts = lowered.value_counts()
+    # R takes the first row's spelling per exact match; groupby here
+    # preserves the specimens' own row order, so ".first()" agrees with it.
+    first_spelling = named.groupby(lowered).first()
+
+    rows = []
+    for group, label in zip(taxonomy_groups, labels):
+        status, matched, count, note = "Missing", "", 0, ""
+        for name in group:
+            name = name.strip()
+            if not name:
+                continue
+            key = name.lower()
+            if key in counts.index:
+                status = "Found"
+                matched = first_spelling[key]
+                count = int(counts[key])
+                if group and name != group[0]:
+                    note = f"Matched via synonym: {name}"
+                break
+        rows.append((label, status, matched, count, note))
+
+    return pd.DataFrame(rows, columns=GAP_ANALYSIS_COLUMNS)
