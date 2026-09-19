@@ -314,7 +314,8 @@ def cmd_gui(args: argparse.Namespace) -> int:
         print(f"The GUI needs the optional dependencies: pip install -e \".[gui]\"\n"
               f"  ({exc})")
         return 1
-    run(args.snapshot, host=args.host, port=args.port, page_size=args.page_size)
+    run(args.snapshot, host=args.host, port=args.port, page_size=args.page_size,
+        sessions_path=args.sessions)
     return 0
 
 
@@ -337,6 +338,9 @@ def build_parser() -> argparse.ArgumentParser:
     gui.add_argument("--host", default="127.0.0.1")
     gui.add_argument("--port", type=int, default=8000)
     gui.add_argument("--page-size", type=int, default=100)
+    gui.add_argument("--sessions", default=None,
+                     help="path to the saved-sessions SQLite file "
+                          "(default: ~/.boldcurator/sessions.sqlite)")
     gui.set_defaults(func=cmd_gui)
 
     verify = sub.add_parser("verify", help="verify a snapshot read-only")

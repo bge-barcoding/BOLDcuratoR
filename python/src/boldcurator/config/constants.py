@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from pathlib import Path
 
 # --------------------------------------------------------------------------
 # Scoring
@@ -274,6 +275,18 @@ BOLD_ATTRIBUTION_TEXT = (
     "(including exports from this app), and share any redistributed or "
     "adapted dataset under the same licence."
 )
+
+# --------------------------------------------------------------------------
+# Session storage -- plan item 3.8
+# --------------------------------------------------------------------------
+
+#: Where saved sessions live when the GUI is not told otherwise: per-user,
+#: not next to the snapshot -- a course's snapshot file may be shared and
+#: read-only, so it is not a safe place to write to (``docs/python-app-plan.md``'s
+#: "~20 students share one API key" context still applies to the *file*, even
+#: offline). A plain path avoids a new dependency for the common desktop case;
+#: ``boldcurator gui --sessions <path>`` overrides it for anything else.
+DEFAULT_SESSIONS_PATH = Path.home() / ".boldcurator" / "sessions.sqlite"
 
 # --------------------------------------------------------------------------
 # Geography

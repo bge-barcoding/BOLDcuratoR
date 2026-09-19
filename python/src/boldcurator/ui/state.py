@@ -41,11 +41,13 @@ from ..data.queries import (
     estimate_search,
     fetch_by_bin,
     missing_recordset_codes,
+    plan_from_processids,
     plan_search,
     resolve_taxa,
 )
 from ..data.snapshot import SnapshotStore
 from ..io.annotations import Annotations
+from ..io.session import Session, SessionStore
 
 #: Above this, the aggregate screens refuse rather than grind. The specimen
 #: table has no such limit -- it never materialises the result.
@@ -386,3 +388,70 @@ class AppState:
         )
         return (f"{plan.expanded_records:,} records "
                 f"({plan.seed_records:,} seed, {plan.seed_bins:,} BINs)")
+
+    # -- session save/resume (plan 3.8) ------------------------------------
+    #
+    # A session is the query plus the processid list plus the annotations --
+    # a few kilobytes, not the ~125 MB frame R serialises every 60 seconds
+    # (``io/session.py``'s module docstring has the full reasoning). Saving
+    # needs the analysed result (it reads ``result.specimens["processid"]``),
+    # which every summary screen already computes and caches; resuming
+    # rebuilds a plan from the saved processids and runs it through the exact
+    # same ``analyse_plan``/``SpecimenTable`` path a live search uses, so a
+    # resumed session pages, sorts and groups identically to a fresh one.
+
+    def save_session(self, sessions: SessionStore, session_id: str, *,
+                     name: str = "") -> Session:
+        """Persist the current search under ``session_id``.
+
+        Raises :class:`ResultTooLargeToAnalyse` under the same limit every
+        summary screen already enforces -- a session captures the same
+        analysed result those screens show.
+        """
+        if self.search is None:
+            raise ValueError("Run a search first.")
+        result = self.search.analysis(self.store)
+        return sessions.save(session_id, result=result, annotations=self.annotations,
+                             name=name, user_name=self.user)
+
+    def resume_session(self, saved: Session) -> tuple[str, list[str]]:
+        """Rebuild a search from a saved session, against the current snapshot.
+
+        Returns ``(status, warnings)``. Warnings cover a changed snapshot id
+        and any saved processids no longer present (retracted or
+        reassigned) -- both reported, never silently dropped.
+        """
+        warnings: list[str] = []
+        current_id = self.store.info().snapshot_id
+        if saved.snapshot_id and current_id != saved.snapshot_id:
+            warnings.append(
+                f"This session was saved against snapshot {saved.snapshot_id} "
+                f"but the current snapshot is {current_id}. BIN membership and "
+                "identifications may have changed since; scores and BAGS "
+                "grades are recomputed against the current data.")
+
+        plan, missing = plan_from_processids(self.store, saved.processids)
+        if missing:
+            warnings.append(
+                f"{len(missing)} of {len(saved.processids)} saved records are "
+                "not in the current snapshot. They may have been retracted or "
+                "reassigned. They are listed rather than dropped silently: "
+                + ", ".join(missing))
+        if plan.expanded_records > ANALYSIS_LIMIT:
+            warnings.append(
+                f"{plan.expanded_records:,} records: the specimen table works, "
+                "but the species, BIN and BAGS screens need a narrower search.")
+
+        self.annotations = saved.annotations
+        query = saved.query if isinstance(saved.query, dict) else {}
+        label = saved.name or saved.session_id
+        self.search = SearchState(
+            plan=plan,
+            table=SpecimenTable(self.store, plan, page_size=self.page_size,
+                                annotations=self.annotations, user=self.user),
+            query_label=f"Resumed: {label}",
+            warnings=warnings,
+            taxonomy_groups=query.get("taxonomy_groups", []),
+            annotations=self.annotations,
+        )
+        return f"{plan.expanded_records:,} records restored from {label!r}", warnings

@@ -27,7 +27,12 @@ from pathlib import Path
 import pandas as pd
 from shiny import App, reactive, render, ui
 
-from ..config.constants import CONTINENT_COUNTRIES, DOWNLOAD_LIMITS, FLAG_OPTIONS
+from ..config.constants import (
+    CONTINENT_COUNTRIES,
+    DEFAULT_SESSIONS_PATH,
+    DOWNLOAD_LIMITS,
+    FLAG_OPTIONS,
+)
 from ..core.grouping import (
     GRADE_DESCRIPTIONS,
     GRADES,
@@ -38,6 +43,7 @@ from ..core.table import DEFAULT_PAGE_SIZE
 from ..data.snapshot import SnapshotStore
 from ..io import exports as export_io
 from ..io.annotations import merge_annotations
+from ..io.session import SessionStore
 from .format import (
     BIN_LABELS,
     BOLD_ATTRIBUTION_SHORT,
@@ -168,9 +174,11 @@ def _grade_panel(grade: str) -> ui.Tag:
     )
 
 
-def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> App:
+def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
+               sessions_path: str | Path | None = None) -> App:
     store = SnapshotStore(snapshot)
     info = store.info()
+    sessions_path = sessions_path or DEFAULT_SESSIONS_PATH
 
     app_ui = ui.page_fluid(
         # One delegated listener, attached to the page once. The specimen and
@@ -296,6 +304,28 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
                 ui.output_ui("estimate_box"),
                 ui.output_ui("search_summary"),
                 ui.div(
+                    ui.tags.strong("Session", class_="small"),
+                    ui.div(
+                        ui.input_text("session_name", None,
+                                      placeholder="Session name",
+                                      width="220px"),
+                        ui.input_action_button("save_session", "Save",
+                                               class_="btn-sm"),
+                        ui.input_select("load_session_id", None, choices={},
+                                        width="320px"),
+                        ui.input_action_button("load_session", "Load",
+                                               class_="btn-sm"),
+                        ui.input_action_button("delete_session", "Delete",
+                                               class_="btn-sm btn-outline-danger"),
+                        style="display:flex;gap:8px;align-items:center;"
+                              "flex-wrap:wrap;margin-top:4px;",
+                    ),
+                    ui.output_ui("session_status"),
+                    style="margin-top:16px;padding:10px 14px;"
+                          "background:#f8f9fa;border:1px solid #dee2e6;"
+                          "border-radius:5px;max-width:900px;",
+                ),
+                ui.div(
                     BOLD_ATTRIBUTION_TEXT + " ",
                     ui.tags.a("Full licence text.", href=CC_BY_SA_URL,
                              target="_blank", rel="noopener noreferrer"),
@@ -316,8 +346,14 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
 
     def server(input, output, session):
         state = AppState(store, page_size=page_size)
+        #: One connection per browser session/tab -- SQLite handles the
+        #: concurrent opens fine at this scale, and it means a tab closing
+        #: doesn't affect another tab's saved-session list.
+        sessions = SessionStore(sessions_path)
+        session.on_ended(sessions.close)
         revision = reactive.Value(0)
         status = reactive.Value("")
+        session_msg = reactive.Value("")
         offset = reactive.Value(0)
         estimate: reactive.Value = reactive.Value({})
         group_index: dict[str, reactive.Value] = {
@@ -399,6 +435,78 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE) -> A
             if state.search is not None:
                 ui.update_navs("nav", selected="species")
             touch()
+
+        # -- session save/resume (plan 3.8) ---------------------------------
+        #
+        # A saved session's identity is its (slugified) name, so saving under
+        # a name already used updates that entry in place -- matching
+        # SessionStore.save()'s own upsert semantics -- rather than piling up
+        # duplicates every time a curator saves their progress.
+
+        def _slugify(name: str) -> str:
+            slug = "".join(c if c.isalnum() else "-" for c in name.strip().lower())
+            while "--" in slug:
+                slug = slug.replace("--", "-")
+            return slug.strip("-")
+
+        def _session_choices() -> dict[str, str]:
+            return {s.session_id: s.describe() for s in sessions.list_sessions()}
+
+        @reactive.effect
+        def _populate_sessions():
+            """Runs once at session startup -- it reads no reactive input, so
+            Shiny never re-invalidates it. Save/load/delete each refresh the
+            list themselves afterwards."""
+            ui.update_select("load_session_id", choices=_session_choices())
+
+        @reactive.effect
+        @reactive.event(input.save_session)
+        def _save_session():
+            name = (input.session_name() or "").strip()
+            session_id = _slugify(name) or f"session-{export_io.timestamp()}"
+            try:
+                saved = state.save_session(sessions, session_id, name=name)
+            except ValueError as exc:
+                session_msg.set(str(exc))
+                return
+            except ResultTooLargeToAnalyse as exc:
+                session_msg.set(str(exc))
+                return
+            ui.update_select("load_session_id", choices=_session_choices(),
+                             selected=session_id)
+            session_msg.set(f"Saved {saved.name or saved.session_id!r} -- "
+                            f"{saved.record_count:,} records.")
+
+        @reactive.effect
+        @reactive.event(input.load_session)
+        def _load_session():
+            session_id = input.load_session_id()
+            saved = sessions.load(session_id) if session_id else None
+            if saved is None:
+                session_msg.set("Nothing to load -- save a session first.")
+                return
+            state.user = (input.user() or "").strip() or state.user
+            text, warnings = state.resume_session(saved)
+            offset.set(0)
+            for value in group_index.values():
+                value.set(0)
+            ui.update_navs("nav", selected="species")
+            session_msg.set(" ".join([text] + warnings))
+            touch()
+
+        @reactive.effect
+        @reactive.event(input.delete_session)
+        def _delete_session():
+            session_id = input.load_session_id()
+            if session_id and sessions.delete(session_id):
+                session_msg.set("Deleted.")
+            ui.update_select("load_session_id", choices=_session_choices())
+
+        @output
+        @render.ui
+        def session_status():
+            text = session_msg.get()
+            return ui.div(text, class_="small text-muted mt-1") if text else ui.div()
 
         @output
         @render.ui
@@ -1397,7 +1505,10 @@ def _group_html(frame: pd.DataFrame, columns: list[str] | None = None,
 
 
 def run(snapshot: str | Path, *, host: str = "127.0.0.1", port: int = 8000,
-        page_size: int = DEFAULT_PAGE_SIZE) -> None:
+        page_size: int = DEFAULT_PAGE_SIZE,
+        sessions_path: str | Path | None = None) -> None:
     import shiny
 
-    shiny.run_app(create_app(snapshot, page_size=page_size), host=host, port=port)
+    shiny.run_app(
+        create_app(snapshot, page_size=page_size, sessions_path=sessions_path),
+        host=host, port=port)

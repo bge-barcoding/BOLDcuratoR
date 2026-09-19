@@ -280,6 +280,43 @@ def plan_search(store: SnapshotStore, query: SearchQuery) -> SearchPlan:
                       seed_bins=seed_bins)
 
 
+def plan_from_processids(
+    store: SnapshotStore, processids: list[str]
+) -> tuple[SearchPlan, list[str]]:
+    """A plan built from a saved session's processids, not a fresh query.
+
+    Resolving through ``rowid`` again -- rather than fetching straight by
+    processid -- means a resumed session pages, sorts and groups exactly like
+    a live search, through the same ``SpecimenTable``/``analyse_plan`` path.
+    ``rowid`` is only ever compared within *this* snapshot, so it is safe here
+    even though it is never itself saved: a session stores processids, which
+    outlive any one snapshot file.
+
+    Records occasionally get retracted between snapshot builds, so not every
+    saved processid need resolve to a row here. Those are returned as
+    ``missing`` rather than silently shrinking the plan without saying why.
+    """
+    ids = [str(p) for p in processids]
+    if not ids:
+        return SearchPlan(row_ids=np.asarray([], dtype=np.int64),
+                          seed_records=0, seed_bins=0), []
+
+    store.connection.register("_session_ids", pd.DataFrame({"processid": ids}))
+    try:
+        rows = store.connection.execute(
+            "SELECT s.rowid AS rid, s.processid AS processid FROM specimen s "
+            "SEMI JOIN _session_ids r ON r.processid = s.processid"
+        ).df()
+    finally:
+        store.connection.unregister("_session_ids")
+
+    found = set(rows["processid"].astype(str)) if len(rows) else set()
+    missing = [p for p in ids if p not in found]
+    row_ids = rows["rid"].to_numpy() if len(rows) else np.asarray([], dtype=np.int64)
+    plan = SearchPlan(row_ids=row_ids, seed_records=len(row_ids), seed_bins=0)
+    return plan, missing
+
+
 #: Column name carrying the physical ``rowid`` when ``fetch_rows`` is asked for
 #: it.  Leading underscore because it is a handle, not data: it is meaningful
 #: only against the snapshot it came from and must never reach an export.
