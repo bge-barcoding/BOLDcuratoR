@@ -50,8 +50,14 @@ commit per item where the change is self-contained.
    `_grade_body` now says "N species to work through" for A/B/D and "N BINs to
    work through" for C/E (`core.grouping.SPECIES_GRADES` already knew which is
    which). Confirmed live for grades A, C and E.
-4. [ ] **No linkouts to BOLD.** processid, BIN and species should each open
-   the matching BOLD portal page in a new tab.
+4. [x] **No linkouts to BOLD.** Fixed -- `ui/format.py` has
+   `bold_record_url`/`bold_bin_url`/`bold_species_url`, matching the three
+   example URLs exactly (verified byte-for-byte in a unit test), and every
+   `processid`/`bin_uri`/`species` cell across the specimen table, the BAGS
+   groups, the species checklist and the BIN dashboard is now a link opening
+   the matching BOLD portal page in a new tab (`target='_blank'
+   rel='noopener noreferrer'`). Confirmed live -- 252 working links rendered
+   on one specimens-table page alone.
 5. [ ] **No sticky columns on wide tables.** selected/flag/curator_notes/
    updated_id should stay visible while the rest scrolls sideways.
 6. [ ] **BAGS tabs waste horizontal space.** The specimen table under the

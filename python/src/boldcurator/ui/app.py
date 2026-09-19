@@ -45,6 +45,9 @@ from .format import (
     GRADE_COLOURS,
     GROUP_COLUMNS,
     GROUP_LABELS,
+    bold_bin_url,
+    bold_record_url,
+    bold_species_url,
     present,
     value_box,
 )
@@ -1082,11 +1085,24 @@ def _chip(value: str, colour: str) -> str:
             f"border-radius:10px;font-weight:600;'>{_escape(value)}</span></td>")
 
 
+def _link_cell(value: object, url: str) -> str:
+    """A cell whose value opens the matching BOLD portal page in a new tab.
+
+    ``rel="noopener noreferrer"`` because a ``target="_blank"`` link the page
+    itself built (not a user-typed URL) should still not hand the opened tab
+    a live ``window.opener`` back into the app.
+    """
+    return (f"<td><a href='{_escape(url)}' target='_blank' "
+            f"rel='noopener noreferrer'>{_escape(value)}</a></td>")
+
+
 def _checklist_html(frame: pd.DataFrame, *,
                     sort_state: tuple[str | None, bool] = (None, False)) -> str:
     def cell(column, value, row):
         if column == "bags_grade" and not _is_missing(value) and value:
             return _chip(value, GRADE_COLOURS.get(str(value), "#adb5bd"))
+        if column == "species" and not _is_missing(value) and value:
+            return _link_cell(value, bold_species_url(str(value)))
         return None
     return _table(frame, CHECKLIST_LABELS, cell, sort_input="checklist_sort_click",
                  sortable=frozenset(frame.columns) if len(frame) else frozenset(),
@@ -1100,6 +1116,8 @@ def _bins_html(frame: pd.DataFrame, *,
             return _chip(value, CONCORDANCE_COLOURS.get(str(value), "#adb5bd"))
         if column == "bin_coverage":
             return "<td></td>" if _is_missing(value) else f"<td>{float(value):.1%}</td>"
+        if column == "bin_uri" and not _is_missing(value) and value:
+            return _link_cell(value, bold_bin_url(str(value)))
         return None
     return _table(frame, BIN_LABELS, cell, sort_input="bins_sort_click",
                  sortable=frozenset(frame.columns) if len(frame) else frozenset(),
@@ -1186,6 +1204,12 @@ def _group_html(frame: pd.DataFrame, columns: list[str] | None = None,
             return _chip(value, GRADE_COLOURS.get(str(value), "#adb5bd"))
         if column == "flag" and not _is_missing(value) and value:
             return _chip(value, "#6f42c1")
+        if column == "processid" and not _is_missing(value) and value:
+            return _link_cell(value, bold_record_url(str(value)))
+        if column == "bin_uri" and not _is_missing(value) and value:
+            return _link_cell(value, bold_bin_url(str(value)))
+        if column == "species" and not _is_missing(value) and value:
+            return _link_cell(value, bold_species_url(str(value)))
         return None
     return _table(shown, GROUP_LABELS, cell=cell, limit=limit, sort_input=sort_input,
                  sortable=sortable, sort_state=sort_state)

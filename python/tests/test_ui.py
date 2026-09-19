@@ -149,6 +149,31 @@ def test_a_record_can_be_selected_on_its_own_not_only_the_whole_group():
     assert "checked" in check_cell_p2
 
 
+def test_processid_bin_and_species_link_out_to_the_bold_portal():
+    """A curator working offline from a snapshot still wants to look a record
+
+    up on BOLD itself -- the portal is public and needs no API key, so a link
+    costs nothing this app depends on.
+    """
+    import pandas as pd
+
+    from boldcurator.ui.app import _group_html
+    from boldcurator.ui.format import bold_bin_url, bold_record_url, bold_species_url
+
+    frame = pd.DataFrame({
+        "processid": ["GBMHO3680-19"],
+        "species": ["Cordulegaster heros"],
+        "bin_uri": ["BOLD:AAJ5773"],
+    })
+    html = _group_html(frame)
+
+    assert f"href='{bold_record_url('GBMHO3680-19')}'" in html
+    assert f"href='{bold_bin_url('BOLD:AAJ5773')}'" in html
+    assert f"href='{bold_species_url('Cordulegaster heros')}'" in html
+    assert html.count("target='_blank'") == 3
+    assert "GBMHO3680-19</a>" in html
+
+
 def test_an_empty_frame_renders_a_message_not_a_broken_table():
     import pandas as pd
 
