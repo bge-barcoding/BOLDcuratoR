@@ -49,6 +49,15 @@ build's real-world verification:
    fix worked even if the underlying pythonnet issue didn't get fixed).
    Only a silent crash or the app not coming up at all would mean the fix
    needs more work.
+   - **A second real-world issue surfaced while getting that build**: the
+     matrix's Intel-macOS job (`macos-13`) queued forever, never picking up
+     a runner, while the other three jobs started within seconds.
+     `macos-13` hosted runners were fully retired by GitHub on
+     2025-12-04 -- the label matches nothing any more, so a job requesting
+     it queues indefinitely instead of failing. Fixed: `macos-13` ->
+     `macos-15-intel` (the current Intel label), plus a `timeout-minutes:
+     30` on the build job so a future runner-label rot fails clearly
+     instead of hanging the whole workflow again.
 2. **4.3 the rest of the release build — real verification still
    pending.** `workflow_dispatch` on `.github/workflows/python-release.yml`
    could not be triggered from this session (`actions: write` isn't
