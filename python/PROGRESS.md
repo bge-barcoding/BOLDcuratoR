@@ -14,9 +14,14 @@ in the app and every export, and **session save/resume wired end to end**.
 Two full rounds of curator-reported bugs (9 issues) are fixed and verified
 live; **round 3 (6 issues) is now also closed** -- see below. 286 tests
 pass, the parity gate is green. `fetch_snapshot` (plan 5.1) and the desktop
-launcher + first-run setup screen (4.1a/4.2) are done. What's left is the
-actual installer build (4.3, wanted as an automated release CI workflow),
-signing (4.4), and the rest of distribution (Phase 5).
+launcher + first-run setup screen (4.1a/4.2) are done. **CI (plan 2.6) and
+an automated release build (plan 4.3) are written this session** -- a real
+frozen PyInstaller build was proven to work (CLI and GUI server both
+verified against a real snapshot), catching a real bug (`shinychat` needs
+its own `--collect-all`) -- but `pywebview` itself couldn't be installed in
+this sandbox, so `boldcurator desktop` specifically is unverified until the
+GitHub Actions workflow actually runs on real Windows/macOS runners. Signing
+(4.4) is a deliberate no for now (project owner's call).
 
 ## NEXT SESSION — START HERE, in priority order
 
@@ -24,30 +29,35 @@ No open curator-reported bugs right now -- three rounds are closed (see the
 "Open issues" sections below for what was wrong and how each was fixed, if
 a similar bug resurfaces). What's left is packaging and distribution:
 
-1. **CI workflow (plan 2.6) — still manual.** 286 tests and the parity
-   harness run only when someone remembers to. A GitHub Actions matrix
-   (Linux/macOS/Windows) that installs, runs pytest and runs
-   `parity/compare.py` needs no real snapshot: `conftest.py` builds the
-   fixture, and `tests/make_fake_package.py` generates the source. Worth
-   doing before the GUI grows further -- every session so far has shipped a
-   real bug that only a browser run caught (see "the rules this session cost
-   the most to learn" below); CI at least keeps the non-visual tests from
-   silently regressing.
-2. **4.3 PyInstaller builds — not started.** `boldcurator desktop` is the
-   entry point to bundle (`docs/python-app-plan.md` has the reasoning for
-   PyInstaller over Briefcase, `--onedir` over `--onefile`). Needs actually
-   running PyInstaller against this codebase for the first time, which
-   nothing here has done yet -- DuckDB's compiled extension and pywebview's
-   native backend are the two things most likely to need a hook or a
-   `--collect-all`, going by how both packages are usually packaged. **Not
-   verified in this sandbox** -- no display server here to smoke-test even a
-   built executable, let alone build native mac/Windows installers from a
-   Linux container. First real test needs a machine of the target OS. The
-   user wants releases built into executables automatically -- a CI
-   workflow (GitHub Actions on tag/release) is the natural place, and can
-   share most of its matrix setup with plan 2.6's test workflow.
-3. **4.5 Smoke test each installer once 4.3 exists.**
-4. **Also open, not urgent:**
+1. **CI (plan 2.6) and the release build (plan 4.3) — written, first real
+   run in progress/to check.** Two new workflows:
+   `.github/workflows/python-tests.yml` (pytest on a Linux/macOS/Windows
+   matrix, plus the parity harness on Linux with R installed via apt) and
+   `.github/workflows/python-release.yml` (PyInstaller builds on the same
+   three platforms plus macOS Intel, triggered by a `v*` tag or manually via
+   `workflow_dispatch`). See `python/packaging/README.md` for the exact
+   build recipe and, importantly, **what has and hasn't actually been
+   verified**: the CLI and the GUI server were both proven to work from a
+   real frozen PyInstaller build in this session (caught and fixed a real
+   bug -- `shinychat` needs its own `--collect-all`, see below), but
+   `pywebview` itself could not even be installed in this sandbox (an
+   unrelated `distutils`/`setuptools` incompatibility building one of its
+   own dependencies), so `boldcurator desktop` -- the actual packaged entry
+   point -- has only been reviewed by reading the code. The release
+   workflow's own smoke-test steps (build a tiny fixture, run `info`
+   against it, start the GUI server and curl it) exist specifically to
+   catch exactly this kind of issue automatically on real Windows/macOS/
+   Linux runners, which this sandbox cannot do. **Next session: check the
+   Actions run this session triggered (or trigger one) and read the
+   results** -- especially whether `pip install -e ".[desktop]"` (i.e.
+   pywebview) succeeds on all four runners, which is the one thing nothing
+   here could confirm.
+2. **4.4 Signing** — still a deliberate no (project owner's call, curator
+   testing doesn't need it) and **4.5 installer smoke test on a clean VM**
+   still not done — the release workflow's own smoke test is a CI proxy for
+   this, not a replacement for someone actually double-clicking a
+   downloaded build.
+3. **Also open, not urgent:**
    - The R app (not this rewrite) rejects 4% of real BOLD dataset codes --
      `mod_data_import_utils.R:50`'s `^DS-[A-Z0-9]+$` pattern; 544 of 13,706
      real `DS-` codes don't match. Live bug in the *shipped* app. The SQL to
@@ -843,7 +853,8 @@ surfacing in the UI rather than letting a curator assume otherwise.
 - [x] 2.3 `io/session.py` — query + processids + annotations, not the whole frame
 - [x] 2.4 `parity/export_r_reference.R`
 - [x] 2.5 `parity/compare.py` — **green**
-- [ ] 2.6 CI workflow (Linux/macOS/Windows)
+- [x] 2.6 CI workflow (Linux/macOS/Windows) --
+      `.github/workflows/python-tests.yml`
 
 ### Phase 2.5 — performance
 - [x] plan-then-fetch, so a search projects only the rows it returns
@@ -898,11 +909,15 @@ surfacing in the UI rather than letting a curator assume otherwise.
 - [x] 4.2 first-run flow -- `ui/setup.py`; existing file or a
       fetch_snapshot-backed download; the raw-TSV path stays CLI-only
       (`tools/build_snapshot.py`), by decision, not built into the GUI
-- [ ] 4.3 PyInstaller builds on a CI matrix -- not started; needs a machine
-      of the target OS to smoke-test against, which this sandbox is not
+- [x] 4.3 PyInstaller builds on a CI matrix --
+      `.github/workflows/python-release.yml`; a real frozen build was
+      proven to work outside CI (CLI + GUI server against a real snapshot),
+      but `pywebview` itself is unverified -- see the top of this file and
+      `python/packaging/README.md`
 - [ ] 4.4 signing -- **decided: unsigned for now**, not required to ship
       an unsigned build for curator testing
-- [ ] 4.5 installer smoke test
+- [ ] 4.5 installer smoke test -- the release workflow's own smoke-test
+      steps are a CI proxy for this, not a replacement
 - [ ] 5.2 publish to Zenodo -- blocked on having an account/community
 - [ ] 5.3 in-app "check for new snapshot" (thin wrapper once 4.2 exists)
 - [ ] 5.4 move `python/` to its own repo, finish PyPI publishing
