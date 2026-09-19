@@ -9,8 +9,61 @@ whole-group), auto-selection runs on a fresh search, and a real grade-E
 grouping bug is fixed. Every table sorts by clicking its column headers
 (including the five annotation columns), links out to the BOLD portal, keeps
 its annotation columns frozen and pinned to the top while scrolling, and
-"Apply to checked" is scoped to the current BAGS group. 245 tests pass, the
-parity gate is green.**
+"Apply to checked" is scoped to the current BAGS group. Two full rounds of
+curator-reported bugs (9 issues) are fixed and verified live. 245 tests pass,
+the parity gate is green.**
+
+## NEXT SESSION — START HERE, in priority order
+
+No open curator-reported bugs right now — both feedback rounds are closed
+(see the two "Open issues" sections below for what was wrong and how each was
+fixed, if a similar bug resurfaces). What's left is plan work, oldest-blocking
+first:
+
+1. **Gap analysis (plan 3.4) — not ported.** `perform_gap_analysis`
+   (`mod_species_analysis_utils.R:57+`) compares the taxa the user typed --
+   as synonym groups, first name is the valid one -- against what the search
+   found, and reports Found / Missing per group. `core/pipeline.parse_taxa_input`
+   already returns the groups, and `SearchResult.taxonomy_groups` carries
+   them. Belongs in `core/summaries.py` beside `build_species_checklist`,
+   then on the Species screen. This is the last unbuilt piece of Phase 3.
+2. **Session save/resume (plan 3.8) — not wired.** `io/session.py` exists and
+   is tested (query + processids + annotations, not the whole frame); it just
+   needs Save/Load buttons wired to `AppState`. **Warn on resume if the
+   snapshot id changed** -- BIN membership and identifications may have moved
+   under the saved work. The last item standing between here and "Phase 3 is
+   entirely done."
+3. **CI workflow (plan 2.6) — still manual.** 245 tests and the parity
+   harness run only when someone remembers to. A GitHub Actions matrix
+   (Linux/macOS/Windows) that installs, runs pytest and runs
+   `parity/compare.py` needs no real snapshot: `conftest.py` builds the
+   fixture, and `tests/make_fake_package.py` generates the source. Worth
+   doing before the GUI grows further -- every session so far has shipped a
+   real bug that only a browser run caught (see "the rules this session cost
+   the most to learn" below); CI at least keeps the 245 non-visual tests from
+   silently regressing.
+4. **Two Phase 0 items only a human can close** (not code -- decisions):
+   - **0.2** confirm the course's records are public. If some are not, they
+     are simply absent from a public snapshot and an overlay DuckDB file in
+     the same schema, `ATTACH`ed and `UNION ALL`ed, is needed -- worth
+     knowing early because it changes the query layer.
+   - **0.3** the CC-BY-SA 4.0 attribution requirement, in writing, for the
+     about text and any redistribution.
+5. **Also open, not urgent:**
+   - The R app (not this rewrite) rejects 4% of real BOLD dataset codes --
+     `mod_data_import_utils.R:50`'s `^DS-[A-Z0-9]+$` pattern; 544 of 13,706
+     real `DS-` codes don't match. Live bug in the *shipped* app. The SQL to
+     list examples is further down this file, under "Findings from the real
+     build."
+   - `export_all` streams sequences twice (all specimens, then the selected
+     subset) -- ~0.4 s a pass, not worth fixing without a curator waiting on
+     it.
+
+Before starting any of the above: `python -m pytest tests/ -q` (245 passing)
+and `python parity/compare.py` (PASS) from a clean checkout, per "First, 60
+seconds of setup" below -- and drive any UI change through
+`tools/drive_ui.py` before believing it works, per "the rules this session
+cost the most to learn."
 
 ## Open issues from curator feedback, round 2 -- all three resolved
 
@@ -138,14 +191,13 @@ commit per item, each verified with new unit tests and a live browser run
 
 ---
 
-# START HERE TOMORROW
+# Reference
 
-Phases 0-2 are closed and performance is closed. Phase 3's six screens now
-have their downloads wired too; what remains is listed below in priority
-order. Everything after the second horizontal rule is reference — why things
-are the way they are — and does not need reading to get going.
+Everything from here down is reference -- why things are the way they are --
+and does not need reading to get going; the prioritised list at the top of
+this file is what to actually do next.
 
-## What this session did
+## What an earlier session did
 
 A curator using the real app (not the fixture) reported three things, all
 now fixed -- see the commit for the detail, this is the summary:
@@ -163,11 +215,12 @@ now fixed -- see the commit for the detail, this is the summary:
    `tests/test_grouping.py` has the regression tests, named after the real
    BIN.
 2. **Selection was whole-group-or-nothing.** The specimen table and every
-   BAGS group now render a real checkbox per record
-   (`ui/app.py::ROW_CHECKBOX_CLASS`, one delegated `document`-level listener
-   so it survives every table re-render) alongside the existing bulk buttons
-   (select page / group / all), wired through a `row_select` Shiny input to
-   `Annotations.set_selected`/`unset_selected`.
+   BAGS group now render a real checkbox per record (one delegated
+   `document`-level listener so it survives every table re-render) alongside
+   the existing bulk buttons (select page / group / all). This single
+   checkbox later turned out to conflate two different things and was split
+   into `ROW_REP_CLASS`/`ROW_CHECK_CLASS` in round 2 -- see that section
+   below and `io/annotations.py`'s module docstring.
 3. **Auto-selection (best record per BIN x country) was never wired to the
    GUI.** `core/selection.auto_select_best_specimens` existed and was tested,
    but `SearchState.analysis` passed `auto_select=False` and nothing ever
@@ -205,57 +258,12 @@ The snapshot to use is the **reordered** one (`sequence_order = specimen`).
 `info` and `benchmark` warn on the snapshot line if you point at the old
 layout, and `verify` fails it outright.
 
-## What to build next, in order
-
-### 1. Gap analysis (plan 3.4)
-
-`perform_gap_analysis` (`mod_species_analysis_utils.R:57+`) is **not ported**.
-It compares the taxa the user typed -- as synonym groups, first name is the
-valid one -- against what the search found, and reports Found / Missing per
-group. `core/pipeline.parse_taxa_input` already returns the groups, and
-`SearchResult.taxonomy_groups` carries them. It belongs in `core/summaries.py`
-beside `build_species_checklist`, then on the Species screen.
-
-### 2. Session save/resume (plan 3.8)
-
-`io/session.py` exists and is tested; it saves the query, processids and
-annotations rather than the whole frame. Wire Save/Load to `AppState`, and
-**warn on resume if the snapshot id changed** -- BIN membership and
-identifications may have moved under the saved work.
-
-### 3. CI (plan 2.6) -- still not done
-
-233 tests and the parity harness run only when someone remembers. A GitHub
-Actions matrix (Linux/macOS/Windows) that installs, runs pytest and runs
-`parity/compare.py` needs no real snapshot: `conftest.py` builds the fixture,
-and `tests/make_fake_package.py` generates the source. Worth doing before the
-GUI grows further.
-
-### 5. Two Phase 0 items only you can close
-
-* **0.2** confirm the course's records are public. If some are not, they are
-  simply absent from a public snapshot and we need an overlay DuckDB file in
-  the same schema, `ATTACH`ed and `UNION ALL`ed -- worth knowing early because
-  it changes the query layer.
-* **0.3** the CC-BY-SA 4.0 attribution requirement, in writing, for the about
-  text and any redistribution.
-
-### Also open, not urgent
-
-* **The R app rejects 4% of real BOLD dataset codes.** `mod_data_import_utils.R:50`
-  validates against `^DS-[A-Z0-9]+$` and sets `results$valid <- FALSE`, a hard
-  gate before any query runs; the builder found 544 of 13,706 real DS- codes do
-  not match. That is a live bug in the *shipped R app*, not in this rewrite.
-  The SQL to list examples is further down this file.
-* `export_all` streams the sequences twice, once for all specimens and once for
-  the selected subset. Two passes where one would do, at ~0.4 s a pass.
-
 ## The rules this session cost the most to learn
 
 1. **Drive the UI in a browser before believing it.** Every UI bug so far has
    been invisible to the unit tests and obvious on the first click. Run
-   `tools/drive_ui.py` -- it checks seventeen things across all six screens and
-   exits non-zero.
+   `tools/drive_ui.py` -- it checks twenty-six things across all six screens
+   and exits non-zero.
 2. **In a Shiny effect, read every input you react to OUTSIDE
    `reactive.isolate()`**, and isolate only the writes. Two controls rendered
    perfectly, accepted clicks and did nothing because of this.
@@ -278,7 +286,9 @@ GUI grows further.
    "next problem") needs one listener attached once, at `document` level, via
    event delegation, not a listener attached to the row elements themselves.
    That is what the per-record selection checkboxes do
-   (`ui/app.py::ROW_CHECKBOX_CLASS`).
+   (`ui/app.py::ROW_REP_CLASS`/`ROW_CHECK_CLASS`), and later the same pattern
+   for click-to-sort headers (`SORT_HEADER_CLASS`) and scroll-position
+   preservation (`SCROLL_CLASS`).
 
 And the one that predates the GUI: **measure before optimising**. Two sessions
 of guessing at performance cost more than the fixes did, and both real causes
@@ -519,12 +529,12 @@ name, so `"synonym" in panel.inner_text()` passes for an annotation that never
 rendered. That false pass cost a round.
 
 Run `tools/drive_ui.py` before believing any UI change works. It checks
-seventeen things across all six screens and exits non-zero.
+twenty-six things across all six screens and exits non-zero.
 
 ## Phase 3.2-3.6 — the six screens are in
 
 Data Input, Species, BINs, BAGS A-E, Specimens. `tools/drive_ui.py` checks
-fourteen things across all of them in a real browser and exits non-zero.
+twenty-six things across all of them in a real browser and exits non-zero.
 
 ### The BAGS screens, and why they are navigators
 
@@ -659,6 +669,20 @@ surfacing in the UI rather than letting a curator assume otherwise.
       above and `tests/test_grouping.py`)
 - [x] 3.7 the six download buttons, plus the search-results CSV and the
       BIN-analysis workbook (eight downloads total, all driven in a browser)
+- [x] representative pick vs. working (bulk-edit) selection split into two
+      stores and two per-record checkboxes -- see `io/annotations.py`'s
+      module docstring; "Apply to checked" scoped to the current BAGS group
+- [x] click-to-sort column headers everywhere (species checklist, BIN
+      dashboard, BAGS groups, specimen table), including the five annotation
+      columns (Rep./Check/Flag/Updated ID/Notes) -- replaced the old sort
+      dropdown entirely
+- [x] processid/BIN/species cells link out to the BOLD portal in a new tab
+- [x] annotation columns frozen to the left edge *and* pinned to the top
+      (every `<th>` sticky individually, not the unreliable `<thead>`-level
+      sticky) on every wide table; table scroll position now survives a
+      re-render (checking a row used to snap it back to the top)
+- [x] BAGS screens: full-width specimen table, compact navigator row instead
+      of a permanent sidebar column
 - [ ] 3.4 gap analysis against the taxa typed in
 - [ ] 3.8 session save/resume
 
