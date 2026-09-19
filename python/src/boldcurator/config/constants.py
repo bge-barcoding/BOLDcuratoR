@@ -289,6 +289,22 @@ BOLD_ATTRIBUTION_TEXT = (
 DEFAULT_SESSIONS_PATH = Path.home() / ".boldcurator" / "sessions.sqlite"
 
 # --------------------------------------------------------------------------
+# Snapshot download -- plan 4.2/5.1
+# --------------------------------------------------------------------------
+
+#: The Zenodo record this project's own rebuilt BOLD snapshots are published
+#: to, so the first-run setup screen can offer a single "download the latest
+#: public snapshot" button with nothing for a curator to type or look up.
+#: Given as a full DOI (round 4, item 2) so it reads the same as the citation
+#: a curator would see on the Zenodo page itself; ``fetch_snapshot`` accepts
+#: this form, a bare record id, or a doi.org/zenodo.org URL alike. Each
+#: republished snapshot (date-named, gzipped -- e.g.
+#: ``bold_snapshot_2026-09-11.duckdb.gz``) should land as a new version of
+#: *this same* record so this constant keeps resolving to the latest one;
+#: update it here if the maintainer ever publishes under a different DOI.
+DEFAULT_SNAPSHOT_ZENODO_DOI = "10.5281/zenodo.22849516"
+
+# --------------------------------------------------------------------------
 # Geography
 # --------------------------------------------------------------------------
 

@@ -9,6 +9,7 @@ for a unit test.
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import http.server
 import json
@@ -170,6 +171,109 @@ def test_fetch_skips_a_download_already_at_this_snapshot_id(
     assert fs.fetch(args) == 0
     # Not overwritten -- the manifest's snapshot_id matched what's on disk.
     assert out.read_bytes() == b"stale local copy"
+
+
+def test_download_decompresses_a_gzipped_source(http_server, tmp_path):
+    """Round 4, item 2: a published snapshot may be gzipped
+    (``bold_snapshot_2026-09-11.duckdb.gz``) -- ``out`` should end up as the
+    plain, already-decompressed .duckdb the app can open directly."""
+    base_url, served_dir = http_server
+    payload = b"a fake duckdb snapshot" * 5000
+    compressed = gzip.compress(payload)
+    (served_dir / "bold_snapshot_2026-09-11.duckdb.gz").write_bytes(compressed)
+
+    source = fs.Source(url=f"{base_url}/bold_snapshot_2026-09-11.duckdb.gz",
+                       checksum=f"sha256:{_sha256(compressed)}",
+                       filename="bold_snapshot_2026-09-11.duckdb.gz")
+    out = tmp_path / "out" / "snapshot.duckdb"
+    fs.download(source, out, progress=lambda *a, **k: None)
+
+    assert out.read_bytes() == payload
+    assert not out.with_suffix(out.suffix + ".gz.part").exists()
+    assert not out.with_suffix(out.suffix + ".part").exists()
+
+
+def test_download_checksum_applies_to_the_compressed_bytes(http_server, tmp_path):
+    """Zenodo (and a manifest) publish the checksum of the file as uploaded --
+    the gzipped bytes, not what is inside them -- so verification must happen
+    before decompression, against the download as-is."""
+    base_url, served_dir = http_server
+    payload = b"another fake snapshot" * 3000
+    compressed = gzip.compress(payload)
+    (served_dir / "snap.duckdb.gz").write_bytes(compressed)
+
+    source = fs.Source(url=f"{base_url}/snap.duckdb.gz",
+                       checksum="sha256:" + "0" * 64)
+    out = tmp_path / "out" / "snapshot.duckdb"
+    with pytest.raises(fs.FetchError, match="mismatch"):
+        fs.download(source, out, progress=lambda *a, **k: None)
+    assert not out.exists()
+
+
+def test_gzip_detected_from_filename_even_when_the_url_does_not_end_in_it(
+    http_server, tmp_path
+):
+    """Some hosts serve a file from a URL that doesn't end in its real name
+    (a redirect, a signed content URL) -- ``source.filename`` (Zenodo's own
+    ``key``) is checked first, ``url`` only as a fallback."""
+    base_url, served_dir = http_server
+    payload = b"yet another fake snapshot" * 2000
+    compressed = gzip.compress(payload)
+    (served_dir / "content").write_bytes(compressed)
+
+    source = fs.Source(url=f"{base_url}/content",
+                       filename="bold_snapshot_2026-09-11.duckdb.gz")
+    out = tmp_path / "out" / "snapshot.duckdb"
+    fs.download(source, out, progress=lambda *a, **k: None)
+
+    assert out.read_bytes() == payload
+
+
+@pytest.mark.parametrize("given", [
+    "22849516",
+    "10.5281/zenodo.22849516",
+    "https://doi.org/10.5281/zenodo.22849516",
+    "https://zenodo.org/records/22849516",
+])
+def test_resolve_zenodo_record_accepts_a_doi_or_url_or_bare_id(monkeypatch, given):
+    """Round 4, item 2: DEFAULT_SNAPSHOT_ZENODO_DOI is a full DOI, so every
+    form a curator (or that constant) might hand in must resolve the same."""
+    seen = {}
+
+    def fake_get_json(url):
+        seen["url"] = url
+        return {
+            "id": 22849516,
+            "metadata": {},
+            "files": [{"key": "bold_snapshot_2026-09-11.duckdb.gz",
+                       "checksum": "md5:abc",
+                       "links": {"self": "https://zenodo.org/records/22849516/x"}}],
+        }
+
+    monkeypatch.setattr(fs, "_get_json", fake_get_json)
+    source = fs.resolve_zenodo_record(given)
+    assert seen["url"] == fs.ZENODO_API.format(record_id="22849516")
+    assert source.filename == "bold_snapshot_2026-09-11.duckdb.gz"
+
+
+def test_resolve_zenodo_record_picks_a_gzipped_duckdb_among_several_files(
+    monkeypatch
+):
+    payload = {
+        "id": 22849516,
+        "metadata": {"version": "2026-09-11"},
+        "files": [
+            {"key": "bold_snapshot_2026-09-11.duckdb.gz", "checksum": "md5:1",
+             "links": {"self": "https://x/snapshot"}},
+            {"key": "checksums.txt", "checksum": "md5:2",
+             "links": {"self": "https://x/checksums"}},
+        ],
+    }
+    monkeypatch.setattr(fs, "_get_json", lambda url: payload)
+
+    source = fs.resolve_zenodo_record("22849516")
+    assert source.url == "https://x/snapshot"
+    assert source.filename == "bold_snapshot_2026-09-11.duckdb.gz"
 
 
 def test_fetch_downloads_when_the_snapshot_id_differs(

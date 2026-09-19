@@ -101,7 +101,17 @@ class ColumnPlan:
 
 
 def plan_columns(header: list[str], *, include_sequences: bool) -> ColumnPlan:
-    """Decide which source columns to keep, failing loudly on a missing required one."""
+    """Decide which source columns to keep, failing loudly on a missing required one.
+
+    Keeps **every** header column except :data:`S.EXCLUDED_SOURCE_COLUMNS`
+    (privacy-sensitive fields) and the sequence column (handled separately) --
+    not just the ones named in :data:`S.REQUIRED_SOURCE_COLUMNS`/
+    :data:`S.OPTIONAL_SOURCE_COLUMNS`. A curated allowlist silently drops any
+    BCDM field this project hasn't been told about yet, which is exactly what
+    a curator reported as "lost most columns" against the original R app,
+    whose own column handling (`PREFERRED_COLUMNS` in `R/config/constants.R`)
+    only ever reorders what it already has, never narrows it.
+    """
     present = set(header)
 
     missing_required = [c for c in S.REQUIRED_SOURCE_COLUMNS if c not in present]
@@ -118,8 +128,7 @@ def plan_columns(header: list[str], *, include_sequences: bool) -> ColumnPlan:
 
     missing_optional = [c for c in S.OPTIONAL_SOURCE_COLUMNS if c not in present]
 
-    wanted = set(S.REQUIRED_SOURCE_COLUMNS) | (set(S.OPTIONAL_SOURCE_COLUMNS) & present)
-    wanted -= set(S.EXCLUDED_SOURCE_COLUMNS)
+    wanted = present - set(S.EXCLUDED_SOURCE_COLUMNS) - {S.SEQUENCE_SOURCE_COLUMN}
 
     # Header order, so the physical layout follows the source layout.
     kept = [c for c in header if c in wanted]
@@ -209,7 +218,7 @@ def describe_columns(tsv: Path, *, include_sequences: bool = True) -> int:
     missing_required = [c for c in S.REQUIRED_SOURCE_COLUMNS if c not in present]
     missing_optional = [c for c in S.OPTIONAL_SOURCE_COLUMNS if c not in present]
     excluded = [c for c in S.EXCLUDED_SOURCE_COLUMNS if c in present]
-    unused = sorted(
+    unrecognized = sorted(
         present
         - set(S.REQUIRED_SOURCE_COLUMNS)
         - set(S.OPTIONAL_SOURCE_COLUMNS)
@@ -218,8 +227,8 @@ def describe_columns(tsv: Path, *, include_sequences: bool = True) -> int:
     )
 
     kept = [c for c in header
-            if c in (set(S.REQUIRED_SOURCE_COLUMNS) | set(S.OPTIONAL_SOURCE_COLUMNS))
-            and c not in set(S.EXCLUDED_SOURCE_COLUMNS)]
+            if c not in set(S.EXCLUDED_SOURCE_COLUMNS)
+            and c != S.SEQUENCE_SOURCE_COLUMN]
 
     _log(f"Would keep ({len(kept)}):")
     _log("  " + ", ".join(kept))
@@ -230,8 +239,13 @@ def describe_columns(tsv: Path, *, include_sequences: bool = True) -> int:
         _log(f"Excluded on purpose: {', '.join(excluded)}")
     if missing_optional:
         _log(f"Optional, absent ({len(missing_optional)}): {', '.join(missing_optional)}")
-    if unused:
-        _log(f"In the file but unused ({len(unused)}): {', '.join(unused)}")
+    if unrecognized:
+        # Kept anyway -- every header column not excluded is kept, named or
+        # not (see plan_columns's docstring). This is purely "you may want to
+        # name these in schema.py so 'optional, absent' can warn about them
+        # on a future header that's missing them."
+        _log(f"In the file, not yet named in schema.py, kept anyway "
+             f"({len(unrecognized)}): {', '.join(unrecognized)}")
 
     _log("")
     if "marker_code" in present:

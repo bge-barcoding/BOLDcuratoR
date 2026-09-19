@@ -108,7 +108,14 @@ REQUIRED_SOURCE_COLUMNS: tuple[str, ...] = (
     "museumid",
 )
 
-#: Source columns kept when present, skipped with a warning when absent.
+#: Source columns known and named explicitly, purely for the build's own
+#: "optional, absent" diagnostic (``snapshot_builder.describe_columns``) --
+#: **not** a gate on what gets kept. Every header column not in
+#: :data:`EXCLUDED_SOURCE_COLUMNS` is kept regardless of whether it is listed
+#: here, matching the original R app's own behaviour (`PREFERRED_COLUMNS` in
+#: `R/config/constants.R` reorders the columns a curator already has, it does
+#: not narrow them) -- a snapshot built before a new BCDM field existed, or
+#: before this list was updated to mention it, still keeps that field.
 OPTIONAL_SOURCE_COLUMNS: tuple[str, ...] = (
     "record_id",
     "sampleid",
