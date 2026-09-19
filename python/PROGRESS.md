@@ -12,8 +12,9 @@ pinned while scrolling, "Apply to checked" scoped to the current BAGS group,
 gap analysis on the Species screen, the CC-BY-SA 4.0 attribution requirement
 in the app and every export, and **session save/resume wired end to end**.
 Two full rounds of curator-reported bugs (9 issues) are fixed and verified
-live. 264 tests pass, the parity gate is green. What's left is packaging
-(Phase 4) and distribution (Phase 5) -- getting this in front of curators.
+live. 275 tests pass, the parity gate is green. `fetch_snapshot` (plan 5.1)
+is done. What's left is packaging (Phase 4) and the rest of distribution
+(Phase 5) -- getting this in front of curators.
 
 ## NEXT SESSION — START HERE, in priority order
 
@@ -21,23 +22,27 @@ No open curator-reported bugs right now — both feedback rounds are closed
 (see the two "Open issues" sections below for what was wrong and how each was
 fixed, if a similar bug resurfaces). Phase 3 is now entirely done, so what's
 left is packaging and distribution -- everything between here and a curator
-double-clicking an installer:
+double-clicking an installer. **A design pass happened this session** (see
+`docs/python-app-plan.md`'s new "Packaging and data loading" section) and
+one real decision is waiting on the project owner before 4.1a/4.2/4.3 can
+be built: native window (pywebview) vs. plain browser tab. 4.4 (code
+signing) needs a budget decision too, but does not block getting an unsigned
+build in front of curators for testing.
 
-1. **CI workflow (plan 2.6) — still manual.** 264 tests and the parity
+1. **CI workflow (plan 2.6) — still manual.** 275 tests and the parity
    harness run only when someone remembers to. A GitHub Actions matrix
    (Linux/macOS/Windows) that installs, runs pytest and runs
    `parity/compare.py` needs no real snapshot: `conftest.py` builds the
    fixture, and `tests/make_fake_package.py` generates the source. Worth
    doing before the GUI grows further -- every session so far has shipped a
    real bug that only a browser run caught (see "the rules this session cost
-   the most to learn" below); CI at least keeps the 264 non-visual tests from
+   the most to learn" below); CI at least keeps the 275 non-visual tests from
    silently regressing.
-2. **Packaging (Phase 4) and data loading (Phase 5.1-5.2) — not started.**
-   Two related pieces of work: how the app itself is installed (PyInstaller/
-   Briefcase, signing), and how a user without the file already on disk gets
-   the snapshot onto their machine (Zenodo download vs. manual TSV import).
-   See the new "Packaging and data loading" section below for what's decided
-   and what's still open.
+2. **Packaging (Phase 4) — blocked on one decision.** `docs/python-app-plan.md`
+   lays out the recommendation (pywebview + PyInstaller, not Briefcase) and
+   why; 4.1a (window vs. browser tab) needs a yes/no before 4.2 (first-run
+   flow) and 4.3 (the actual installer builds) can start, since the
+   first-run screen's shape depends on it.
 3. **Also open, not urgent:**
    - The R app (not this rewrite) rejects 4% of real BOLD dataset codes --
      `mod_data_import_utils.R:50`'s `^DS-[A-Z0-9]+$` pattern; 544 of 13,706
@@ -48,7 +53,7 @@ double-clicking an installer:
      subset) -- ~0.4 s a pass, not worth fixing without a curator waiting on
      it.
 
-Before starting any of the above: `python -m pytest tests/ -q` (264 passing)
+Before starting any of the above: `python -m pytest tests/ -q` (275 passing)
 and `python parity/compare.py` (PASS) from a clean checkout, per "First, 60
 seconds of setup" below -- and drive any UI change through
 `tools/drive_ui.py` before believing it works, per "the rules this session
@@ -311,7 +316,7 @@ to learn" below for why that matters here specifically.
 cd C:\GitHub\BOLDcurator\python
 git pull
 pip install -e ".[dev,gui]"
-python -m pytest tests/ -q          # 264 passing
+python -m pytest tests/ -q          # 275 passing
 python parity/compare.py            # PASS
 
 python -m boldcurator.cli gui --snapshot "<the reordered snapshot>"
@@ -751,7 +756,19 @@ surfacing in the UI rather than letting a curator assume otherwise.
 - [x] 3.8 session save/resume
 
 ### Phases 4–5 — packaging and distribution
-- [ ] not started; compression (above) lands in 5.1
+- [x] 5.1 `tools/fetch_snapshot.py` / `boldcurator fetch-snapshot` -- URL,
+      manifest.json or Zenodo record/concept id; no-op when the snapshot id
+      is unchanged
+- [ ] 4.1a window vs. browser tab (pywebview recommended) -- **blocked on a
+      project-owner decision**, see `docs/python-app-plan.md`
+- [ ] 4.2 first-run flow (blocked on 4.1a)
+- [ ] 4.3 PyInstaller builds on a CI matrix (blocked on 4.1a/4.2)
+- [ ] 4.4 signing -- **blocked on a budget decision**, not required to ship
+      an unsigned build for curator testing
+- [ ] 4.5 installer smoke test
+- [ ] 5.2 publish to Zenodo -- blocked on having an account/community
+- [ ] 5.3 in-app "check for new snapshot" (thin wrapper once 4.2 exists)
+- [ ] 5.4 move `python/` to its own repo, finish PyPI publishing
 
 ---
 
