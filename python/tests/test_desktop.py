@@ -446,10 +446,12 @@ def test_find_chromium_browser_falls_back_to_path(monkeypatch):
     monkeypatch.setattr(desktop, "_chromium_candidates",
                         lambda: [r"C:\nowhere\msedge.exe", "definitely-not-a-real-browser-xyz",
                                  "sh"])
-    # "sh" is virtually guaranteed to exist on any POSIX test runner and
-    # stands in for a browser found via PATH rather than an absolute path.
+    # "sh" is virtually guaranteed to exist on any test runner (Windows
+    # runners carry Git for Windows's own sh.exe) and stands in for a
+    # browser found via PATH rather than an absolute path. Compared by stem,
+    # not a literal suffix -- shutil.which appends .EXE on Windows.
     found = desktop._find_chromium_browser()
-    assert found is not None and found.endswith("sh")
+    assert found is not None and Path(found).stem.lower() == "sh"
 
 
 def test_find_chromium_browser_returns_none_when_nothing_matches(monkeypatch):
