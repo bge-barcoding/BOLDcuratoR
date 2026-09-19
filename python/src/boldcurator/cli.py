@@ -11,6 +11,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from .build.fetch_snapshot import add_fetch_args
 from .core.pipeline import SizeLimitExceeded, parse_lines, run_search
 from .data.snapshot import SnapshotError, SnapshotStore
 
@@ -325,6 +326,12 @@ def cmd_verify(args: argparse.Namespace) -> int:
     return verify_main(["--snapshot", str(args.snapshot)])
 
 
+def cmd_fetch_snapshot(args: argparse.Namespace) -> int:
+    from .build.fetch_snapshot import fetch
+
+    return fetch(args)
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="boldcurator", description=__doc__)
     sub = p.add_subparsers(dest="command", required=True)
@@ -346,6 +353,11 @@ def build_parser() -> argparse.ArgumentParser:
     verify = sub.add_parser("verify", help="verify a snapshot read-only")
     _add_snapshot_arg(verify)
     verify.set_defaults(func=cmd_verify)
+
+    fetch_snapshot = sub.add_parser(
+        "fetch-snapshot", help="download a pre-built snapshot (plan 5.1)")
+    add_fetch_args(fetch_snapshot)
+    fetch_snapshot.set_defaults(func=cmd_fetch_snapshot)
 
     resolve = sub.add_parser("resolve", help="resolve taxon names to ranks")
     _add_snapshot_arg(resolve)
