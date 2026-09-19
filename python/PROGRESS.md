@@ -9,47 +9,35 @@ whole-group), auto-selection runs on a fresh search, and a real grade-E
 grouping bug is fixed. Every table sorts by clicking its column headers
 (including the five annotation columns), links out to the BOLD portal, keeps
 its annotation columns frozen and pinned to the top while scrolling, and
-"Apply to checked" is scoped to the current BAGS group. Two full rounds of
-curator-reported bugs (9 issues) are fixed and verified live. 245 tests pass,
-the parity gate is green.**
+"Apply to checked" is scoped to the current BAGS group. Gap analysis is
+wired on the Species screen, and the CC-BY-SA 4.0 attribution requirement is
+in the app and every export. Two full rounds of curator-reported bugs
+(9 issues) are fixed and verified live. 255 tests pass, the parity gate is
+green.**
 
 ## NEXT SESSION — START HERE, in priority order
 
 No open curator-reported bugs right now — both feedback rounds are closed
 (see the two "Open issues" sections below for what was wrong and how each was
-fixed, if a similar bug resurfaces). What's left is plan work, oldest-blocking
-first:
+fixed, if a similar bug resurfaces). Phase 0 is now fully closed and gap
+analysis is done, so what's left is:
 
-1. **Gap analysis (plan 3.4) — not ported.** `perform_gap_analysis`
-   (`mod_species_analysis_utils.R:57+`) compares the taxa the user typed --
-   as synonym groups, first name is the valid one -- against what the search
-   found, and reports Found / Missing per group. `core/pipeline.parse_taxa_input`
-   already returns the groups, and `SearchResult.taxonomy_groups` carries
-   them. Belongs in `core/summaries.py` beside `build_species_checklist`,
-   then on the Species screen. This is the last unbuilt piece of Phase 3.
-2. **Session save/resume (plan 3.8) — not wired.** `io/session.py` exists and
+1. **Session save/resume (plan 3.8) — not wired.** `io/session.py` exists and
    is tested (query + processids + annotations, not the whole frame); it just
    needs Save/Load buttons wired to `AppState`. **Warn on resume if the
    snapshot id changed** -- BIN membership and identifications may have moved
    under the saved work. The last item standing between here and "Phase 3 is
    entirely done."
-3. **CI workflow (plan 2.6) — still manual.** 245 tests and the parity
+2. **CI workflow (plan 2.6) — still manual.** 255 tests and the parity
    harness run only when someone remembers to. A GitHub Actions matrix
    (Linux/macOS/Windows) that installs, runs pytest and runs
    `parity/compare.py` needs no real snapshot: `conftest.py` builds the
    fixture, and `tests/make_fake_package.py` generates the source. Worth
    doing before the GUI grows further -- every session so far has shipped a
    real bug that only a browser run caught (see "the rules this session cost
-   the most to learn" below); CI at least keeps the 245 non-visual tests from
+   the most to learn" below); CI at least keeps the 255 non-visual tests from
    silently regressing.
-4. **Two Phase 0 items only a human can close** (not code -- decisions):
-   - **0.2** confirm the course's records are public. If some are not, they
-     are simply absent from a public snapshot and an overlay DuckDB file in
-     the same schema, `ATTACH`ed and `UNION ALL`ed, is needed -- worth
-     knowing early because it changes the query layer.
-   - **0.3** the CC-BY-SA 4.0 attribution requirement, in writing, for the
-     about text and any redistribution.
-5. **Also open, not urgent:**
+3. **Also open, not urgent:**
    - The R app (not this rewrite) rejects 4% of real BOLD dataset codes --
      `mod_data_import_utils.R:50`'s `^DS-[A-Z0-9]+$` pattern; 544 of 13,706
      real `DS-` codes don't match. Live bug in the *shipped* app. The SQL to
@@ -59,11 +47,43 @@ first:
      subset) -- ~0.4 s a pass, not worth fixing without a curator waiting on
      it.
 
-Before starting any of the above: `python -m pytest tests/ -q` (245 passing)
+Before starting any of the above: `python -m pytest tests/ -q` (255 passing)
 and `python parity/compare.py` (PASS) from a clean checkout, per "First, 60
 seconds of setup" below -- and drive any UI change through
 `tools/drive_ui.py` before believing it works, per "the rules this session
 cost the most to learn."
+
+## Gap analysis and Phase 0 closure -- both resolved
+
+1. [x] **Gap analysis (plan 3.4), ported.** `core/summaries.gap_analysis`
+   ports `perform_gap_analysis` (`mod_species_analysis_utils.R:57+`):
+   each typed taxon (a synonym group, first name is the valid one) is checked
+   against the specimens actually found, vectorised via a lower-cased
+   `value_counts()` lookup rather than a per-record loop. Reports Found/
+   Missing, the matched species' own spelling, its specimen count, and a
+   "matched via synonym" note when a later name in the group is what hit.
+   Rendered on the Species screen as Found/Missing value boxes plus a
+   sortable table, above the existing checklist, only when there is anything
+   to show. Fixed a real pre-existing gap while wiring this up:
+   `SearchState` never carried `taxonomy_groups` through from parsing to
+   `analyse_plan`, so the data `gap_analysis` needs never reached the GUI --
+   `AppState._build()` now returns the parsed groups and `run_search()`
+   threads them onto `SearchState`. Unit tests in `tests/test_summaries.py`
+   (8 cases); verified live with a new `tools/drive_ui.py` check that the
+   panel reports on the taxon actually typed.
+2. [x] **0.2 confirmed public.** No overlay/`ATTACH` schema work needed.
+3. [x] **0.3 CC-BY-SA 4.0 attribution, in writing.** `config/constants.py`
+   holds the licence text and URL (not `ui/format.py`, so `io/exports.py`
+   can use it without depending on the GUI layer). Shown in the app as a
+   short linked line in the header (`BOLD_ATTRIBUTION_SHORT`, hover title
+   is the full text) and as a full paragraph at the foot of the Data Input
+   tab, linking the licence itself. Stamped onto every non-FASTA export: the
+   TSV/CSV provenance header comment, and a row in the bin-analysis xlsx's
+   Summary sheet. FASTA is deliberately left alone -- an extra header line
+   there risks breaking downstream sequence-file parsers. Covered by
+   `test_exports.py::test_exports_carry_the_cc_by_sa_attribution`, the
+   Summary-sheet assertion in `test_bin_analysis_workbook_has_three_populated_sheets`,
+   and `test_ui.py::test_the_cc_by_sa_attribution_is_on_the_page`.
 
 ## Open issues from curator feedback, round 2 -- all three resolved
 
@@ -248,7 +268,7 @@ to learn" below for why that matters here specifically.
 cd C:\GitHub\BOLDcurator\python
 git pull
 pip install -e ".[dev,gui]"
-python -m pytest tests/ -q          # 245 passing
+python -m pytest tests/ -q          # 255 passing
 python parity/compare.py            # PASS
 
 python -m boldcurator.cli gui --snapshot "<the reordered snapshot>"
@@ -628,8 +648,9 @@ surfacing in the UI rather than letting a curator assume otherwise.
 - [x] 0.8 measured figures recorded — both snapshots built and verified
 - [x] 0.9 generated test fixture
 - [x] 0.1 download mechanics — still manual, fine
-- [ ] 0.2 confirm the course's records are public
-- [ ] 0.3 CC-BY-SA attribution noted in writing
+- [x] 0.2 confirm the course's records are public — confirmed
+- [x] 0.3 CC-BY-SA attribution noted in writing — in the app and every
+      non-FASTA export; see "Gap analysis and Phase 0 closure" above
 
 ### Phase 1 — core library
 - [x] 1.1–1.10 all complete
@@ -683,7 +704,7 @@ surfacing in the UI rather than letting a curator assume otherwise.
       re-render (checking a row used to snap it back to the top)
 - [x] BAGS screens: full-width specimen table, compact navigator row instead
       of a permanent sidebar column
-- [ ] 3.4 gap analysis against the taxa typed in
+- [x] 3.4 gap analysis against the taxa typed in
 - [ ] 3.8 session save/resume
 
 ### Phases 4–5 — packaging and distribution
