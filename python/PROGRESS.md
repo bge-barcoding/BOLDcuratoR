@@ -12,33 +12,35 @@ pinned while scrolling, "Apply to checked" scoped to the current BAGS group,
 gap analysis on the Species screen, the CC-BY-SA 4.0 attribution requirement
 in the app and every export, and **session save/resume wired end to end**.
 Two full rounds of curator-reported bugs (9 issues) are fixed and verified
-live. 283 tests pass, the parity gate is green. `fetch_snapshot` (plan 5.1)
-and the desktop launcher + first-run setup screen (4.1a/4.2) are done. What's
-left is the actual installer build (4.3), signing (4.4), and the rest of
-distribution (Phase 5) -- getting this in front of curators.
+live; **round 3 (6 issues) is open**, see below. 283 tests pass, the parity
+gate is green. `fetch_snapshot` (plan 5.1) and the desktop launcher +
+first-run setup screen (4.1a/4.2) are done. Once round 3 is closed, what's
+left is the actual installer build (4.3, wanted as an automated release CI
+workflow), signing (4.4), and the rest of distribution (Phase 5).
 
 ## NEXT SESSION — START HERE, in priority order
 
-No open curator-reported bugs right now — both feedback rounds are closed
-(see the two "Open issues" sections below for what was wrong and how each was
-fixed, if a similar bug resurfaces). Phase 3 is entirely done, and this
-session closed the three decisions that were blocking packaging: **native
-window** (pywebview, not a browser tab), **unsigned builds for now** (no
-signing budget spent yet), and **the raw-TSV-to-snapshot build stays a
-maintainer-only CLI step**, not a GUI feature. `desktop.py` and `ui/setup.py`
-implement the first two; nothing changed for the third (it was already
-`tools/build_snapshot.py`, undisturbed). What's left is the actual build:
+**Round 3 curator feedback (6 issues) is open** -- see "Open issues from
+curator feedback, round 3" just below for the full list. Fix one at a time,
+one commit per item, verified live, same as rounds 1 and 2. Only once round
+3 is closed does it make sense to move on to packaging:
 
-1. **CI workflow (plan 2.6) — still manual.** 283 tests and the parity
+1. **Round 3, all six items** -- specimen tables showing all columns with
+   horizontal scroll; the Specimens tab's curation toolbar not fitting the
+   default window width; an xlsx download for gap analysis (and the species
+   checklist, possibly the same workbook); dropping mean quality from the
+   species checklist and share-of-result from the BIN dashboard; and a
+   scheduled (e.g. every-minute) auto-save for sessions.
+2. **CI workflow (plan 2.6) — still manual.** 283 tests and the parity
    harness run only when someone remembers to. A GitHub Actions matrix
    (Linux/macOS/Windows) that installs, runs pytest and runs
    `parity/compare.py` needs no real snapshot: `conftest.py` builds the
    fixture, and `tests/make_fake_package.py` generates the source. Worth
    doing before the GUI grows further -- every session so far has shipped a
    real bug that only a browser run caught (see "the rules this session cost
-   the most to learn" below); CI at least keeps the 283 non-visual tests from
+   the most to learn" below); CI at least keeps the non-visual tests from
    silently regressing.
-2. **4.3 PyInstaller builds — not started.** `boldcurator desktop` is the
+3. **4.3 PyInstaller builds — not started.** `boldcurator desktop` is the
    entry point to bundle (`docs/python-app-plan.md` has the reasoning for
    PyInstaller over Briefcase, `--onedir` over `--onefile`). Needs actually
    running PyInstaller against this codebase for the first time, which
@@ -47,9 +49,12 @@ implement the first two; nothing changed for the third (it was already
    `--collect-all`, going by how both packages are usually packaged. **Not
    verified in this sandbox** -- no display server here to smoke-test even a
    built executable, let alone build native mac/Windows installers from a
-   Linux container. First real test needs a machine of the target OS.
-3. **4.5 Smoke test each installer once 4.3 exists.**
-4. **Also open, not urgent:**
+   Linux container. First real test needs a machine of the target OS. The
+   user wants releases built into executables automatically -- a CI
+   workflow (GitHub Actions on tag/release) is the natural place, and can
+   share most of its matrix setup with plan 2.6's test workflow.
+4. **4.5 Smoke test each installer once 4.3 exists.**
+5. **Also open, not urgent:**
    - The R app (not this rewrite) rejects 4% of real BOLD dataset codes --
      `mod_data_import_utils.R:50`'s `^DS-[A-Z0-9]+$` pattern; 544 of 13,706
      real `DS-` codes don't match. Live bug in the *shipped* app. The SQL to
@@ -64,6 +69,36 @@ and `python parity/compare.py` (PASS) from a clean checkout, per "First, 60
 seconds of setup" below -- and drive any UI change through
 `tools/drive_ui.py` before believing it works, per "the rules this session
 cost the most to learn."
+
+## Open issues from curator feedback, round 3
+
+Fixing one at a time, one commit per item, each verified with new unit tests
+and a live browser run (`tools/drive_ui.py` plus ad-hoc Playwright checks)
+before moving to the next.
+
+1. [ ] **Specimen tables should show every column, not a curated subset.**
+   The original Shiny app renders all BOLD columns (curated/annotation ones
+   first, via `PREFERRED_COLUMNS`/`order_columns`) with `scrollX` horizontal
+   scroll (`R/utils/table_utils.R`), rather than picking a subset. This
+   port's Specimens tab currently narrows to `PREVIEW_COLUMNS` (14 of ~71).
+   Show every column the page carries; keep the Rep./Check/Flag/Updated ID/
+   Notes columns frozen to the left edge the way they already are (the
+   sticky-column machinery is column-driven, not tied to the curated list).
+2. [ ] **The Specimens tab's curation toolbar doesn't fit the default window
+   width.** Check page / Check all / Clear checked / Flag / Curator note /
+   Corrected identification all sit in one flex row alongside the paging
+   controls, which overflows. Restructure to match the BAGS C/E layout
+   (`_grade_body`): paging/sort in their own row, the curation toolbar
+   (bulk-check buttons in a narrow column + `_annotation_controls`) in a
+   second, compact row below it.
+3. [ ] **Gap analysis needs an xlsx download**, matching the BIN dashboard's
+   "Download BIN analysis (xlsx)" button.
+4. [ ] **The species checklist doesn't need mean quality score shown**, and
+   needs its own xlsx download -- possibly a second sheet on the same
+   workbook as #3, since both are Species-screen summaries.
+5. [ ] **The BIN dashboard doesn't need "share of result" shown.**
+6. [ ] **Session save should be schedulable** -- e.g. every minute,
+   automatically, not only on a manual click.
 
 ## Packaging: native window and first-run setup (4.1a/4.2) -- resolved
 
