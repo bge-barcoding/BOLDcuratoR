@@ -100,9 +100,16 @@ Files-style install location is often not writable without admin rights.
   maximized -- investigate why the page grows at all.
 - [ ] 8. Rows should not wrap text; rows should be vertically compact so more
   fit in the same space.
-- [ ] 9. Every BAGS group specimen table should show all columns (with
+- [x] 9. Every BAGS group specimen table should show all columns (with
   horizontal scroll), the same as the Specimens tab's table -- currently they
-  show a curated subset instead.
+  show a curated subset instead. Fixed -- `_group_html`'s `columns` parameter
+  already existed for exactly this (added in round 3 for the Specimens
+  tab), but the BAGS grade screen's own call site in `_grade_body` was still
+  passing nothing, which defaults to the curated `GROUP_COLUMNS` subset.
+  One-line fix: `_group_html(rows, _all_columns_ordered(rows), ...)`.
+  Verified live: BAGS grade A's group table and the Specimens tab both
+  render 83 headers, in the same curated-first order; `tools/drive_ui.py`
+  still green.
 
 **Specimen tab**
 - [ ] 10. Remove the page's own vertical scroll; keep only the table's

@@ -853,7 +853,13 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                               "background:#f8f9fa;border:1px solid #dee2e6;"
                               "border-radius:5px;",
                     ),
-                    ui.HTML(_group_html(rows, sort_input="group_sort_click",
+                    # Round 5, item 9: every column, like the Specimens tab --
+                    # a curated subset (the old default) hid raw BOLD columns
+                    # a curator might need mid-problem. `_table`'s own
+                    # horizontal scroll (inherited by `_group_html`) is what
+                    # makes that many columns usable.
+                    ui.HTML(_group_html(rows, _all_columns_ordered(rows),
+                                        sort_input="group_sort_click",
                                         sort_state=group_sort.get())),
                 )
             return _needs_analysis(body)
