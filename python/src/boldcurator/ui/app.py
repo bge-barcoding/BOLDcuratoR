@@ -309,6 +309,17 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             .bc-scroll td, .bc-scroll th {
                 white-space: nowrap; padding-top: 3px; padding-bottom: 3px;
             }
+            /* Round 6, all tables item 1: one long value (a free-text notes
+               field, say) used to stretch its whole column -- and every row
+               with it -- to fit, however long. Capped per cell; a sticky
+               column's own inline width (STICKY_COLUMN_WIDTHS) already wins
+               over this, being more specific, so this only affects the
+               ordinary scrolling columns. The full value is still one hover
+               away via each cell's own `title` attribute (_table's default
+               cell renderer). */
+            .bc-scroll td {
+                max-width: 280px; overflow: hidden; text-overflow: ellipsis;
+            }
             /* Round 5, item 12: a download click's own visible
                acknowledgement -- see the click listener below. */
             .bc-toast {
@@ -1879,6 +1890,15 @@ def _escape(value: object) -> str:
     return (text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
 
 
+def _escape_attr(value: object) -> str:
+    """``_escape``, plus the one character that matters inside a
+    single-quoted HTML attribute but not in text content: a free-text value
+    (a curator note, a collector's name) landing in a ``title='...'``
+    (round 6, all tables item 1) can easily contain an apostrophe, which
+    would otherwise close the attribute early."""
+    return _escape(value).replace("'", "&#39;")
+
+
 #: The class a clickable column header carries, so the one delegated
 #: ``document``-level listener (see the script in ``create_app``) catches a
 #: click on it regardless of how many times the table has re-rendered --
@@ -1988,11 +2008,22 @@ def _table(frame: pd.DataFrame, labels: dict[str, str] | None = None,
             # ``row`` too, not just the cell's own value -- a checkbox needs
             # the record's processid, which lives in a different column.
             rendered = cell(column, row[column], row) if cell else None
-            rendered = rendered if rendered is not None \
-                else f"<td>{_escape(row[column])}</td>"
-            if column in offsets and rendered.startswith("<td>"):
+            if rendered is None:
+                text = _escape(row[column])
+                # Round 6, all tables item 1: a title attribute is the
+                # hover-to-read-the-rest for a value the new max-width CSS
+                # now truncates -- only worth adding when there is
+                # something to truncate.
+                rendered = (f"<td title='{_escape_attr(row[column])}'>{text}</td>"
+                           if text else f"<td>{text}</td>")
+            if column in offsets and rendered.startswith("<td"):
+                # Not just the bare "<td>" case any more -- the default
+                # renderer above can now also emit "<td title='...'>" (round
+                # 6, all tables item 1), so this inserts the sticky style
+                # right after "<td" generically rather than assuming nothing
+                # else is already there.
                 style = _sticky_style(*offsets[column])
-                rendered = f"<td style='{style}'>" + rendered[len('<td>'):]
+                rendered = f"<td style='{style}'" + rendered[len('<td'):]
             cells.append(rendered)
         body.append("<tr>" + "".join(cells) + "</tr>")
     more = ("" if len(frame) <= limit else

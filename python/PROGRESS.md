@@ -133,9 +133,37 @@ and a live `tools/drive_ui.py` run before moving to the next.
   left alone since nothing outside this one label references it by name.
 
 **All tables**
-- [ ] 4. Enforce a maximum column width so tables don't become unwieldy --
+- [x] 4. Enforce a maximum column width so tables don't become unwieldy --
   columns currently expand to fit their contents, which can make a table
-  very wide for the sake of one long value in one column.
+  very wide for the sake of one long value in one column. Fixed with one
+  CSS rule (`.bc-scroll td { max-width:280px; overflow:hidden;
+  text-overflow:ellipsis; }`) -- applies to every table via `_table()`'s
+  shared wrapper, so this is a single-point fix across Specimens, every
+  BAGS group, Species, BINs and Gap analysis alike. A sticky column's own
+  inline width (`STICKY_COLUMN_WIDTHS`, `_sticky_style`) already wins over
+  this class rule (inline beats class), so Rep./Check/Flag/Updated
+  ID/Notes are unaffected -- this only caps the ordinary scrolling columns,
+  which is where an unbounded one actually came from.
+
+  The truncated value is still one hover away: `_table()`'s default cell
+  renderer now also sets `title='...'` (only when there's something to
+  show). Needed a matching bug fix to do that safely -- free text (a
+  curator note, a collector's name) can contain an apostrophe, which would
+  otherwise close a single-quoted `title` attribute early; a new
+  `_escape_attr` helper additionally escapes `'` to `&#39;` for this one
+  use, leaving the existing `_escape` (fine for text content, where a raw
+  `'` is not a problem) alone. Also had to broaden the sticky-style
+  injection itself: it used to require a cell to start with the *exact*
+  string `"<td>"`, which the new `title='...'` cells (whenever a sticky
+  column -- Updated ID, Notes -- falls through to the default renderer,
+  not a chip/link/checkbox) no longer do; generalised to insert the sticky
+  `style` right after `"<td"` instead of assuming nothing else is there.
+
+  Verified live: a specimen table cell's computed `max-width` is `280px`
+  with `overflow:hidden`, a `title` attribute is present on non-empty
+  cells, and the Rep. header still pins exactly to the scrolled
+  container's top (0px difference) -- the sticky-injection change didn't
+  regress it. Full suite green; `tools/drive_ui.py` green.
 
 **BAGS logic**
 - [x] 5. A species is showing as BAGS grade A with 9 records, when grade A's
