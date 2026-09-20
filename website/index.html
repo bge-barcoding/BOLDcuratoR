@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BOLDcurator — offline curation of BOLD specimen data</title>
+<meta name="description" content="Download BOLDcurator, a desktop app for curating BOLD specimen records offline: BAGS grading, BIN analysis and representative-specimen selection against your own local snapshot of BOLD's public data.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect width=%22100%22 height=%22100%22 rx=%2220%22 fill=%22%23007bc2%22/><text x=%2250%22 y=%2266%22 font-size=%2258%22 font-family=%22Arial, sans-serif%22 font-weight=%22700%22 fill=%22white%22 text-anchor=%22middle%22>B</text></svg>">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="site">
+  <div class="wrap">
+    <a class="logo" href="#top">BOLDcurator</a>
+    <nav class="site-nav">
+      <a href="#download">Download</a>
+      <a href="#setup">Setup</a>
+      <a href="#faq">FAQ</a>
+      <a href="https://github.com/bge-barcoding/BOLDcuratoR" target="_blank" rel="noopener">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+
+  <section class="hero">
+    <div class="wrap">
+      <h1>Curate BOLD specimen data, offline.</h1>
+      <p class="lede">
+        BOLDcurator matches your taxa, countries, datasets and projects
+        against a local snapshot of BOLD's public data package, grades every
+        species with BAGS, and helps you pick clean, representative barcode
+        records — no BOLD API key, no internet connection needed once you
+        have a snapshot.
+      </p>
+      <div class="cta-row">
+        <a class="btn btn-primary" id="primary-download" href="#download">
+          Download for your computer
+        </a>
+        <a class="btn btn-secondary" href="https://github.com/bge-barcoding/BOLDcuratoR" target="_blank" rel="noopener">
+          View source on GitHub
+        </a>
+      </div>
+      <div class="hero-shot">
+        <img src="assets/screenshot-species.png" alt="BOLDcurator's Species screen, showing a checklist of species with BAGS grades and specimen counts" loading="lazy">
+      </div>
+    </div>
+  </section>
+
+  <section id="download" class="alt">
+    <div class="wrap">
+      <h2>Download</h2>
+      <p class="section-lede">
+        Pick your operating system. All builds are free and open source
+        (MIT licence) — see the FAQ below if your OS warns you about an
+        unsigned app on first run.
+      </p>
+
+      <div class="download-grid" id="download-grid">
+        <div class="dl-card" data-os="windows">
+          <div class="os-name">🪟 Windows <span class="badge" hidden>Recommended for you</span></div>
+          <p>64-bit Windows 10 or 11. The installer adds a Start Menu entry and an uninstaller.</p>
+          <a class="btn btn-primary" href="https://github.com/bge-barcoding/BOLDcuratoR/releases/latest/download/BOLDcuratorSetup-x64.exe">
+            Download installer (.exe)
+          </a>
+          <a class="btn-link" href="https://github.com/bge-barcoding/BOLDcuratoR/releases/latest/download/boldcurator-windows-x86_64.zip">
+            or the portable .zip (no install)
+          </a>
+        </div>
+
+        <div class="dl-card" data-os="mac-arm">
+          <div class="os-name">🍎 macOS (Apple Silicon) <span class="badge" hidden>Recommended for you</span></div>
+          <p>M1/M2/M3/M4 Macs. Unzip and move BOLDcurator to Applications.</p>
+          <a class="btn btn-primary" href="https://github.com/bge-barcoding/BOLDcuratoR/releases/latest/download/boldcurator-macos-arm64.zip">
+            Download .zip
+          </a>
+        </div>
+
+        <div class="dl-card" data-os="mac-intel">
+          <div class="os-name">🍎 macOS (Intel) <span class="badge" hidden>Recommended for you</span></div>
+          <p>Older, Intel-based Macs (pre-2020). Unzip and move to Applications.</p>
+          <a class="btn btn-primary" href="https://github.com/bge-barcoding/BOLDcuratoR/releases/latest/download/boldcurator-macos-x86_64.zip">
+            Download .zip
+          </a>
+        </div>
+
+        <div class="dl-card" data-os="linux">
+          <div class="os-name">🐧 Linux <span class="badge" hidden>Recommended for you</span></div>
+          <p>64-bit x86_64. Unzip and run the <code>boldcurator</code> executable.</p>
+          <a class="btn btn-primary" href="https://github.com/bge-barcoding/BOLDcuratoR/releases/latest/download/boldcurator-linux-x86_64.zip">
+            Download .zip
+          </a>
+        </div>
+      </div>
+
+      <p class="dl-note">
+        Prefer not to install anything? A hosted web version is also
+        available — see <a href="#no-install">"Is there a version I don't
+        need to install?"</a> in the FAQ. Every release is listed on the
+        <a href="https://github.com/bge-barcoding/BOLDcuratoR/releases" target="_blank" rel="noopener">GitHub Releases page</a>,
+        including past versions and full changelogs.
+      </p>
+    </div>
+  </section>
+
+  <section id="setup">
+    <div class="wrap">
+      <h2>Getting started</h2>
+      <p class="section-lede">
+        From opening the app for the first time to your first curated
+        export.
+      </p>
+
+      <ol class="steps">
+        <li>
+          <div>
+            <strong>Download and open the app</strong>
+            <span class="detail">Pick your OS above. On first launch, Windows/macOS may warn that the app is from an unrecognised developer — see the FAQ for how to proceed; it's a one-time prompt.</span>
+          </div>
+        </li>
+        <li>
+          <div>
+            <strong>Get a BOLD snapshot</strong>
+            <span class="detail">The first-run screen offers a one-click "Download the latest public BOLD snapshot" button, or you can point it at a snapshot file you already have (a colleague's copy, a shared drive).</span>
+          </div>
+        </li>
+        <li>
+          <div>
+            <strong>Search</strong>
+            <span class="detail">On the Search tab, type the taxa, countries, dataset codes or project codes you want, then click Search. "Check size" first if you're not sure how big the result will be.</span>
+          </div>
+        </li>
+        <li>
+          <div>
+            <strong>Curate</strong>
+            <span class="detail">Work through the Species, BINs and BAGS grade tabs (grades E and C first — that's where the barcode and the identification disagree). Flag records, correct identifications, and confirm representative specimens.</span>
+          </div>
+        </li>
+        <li>
+          <div>
+            <strong>Export</strong>
+            <span class="detail">Download curated records as TSV, FASTA or an annotated xlsx report from the Specimens, Species, BINs or Gap analysis tabs.</span>
+          </div>
+        </li>
+      </ol>
+
+      <div class="video-placeholder">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="M10 8l6 4-6 4V8z" fill="currentColor" stroke="none"/></svg>
+        <span>Video walkthrough — coming soon</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="alt">
+    <div class="wrap">
+      <h2>What it does</h2>
+      <p class="section-lede">
+        A desktop rewrite of the original BOLDcuratoR Shiny app, built to
+        work against a local copy of BOLD's data instead of BOLD's live
+        API.
+      </p>
+      <div class="feature-grid">
+        <div class="feature">
+          <h3>Works offline</h3>
+          <p>No BOLD API key, no live network calls once you have a snapshot — everything runs against your own local copy of the public data package.</p>
+        </div>
+        <div class="feature">
+          <h3>BAGS grading</h3>
+          <p>Every species graded A–E per the <a href="https://doi.org/10.1111/1755-0998.13262" target="_blank" rel="noopener">BAGS system</a>, with grades E and C (where the barcode and the name disagree) surfaced first.</p>
+        </div>
+        <div class="feature">
+          <h3>BIN &amp; gap analysis</h3>
+          <p>See BIN concordance at a glance, and check which of the taxa you typed were actually found in the result.</p>
+        </div>
+        <div class="feature">
+          <h3>Representative selection</h3>
+          <p>Auto-selects a best specimen per BIN × country, which you can review and override before exporting.</p>
+        </div>
+        <div class="feature">
+          <h3>Flags, notes &amp; corrections</h3>
+          <p>Flag records, add curator notes, and record corrected identifications — all carried through into every export.</p>
+        </div>
+        <div class="feature">
+          <h3>Sessions</h3>
+          <p>Save and resume a search, with auto-save every minute, so a large curation job never has to be finished in one sitting.</p>
+        </div>
+      </div>
+
+      <div class="shot-secondary">
+        <img src="assets/screenshot-bags.png" alt="BOLDcurator's BAGS Grade C screen, showing a species split across two BINs with per-record flags and notes" loading="lazy">
+      </div>
+      <p class="shot-caption">BAGS Grade C — a species split across more than one BIN, worked one problem at a time.</p>
+    </div>
+  </section>
+
+  <section id="faq">
+    <div class="wrap">
+      <h2>FAQ</h2>
+      <div class="faq">
+
+        <details>
+          <summary>Do I need a BOLD API key or an internet connection?</summary>
+          <div class="answer">
+            No. BOLDcurator searches and curates against a local snapshot
+            file on your own computer. The only time it needs a network
+            connection is to download that snapshot in the first place (or
+            a newer one later) — everything else, including every search,
+            runs entirely offline.
+          </div>
+        </details>
+
+        <details>
+          <summary>Windows says "Windows protected your PC" / macOS says the app is from an "unidentified developer" — is it safe?</summary>
+          <div class="answer">
+            Yes — this is expected. BOLDcurator's builds aren't currently
+            code-signed (a paid step the project hasn't taken on yet), so
+            both operating systems show their standard warning for any
+            unsigned app, not something specific to BOLDcurator. On
+            Windows, click "More info" then "Run anyway". On macOS,
+            right-click (or Control-click) the app and choose "Open", or
+            allow it under System Settings → Privacy &amp; Security. You
+            only need to do this once per machine.
+          </div>
+        </details>
+
+        <details>
+          <summary>Where do my downloads (TSV, FASTA, xlsx) go?</summary>
+          <div class="answer">
+            Your computer's usual Downloads folder, the same as any other
+            website download. If the app is running in its own native
+            window rather than a browser tab, you may instead see a "Save
+            As" dialog, defaulting to Downloads too.
+          </div>
+        </details>
+
+        <details>
+          <summary>Where is the BOLD snapshot stored, and how do I update it?</summary>
+          <div class="answer">
+            In a <code>.boldcurator</code> folder in your user/home
+            directory, never inside the installed app itself. Use the
+            "Snapshot file" panel on the app's Data tab to see which file
+            is in use, download a newer public snapshot, or point at a
+            different file — a new download lands alongside the one you're
+            using, and the app tells you when a restart is needed to
+            switch to it.
+          </div>
+        </details>
+
+        <details>
+          <summary>Where are my saved sessions, and what would I lose them?</summary>
+          <div class="answer">
+            Sessions are stored in one SQLite file, also under your
+            <code>.boldcurator</code> folder, and auto-save every minute
+            under whatever name you give the session (or "Auto-save" if
+            you leave it blank). Deleting that file, or deleting a
+            specific session from the Data tab, is the only way to lose
+            one — closing the app does not.
+          </div>
+        </details>
+
+        <details id="no-install">
+          <summary>Is there a version I don't need to install?</summary>
+          <div class="answer">
+            The original BOLDcuratoR is a hosted Shiny web app —
+            <a href="https://benprice.shinyapps.io/BOLDcuratoR/" target="_blank" rel="noopener">try it in your browser</a>
+            with no download at all. It works against BOLD's live API
+            rather than an offline snapshot, so it needs a BOLD API key and
+            an internet connection for every search — the desktop app
+            above is the offline alternative for large or repeated
+            curation work.
+          </div>
+        </details>
+
+        <details>
+          <summary>I found a bug, or want a feature added — where do I report it?</summary>
+          <div class="answer">
+            Open an issue on
+            <a href="https://github.com/bge-barcoding/BOLDcuratoR/issues" target="_blank" rel="noopener">the project's GitHub Issues page</a>.
+            Screenshots and the exact steps you took help a lot.
+          </div>
+        </details>
+
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <div>
+      Specimen data is drawn from the
+      <a href="https://www.boldsystems.org" target="_blank" rel="noopener">Barcode of Life Data System (BOLD)</a>
+      and licensed under
+      <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noopener">CC BY-SA 4.0</a>.
+      BOLDcurator itself is MIT-licensed.
+    </div>
+    <div class="footer-links">
+      <a href="https://github.com/bge-barcoding/BOLDcuratoR" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/bge-barcoding/BOLDcuratoR/releases" target="_blank" rel="noopener">Releases</a>
+      <a href="https://github.com/bge-barcoding/BOLDcuratoR/issues" target="_blank" rel="noopener">Issues</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+  // Best-effort OS detection to highlight the right download card and
+  // point the hero's "Download for your computer" button straight at it,
+  // rather than making every visitor scroll and read four options. Falls
+  // back to just linking to the download section (already the href
+  // default) if detection is inconclusive -- never blocks the page.
+  (function () {
+    try {
+      var ua = navigator.userAgent || "";
+      var platform = navigator.platform || "";
+      var os = null;
+      if (/Windows/i.test(ua)) {
+        os = "windows";
+      } else if (/Mac/i.test(platform) || /Macintosh/i.test(ua)) {
+        // Apple Silicon Safari/Chrome still reports "MacIntel" for
+        // compatibility, so this is a heuristic, not a certainty -- the
+        // card just gets a highlight, the other three are still one click
+        // away regardless.
+        var isAppleSilicon = /Mac/.test(platform) &&
+          navigator.maxTouchPoints && navigator.maxTouchPoints > 1;
+        os = isAppleSilicon ? "mac-arm" : "mac-intel";
+      } else if (/Linux/i.test(platform) && !/Android/i.test(ua)) {
+        os = "linux";
+      }
+      if (!os) return;
+      var card = document.querySelector('.dl-card[data-os="' + os + '"]');
+      if (!card) return;
+      card.setAttribute("data-recommended", "true");
+      var badge = card.querySelector(".badge");
+      if (badge) badge.hidden = false;
+      var primaryLink = card.querySelector("a.btn-primary");
+      var heroButton = document.getElementById("primary-download");
+      if (primaryLink && heroButton) {
+        heroButton.setAttribute("href", primaryLink.getAttribute("href"));
+      }
+    } catch (e) {
+      // Detection is a nicety, never a requirement -- the download
+      // section works perfectly well without it.
+    }
+  })();
+</script>
+
+</body>
+</html>

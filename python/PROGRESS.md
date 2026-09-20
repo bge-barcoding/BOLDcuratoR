@@ -64,7 +64,7 @@ capped every table's column width, and flattened the Specimens/BAGS
 curation toolbar to one row. Full details, as always, under each round's
 own "Open issues" section below.
 
-## Open issues from curator feedback, round 7 -- 3 bugs resolved, 2 larger items in progress
+## Open issues from curator feedback, round 7 -- all 5 items addressed
 
 Reported after round 6 shipped. Three concrete bugs (fixing one at a time,
 one commit per item, verified with the existing test suite and a live
@@ -153,16 +153,106 @@ down once addressed rather than squeezed into this list's format.
   `tests/make_fake_package.py`'s synthetic data doesn't currently produce
   any.
 
-**Website (new feature)**
-- [ ] A GitHub Pages site for curators: find the right install package for
-  their OS, brief setup/use instructions, room for a future screen
-  recording, and an FAQ section.
+**Repo structure -- decided with the project owner before building anything**
 
-**Repo structure (discuss options)**
-- [ ] Whether to move `python/` to a fresh repository (the original plan)
+Three questions, all answered with the recommended (lowest-risk) option:
+1. Keep the R app's files at the repo root as they are (not moved into a
+   mirroring `r/` subfolder) -- avoids touching any path the live
+   shinyapps.io/rsconnect deployment, `.Rprofile`, renv or
+   `BOLDcurator.Rproj` currently relies on. "Isolated" already holds in
+   practice (R and Python share no files); `python/` is simply the newer
+   addition, staying where it already is.
+2. Python's desktop-release tag pattern (`v*`, `.github/workflows/python-release.yml`)
+   stays Python-only -- R deploys continuously to shinyapps.io and has no
+   tag-triggered release of its own to collide with. Revisit only if that
+   changes.
+3. The existing manual-only, throwaway `spike-pages.yml` (an unrelated
+   shinylive experiment) is left alone -- it only runs if someone
+   deliberately triggers it, so it coexists safely with the new website
+   workflow below (a GitHub Pages site is "whichever workflow last
+   deployed to it").
+
+Both READMEs updated to match: the root `README.md` now names both apps
+and links to `python/` and the new website; `python/README.md`'s "moves to
+its own repository once stable" line (no longer true) and its badly stale
+"Status" paragraph (still describing Phase 3 as just-started) are both
+corrected.
+
+- [x] Whether to move `python/` to a fresh repository (the original plan)
   or keep the R and Python apps together in this one repo, tidied so each
   stays isolated but releases (including built installers) for both can
-  be automated and kept in sync.
+  be automated and kept in sync. **Decided: keep together**, per the three
+  points above.
+
+**Website (new feature) -- built**
+
+A static site (no build step, no framework) at `website/`, deployed to
+GitHub Pages by a new `.github/workflows/website-pages.yml` (mirrors the
+Actions-based deploy pattern `spike-pages.yml` already established in this
+repo, just simpler -- no build, straight `upload-pages-artifact` of the
+`website/` folder) on every push to `main` touching `website/`, or on
+demand via `workflow_dispatch`. Expected to land at
+`https://bge-barcoding.github.io/BOLDcuratoR/` once Pages' source is set to
+"GitHub Actions" in the repo's own Settings -- **not something this
+session could confirm or set itself** (no repo-admin access from here);
+first push of this workflow is what to check.
+
+- [x] A GitHub Pages site for curators: find the right install package for
+  their OS, brief setup/use instructions, room for a future screen
+  recording, and an FAQ section. One page (`website/index.html` +
+  `styles.css`, no JS framework, ~120 lines of vanilla JS total for
+  OS-detection and nothing else):
+  - **Download**: four cards (Windows/macOS Apple Silicon/macOS Intel/Linux),
+    each linking straight to
+    `https://github.com/bge-barcoding/BOLDcuratoR/releases/latest/download/<asset>`
+    -- GitHub's own "always the latest release's asset with this exact
+    name" URL, so the links never go stale after a new release **as long
+    as each asset's filename never changes**. Client-side OS detection
+    (`navigator.userAgent`/`platform`, best-effort, wrapped in try/catch
+    so a detection failure never breaks the page) highlights the matching
+    card and re-points the hero's own "Download for your computer" button
+    at it; verified live under a Linux user agent, correctly highlighted
+    the Linux card.
+  - One packaging change needed to make that stable-link scheme actually
+    work: the Windows installer's own output filename embedded the
+    version (`BOLDcuratorSetup-{version}-x64.exe`), which would have broken
+    the stable link on every release. `packaging/windows-installer.iss`'s
+    `OutputBaseFilename` is now the fixed `BOLDcuratorSetup-x64` -- the
+    version itself is unaffected, still recorded in `AppVersion` (shown in
+    the installer's own wizard and in Add/Remove Programs), only the
+    filename on disk drops it. The three zip assets
+    (`python-release.yml`'s own `matrix.name`) were already unversioned,
+    so only this one file needed the change.
+  - **Setup**: five numbered steps (download → get a snapshot → search →
+    curate → export) plus a bordered placeholder box for a future screen
+    recording, as asked -- deliberately not filled in with anything, since
+    there is no recording yet.
+  - **FAQ**: a pure CSS/HTML `<details>` accordion (no JS needed for it to
+    work), with real questions sourced from this project's own actual
+    history rather than invented ones -- offline/no API key; the
+    unsigned-build SmartScreen/Gatekeeper warning every curator on
+    Windows/macOS will hit on first run (round 5/6/7's own signing
+    decision, explained plainly rather than left to alarm someone); where
+    downloads land (round 5, item 12 / round 6, item 1's own fixes);
+    where the snapshot lives and how to update it (round 5's snapshot
+    panel); where sessions are stored and what would lose one (round 5,
+    item 5); a pointer to the original R Shiny app
+    (`https://benprice.shinyapps.io/BOLDcuratoR/`, from this repo's own
+    `rsconnect/shinyapps.io/benprice/BOLDcuratoR.dcf`) for anyone who
+    wants a no-install, always-online alternative; and where to file a
+    bug.
+  - Two real screenshots of the actual running Python desktop app
+    (Species and BAGS Grade C, via `tools/drive_ui.py`-style Playwright
+    against the same fixture snapshot used throughout this session's own
+    testing) -- **not** the old R app's screenshots already sitting in
+    `python/docs/` (`species_summary_tab.png` etc.), which show a
+    completely different UI (API key entry, BOLD API fields) that would
+    have been actively misleading attached to the offline Python app.
+  - Verified live (headless Chromium via Playwright, served locally with
+    `python3 -m http.server`): zero JS console errors; the FAQ accordion
+    opens/closes; the OS-detection highlight and hero-button re-pointing
+    both work; zero horizontal overflow at both a 1280px desktop width and
+    a 390px mobile width.
 
 ## Open issues from curator feedback, round 6 -- all six resolved
 
