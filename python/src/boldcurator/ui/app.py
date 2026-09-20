@@ -295,6 +295,17 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             .bc-nav-fill .tab-pane.active {
                 display: flex !important; flex-direction: column;
                 height: 100%; min-height: 0; overflow-y: auto;
+                /* Round 7, search tab item 1: overflow-y:auto alone makes a
+                   browser compute overflow-x as auto too (the CSS spec's own
+                   visible/non-visible interaction rule), so Bootstrap's own
+                   row/column gutter (a .row is deliberately slightly wider
+                   than its parent via negative margins, self-cancelling
+                   against each .col's matching padding) showed up as a real
+                   horizontal scrollbar on the Search tab's form -- nothing
+                   was actually cut off by hiding it, only that unused gutter
+                   sliver. Only the table tabs (".bc-scroll", nested deeper)
+                   should ever scroll sideways. */
+                overflow-x: hidden;
             }
             /* A grade tab's own coloured banner (_grade_panel) sits above
                ".bc-fill-output" in the same tab-pane -- keep its natural
@@ -1324,11 +1335,19 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                         ui.tags.span(f"{len(groups):,} "
                                      f"{unit if len(groups) == 1 else plural_unit} "
                                      "to work through", class_="small text-muted"),
-                        ui.input_select(
-                            f"group_{grade}", None,
-                            choices={str(i): f"{g.caption}  ({g.specimen_count})"
-                                     for i, g in enumerate(groups)},
-                            selected=str(index), width="420px"),
+                        # Round 7, BAGS A/B/D item 1: a fixed 420px cut off a
+                        # long caption ("Species: X (>10 specimens, single
+                        # BIN)  (404)") -- flexible instead of another fixed
+                        # guess, so it actually uses the room a wide window
+                        # has rather than truncating regardless of it.
+                        ui.div(
+                            ui.input_select(
+                                f"group_{grade}", None,
+                                choices={str(i): f"{g.caption}  ({g.specimen_count})"
+                                         for i, g in enumerate(groups)},
+                                selected=str(index), width="100%"),
+                            style="flex:1 1 auto;min-width:280px;max-width:720px;",
+                        ),
                         ui.input_action_button(f"prev_{grade}", "‹ Previous",
                                                class_="btn-sm"),
                         ui.tags.span(f"{index + 1} of {len(groups):,}",
