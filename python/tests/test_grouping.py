@@ -116,6 +116,39 @@ def test_grade_a_groups_by_species():
     assert groups[0].specimen_count == 12
 
 
+def test_a_bin_less_record_still_counts_toward_and_shows_in_its_grade():
+    """Round 6, BAGS logic item 1: a curator found a species graded A
+
+    (>=11 specimens) whose own group table showed only 9 rows. Cause: some
+    of its species-level records had no BIN yet -- ``calculate_bags_grades``
+    counts them toward ``specimen_count`` regardless (matching R), but
+    ``specimens_for_grade`` used to also require a BIN to treat a record as
+    a member of its species' group, silently dropping the BIN-less ones
+    from what the curator actually saw while they still counted toward the
+    threshold that put the species in grade A in the first place.
+    """
+    frame = _frame([
+        *[{"processid": f"B{i}", "species": "Papilio machaon", "bin_uri": "BOLD:E",
+           "quality_score": i} for i in range(9)],
+        # Two more species-level records of the same species, awaiting BIN
+        # assignment -- no bin_uri at all.
+        {"processid": "B9", "species": "Papilio machaon", "bin_uri": "",
+         "quality_score": 1},
+        {"processid": "B10", "species": "Papilio machaon", "bin_uri": pd.NA,
+         "quality_score": 1},
+    ])
+    grades = calculate_bags_grades(frame)
+    assert grades.loc[grades["species"] == "Papilio machaon",
+                      "bags_grade"].iloc[0] == "A"
+    assert grades.loc[grades["species"] == "Papilio machaon",
+                      "specimen_count"].iloc[0] == 11
+
+    groups = group_specimens(frame, grades, "A")
+    assert len(groups) == 1
+    assert groups[0].specimen_count == 11
+    assert set(groups[0].specimens["processid"]) == {f"B{i}" for i in range(11)}
+
+
 # -- the filter ------------------------------------------------------------
 
 

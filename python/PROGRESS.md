@@ -117,8 +117,43 @@ and a live `tools/drive_ui.py` run before moving to the next.
   very wide for the sake of one long value in one column.
 
 **BAGS logic**
-- [ ] 5. A species is showing as BAGS grade A with 9 records, when grade A's
-  own threshold is a minimum of 11 -- the grading logic needs checking.
+- [x] 5. A species is showing as BAGS grade A with 9 records, when grade A's
+  own threshold is a minimum of 11 -- the grading logic needs checking. Real
+  bug, found in `core/grouping.py`'s `specimens_for_grade`, and it *was* a
+  Python-port-only divergence from R, not something inherited from it.
+
+  `core.bags.calculate_bags_grades`'s `specimen_count` (what
+  `determine_grade` actually thresholds against) counts **every**
+  species-level record of a species, whether or not it has a BIN assigned
+  yet -- matching R's own `calculate_bags_grade`
+  (`R/utils/bags_grading.R`: `specimen_count <- nrow(taxon_specimens)`, no
+  BIN filter). But `specimens_for_grade` -- which decides what a curator
+  actually *sees* in that species' group table -- additionally required
+  `has_bin` for a record to count as a group member. R's own
+  `organize_grade_specimens` (`mod_bags_grading_utils.R`) has no such
+  filter either (`species_specimens <- specimens[is_species_level, ]`).
+  Net effect: a species with, say, 9 records carrying a BIN and 2 more
+  species-level records still awaiting BIN assignment crossed the
+  grade-A threshold on 11 total, while the extra `has_bin` requirement
+  silently dropped those 2 from the group table the curator was actually
+  looking at -- 9 shown, 11 counted.
+
+  Fixed by dropping `has_bin` from the core membership test
+  (`is_grade = species.isin(wanted).to_numpy() & species_level`, no BIN
+  filter) -- matching both R and `calculate_bags_grades`'s own count.
+  `has_bin` still applies exactly where it always should: computing which
+  BINs are "this species' BINs" for pulling in **riders** (non-species-level
+  records sharing one of those BINs) -- a BIN-less record has no BIN to
+  share with anything, so it can only ever count as a member of its own
+  species' group, never a rider of another's.
+
+  New test (`test_grouping.py`): a species with 9 BIN-assigned and 2
+  BIN-less species-level records grades A on 11 and now also *shows* all
+  11 in its group, not 9. Full suite green (328 -- was 327, +1); the
+  existing parity fixtures and `test_bags.py`/`test_grouping.py` were
+  already green *before* this fix too, confirming no test had ever
+  exercised a BIN-less species-level record -- the coverage gap this new
+  test closes.
 
 **Curation tools on the Specimens and BAGS tables**
 - [ ] 6. The toolbar of dropdowns and buttons above these tables needs to be

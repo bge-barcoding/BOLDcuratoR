@@ -94,10 +94,30 @@ def specimens_for_grade(specimens: pd.DataFrame, grades: pd.DataFrame,
                         grade: str) -> pd.DataFrame:
     """Every record a grade's screen should show.
 
-    Species-level records of the grade's species that have a BIN, **plus** every
-    non-species-level record sharing one of those BINs.  The second half is the
-    point: those records have no grade of their own but they are part of the
-    problem being looked at.
+    Every species-level record of the grade's species -- **whether or not it
+    has a BIN yet** -- plus every non-species-level record sharing one of
+    those species' BINs. The second half is the point: those records have no
+    grade of their own but they are part of the problem being looked at.
+
+    Round 6, BAGS logic item 1: a species could show as grade A (needs
+    ``specimen_count >= 11``) while its own group table listed fewer rows --
+    e.g. 9 instead of 11. Root cause: this used to also require ``has_bin``
+    for a record to count as a "core" member of the group, but
+    ``core.bags.calculate_bags_grades``'s own ``specimen_count`` (what
+    ``determine_grade`` actually thresholds against) counts **every**
+    species-level record regardless of whether it has a BIN -- so a species
+    with, say, 2 species-level records still awaiting BIN assignment and 9
+    with one crossed the grade-A threshold on 11 while this function's own
+    stricter ``has_bin`` filter silently dropped those 2 from what the
+    curator actually saw. Matches R's own ``organize_grade_specimens``
+    (``mod_bags_grading_utils.R``): its ``species_specimens <-
+    specimens[is_species_level, ]`` split has no BIN filter either -- this
+    was a Python-port-only divergence, not something inherited from R.
+
+    ``has_bin`` still matters for finding **riders**: a BIN-less record has
+    no BIN to share with anything, so it can only ever be a core member of
+    its own species' group, never pull in someone else's non-species-level
+    records (or vice versa) -- that half of the logic is unchanged.
     """
     if specimens is None or len(specimens) == 0 or grades is None or not len(grades):
         return specimens.iloc[:0] if specimens is not None else pd.DataFrame()
@@ -111,8 +131,8 @@ def specimens_for_grade(specimens: pd.DataFrame, grades: pd.DataFrame,
     species_level = is_species_level(specimens).to_numpy()
     has_bin = (bins != "").to_numpy()
 
-    is_grade = species.isin(wanted).to_numpy() & species_level & has_bin
-    grade_bins = set(bins[is_grade])
+    is_grade = species.isin(wanted).to_numpy() & species_level
+    grade_bins = set(bins[is_grade & has_bin])
 
     riders = bins.isin(grade_bins).to_numpy() & has_bin & ~species_level
     chosen = specimens[is_grade | riders]
