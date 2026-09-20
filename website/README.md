@@ -1,4 +1,4 @@
-# BOLDcurator project website
+# BOLDcurator website
 
 The curator-facing landing page: find the right install package, a
 getting-started walkthrough, and an FAQ. Plain static HTML/CSS/JS, no
