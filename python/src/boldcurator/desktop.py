@@ -90,6 +90,34 @@ def save_snapshot_path(path: Path, config_path: Path = DEFAULT_CONFIG_PATH) -> N
     config_path.write_text(json.dumps({"snapshot_path": str(path)}), encoding="utf-8")
 
 
+def _enable_webview_downloads(webview_module) -> None:
+    """A curator reported round 5, item 12's own fix (a toast saying "your
+
+    download is going to the Downloads folder") as not actually true in a
+    native window: nothing was there. Root cause, found in pywebview's own
+    source (every backend -- ``edgechromium.py``/Windows, ``gtk.py``/Linux,
+    ``cocoa.py``/macOS, ``qt.py``): ``webview.settings['ALLOW_DOWNLOADS']``
+    defaults to ``False``, and every one of them **silently cancels** a
+    browser-triggered download (``args.Cancel = True`` on Windows) rather
+    than erroring -- indistinguishable, from this app's side, from a
+    download that simply never happened. This app's own server-side
+    downloads (the snapshot fetch/copy in ``ui/app.py``'s "Snapshot file"
+    panel) write straight to disk and were never affected; only the
+    ``ui.download_button`` exports (specimens, FASTA, the xlsx reports) go
+    through the browser's own download machinery, which is what a *native*
+    pywebview window intercepts.
+
+    Must be set before ``create_window``/``start()`` -- pywebview reads it
+    when the download event fires, but nothing stops setting it as early as
+    right after import. With it on, Windows shows a real native "Save As"
+    dialog defaulting to the Downloads folder (via the same registry key
+    Explorer itself uses); GTK/Qt/Cocoa save straight to each OS's
+    Downloads folder without a prompt. Either way, a download now actually
+    happens and lands somewhere findable -- neither silently vanishes.
+    """
+    webview_module.settings["ALLOW_DOWNLOADS"] = True
+
+
 def _free_port() -> int:
     """An ephemeral local port, free at the moment of asking.
 
@@ -225,6 +253,7 @@ def _run_setup(config_path: Path, *, window: str = "auto") -> Path:
         try:
             import webview
 
+            _enable_webview_downloads(webview)
             win = webview.create_window("BOLDcurator -- set up", url,
                                         width=760, height=640)
             win.events.closed += lambda: resolved.put(None)
@@ -294,6 +323,7 @@ def _show_window_blocking(url: str, *, window: str) -> None:
     if window == "native":
         import webview
 
+        _enable_webview_downloads(webview)
         webview.create_window("BOLDcurator", url, width=1400, height=900)
         webview.start()
         return
@@ -311,6 +341,7 @@ def _show_window_blocking(url: str, *, window: str) -> None:
     try:
         import webview
 
+        _enable_webview_downloads(webview)
         webview.create_window("BOLDcurator", url, width=1400, height=900)
         webview.start()
         return

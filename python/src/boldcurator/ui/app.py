@@ -351,23 +351,25 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                         {{priority: 'event'}});
                 }}
                 // Round 5, item 12: a curator running the packaged desktop
-                // build in a chrome-less "browser-app" window (see
-                // desktop.py) has no visible browser UI at all -- no
-                // toolbar, no download-shelf/bubble a normal browser tab
-                // would show -- so a real, successful download can look
-                // like nothing happened. The file *is* still going to the
-                // OS's ordinary Downloads folder (this app never controls
-                // that -- it's exactly the same `<a download>` mechanism a
-                // real browser tab uses; we cannot change *where* it lands
-                // from a web page, only make the click itself visible).
-                // This toast is that visible acknowledgement.
+                // build in a chrome-less window (see desktop.py) has no
+                // visible browser UI at all -- no toolbar, no
+                // download-shelf/bubble a normal browser tab would show --
+                // so a real, successful download can look like nothing
+                // happened. This toast is that visible acknowledgement.
+                // (A native pywebview window's own downloads were actually
+                // broken until desktop._enable_webview_downloads -- see
+                // that function's docstring -- so this toast could fire on
+                // a click that pywebview then silently cancelled. Fixed
+                // there, not here; this only makes the click itself
+                // visible, whichever window mode is running.)
                 var dl = e.target.closest &&
                     e.target.closest('a.shiny-download-link');
                 if (dl && !dl.classList.contains('disabled')) {{
                     var toast = document.getElementById('bc-toast');
                     if (toast) {{
-                        toast.textContent = 'Downloading -- saving to your '
-                            + "computer's Downloads folder.";
+                        toast.textContent = 'Downloading -- check your '
+                            + "Downloads folder, or a save dialog if one "
+                            + "opens.";
                         toast.style.opacity = '1';
                         clearTimeout(toast._bcTimer);
                         toast._bcTimer = setTimeout(function() {{
@@ -1543,7 +1545,8 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 ),
                 ui.tags.span(
                     "Downloads save to your computer's usual Downloads "
-                    "folder, the same as any other website download.",
+                    "folder (a native app window may instead show a save "
+                    "dialog, defaulting to Downloads too).",
                     class_="small text-muted",
                     style="display:block;margin-bottom:10px;"),
                 ui.HTML(_group_html(

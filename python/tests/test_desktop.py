@@ -101,8 +101,30 @@ def fake_webview(monkeypatch):
     module.calls = calls
     module.create_window = lambda title, url, **kw: FakeWindow(title, url, **kw)
     module.start = lambda: calls.append(("start",))
+    # Real pywebview's own settings dict (module.settings['ALLOW_DOWNLOADS'],
+    # default False) -- see desktop._enable_webview_downloads. A bare
+    # ModuleType has no such attribute by default, so every native-window
+    # test needs this or it fails before even reaching create_window/start.
+    module.settings = {"ALLOW_DOWNLOADS": False}
     monkeypatch.setitem(sys.modules, "webview", module)
     return module
+
+
+def test_launch_enables_pywebview_downloads_before_opening_the_window(
+    fake_webview, tmp_path, store, monkeypatch
+):
+    """A curator reported downloads silently vanishing in a native window --
+
+    pywebview cancels every one by default (``settings['ALLOW_DOWNLOADS']``,
+    False in every backend) unless told otherwise before the window opens.
+    """
+    config = tmp_path / "config.json"
+    monkeypatch.setattr(desktop, "run_server",
+                        lambda app, **kw: ("http://x/", lambda: None))
+
+    desktop.launch(store.path, config_path=config)
+
+    assert fake_webview.settings["ALLOW_DOWNLOADS"] is True
 
 
 def test_launch_with_an_explicit_snapshot_skips_setup(

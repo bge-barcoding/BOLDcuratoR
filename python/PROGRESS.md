@@ -274,6 +274,56 @@ the full pytest suite both green.
   Playwright's `expect_download`) while the toast's opacity is observed
   rising through its fade-in; `tools/drive_ui.py` still green throughout.
 
+  **Follow-up, reported immediately after the above shipped: the toast was
+  lying.** The curator (on the packaged Windows desktop build) still could
+  not find any downloaded file at all -- the fix above only made the
+  *click* visible, and the real problem turned out to be that no download
+  was happening in the first place. Root-caused by reading pywebview's own
+  source (its wheel doesn't build in this sandbox -- see
+  `packaging/README.md`'s "not verified anywhere yet" -- so `pip download
+  --no-deps --no-binary :none:` pulled the wheel without building it, good
+  enough to read): **every** pywebview backend
+  (`platforms/edgechromium.py`/Windows, `gtk.py`/Linux, `cocoa.py`/macOS,
+  `qt.py`) checks `webview.settings['ALLOW_DOWNLOADS']` before letting a
+  browser-triggered download through, defaults it to `False`, and
+  **silently cancels** the download when it's off (Windows:
+  `args.Cancel = True` in `on_download_starting`) -- no exception, no
+  console output, nothing this app could ever have caught or reported.
+  Indistinguishable from "nothing happened" because, from pywebview's own
+  perspective inside a native window, nothing did. This explains exactly
+  why the curator's copy behaved differently from what round 4's own
+  real-Windows test saw: that test landed in `browser-app` mode (a genuine
+  external Chrome/Edge process, immune to this entirely), while this
+  curator's machine evidently opened a working **native** pywebview window
+  -- the one path `packaging/README.md` had explicitly flagged as never
+  verified to even open successfully, let alone confirmed to handle
+  downloads.
+
+  Fixed in `desktop.py`: a new `_enable_webview_downloads(webview_module)`
+  sets `webview.settings['ALLOW_DOWNLOADS'] = True` right after `import
+  webview`, before `create_window`/`start()`, at all three call sites
+  (`_run_setup`'s native/auto branch, `_show_window_blocking`'s explicit
+  `"native"` branch, and its `"auto"` branch). With it on, Windows shows a
+  real native "Save As" dialog defaulting to the Downloads folder (the
+  same registry key Explorer itself reads for that folder); GTK/Qt/Cocoa
+  save straight to each OS's Downloads folder without a prompt -- either
+  way a download now actually happens and lands somewhere findable. The
+  round 5 toast/hint text above was softened to say "check your Downloads
+  folder, or a save dialog if one opens" rather than asserting a silent
+  auto-save, since a native window's own behaviour (a dialog) genuinely
+  differs from a browser tab's (silent, straight to Downloads).
+
+  `tests/test_desktop.py`'s `fake_webview` fixture gained a `.settings`
+  dict (a bare `types.ModuleType` has no such attribute, so every
+  native-window test would otherwise fail before reaching
+  `create_window`/`start()` at all) plus a new regression test asserting
+  `launch()` actually flips `ALLOW_DOWNLOADS` to `True` before the window
+  opens. 324 tests pass (was 323). Not yet re-verified on the real Windows
+  machine that reported this -- that is the next thing to do, not
+  something this sandbox (no display, no way to install pywebview itself)
+  could confirm end to end; reading pywebview's own source and unit-testing
+  the setting is as far as this session could go.
+
 ## NEXT SESSION — START HERE, in priority order
 
 No open curator-reported bugs right now -- four rounds are closed (see the
