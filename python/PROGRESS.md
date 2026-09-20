@@ -54,18 +54,78 @@ starting: **keep the snapshot under the user app-data folder**
 (`~/.boldcurator/`), not literally next to the installed app -- a Program
 Files-style install location is often not writable without admin rights.
 
-**File handling**
-- [ ] 1. File load/download should always be reachable from the running app,
+**File handling -- items 1-3 fixed together (one panel)**
+- [x] 1. File load/download should always be reachable from the running app,
   not only the one-time first-run setup screen -- showing which file is in
   use, when it was downloaded, and the BOLD package version. A button on the
-  Data Input tab, at the top.
-- [ ] 2. The snapshot database should live in the program's own data folder
+  Data Input tab, at the top. Fixed -- a collapsible "Snapshot file" panel
+  (`ui.tags.details`) at the very top of the Data Input tab, above the
+  taxa/countries form. Always shows: the file in use (full path), "BOLD
+  package version" (the snapshot's own id and build date, from
+  `SnapshotStore.info()`), and "Obtained" (when this file was fetched).
+  "Obtained" is exact for anything downloaded or copied in through this
+  panel (a small `<file>.meta.json` sidecar records the real timestamp,
+  written by `_write_provenance`); for a file nobody downloaded through the
+  app (a colleague's copy, a shared drive -- no sidecar exists) it falls
+  back to the file's own mtime, labelled as such so it is never mistaken
+  for a real download date (`_obtained_date`).
+- [x] 2. The snapshot database should live in the program's own data folder
   (decided above: `~/.boldcurator/`), unzipped there (or downloaded then
   unzipped in place), not wherever the curator happened to point the setup
-  screen at.
-- [ ] 3. When a new file is downloaded/updated, the old one should be
+  screen at. The download path (`fetch_snapshot.download`) already
+  unzipped in place under `~/.boldcurator/` (round 4, item 2 -- gzip
+  handled, cleaned up, nothing left compressed); that constant is now
+  shared (`config.constants.DEFAULT_SNAPSHOT_DIR`) rather than duplicated
+  between `ui/setup.py` and the new panel. What was still missing: a
+  curator pointing the *existing-file* path at something outside that
+  folder never got it copied in at all -- the same panel now offers "Use
+  an existing file instead" (a path field, a native-dialog Browse… button
+  reusing `ui/setup.py`'s `_pick_snapshot_file`, and a "Copy into
+  BOLDcurator's data folder" button) that validates it is a real snapshot
+  (`SnapshotStore(candidate).info()`) before a chunked streaming copy into
+  `~/.boldcurator/snapshot-<timestamp>.duckdb`, with live progress. A
+  download from this panel is timestamped the same way, not the fixed
+  `snapshot.duckdb` name `ui/setup.py` uses -- **deliberately**: this
+  session already has an open, read-only DuckDB handle on the file it
+  launched with, and overwriting that file out from under a live handle
+  would be a real hazard, download or copy alike. Neither swaps the
+  *running* session's snapshot -- picking one up needs a restart, which the
+  panel says outright rather than pretending to hot-swap a live DB
+  connection.
+- [x] 3. When a new file is downloaded/updated, the old one should be
   removable -- a clean-up button with a user confirmation, not automatic
-  silent deletion.
+  silent deletion. Fixed -- the same panel lists every other `.duckdb` file
+  in `~/.boldcurator/` (i.e. not the one this session has open) with its
+  size and obtained-date, each with its own "Delete" button. Delete always
+  goes through a real confirmation dialog (`ui.modal`, not a bare click) --
+  "Delete `<path>`? This cannot be undone." with Cancel/Delete -- and
+  removes the file's provenance sidecar alongside it.
+
+  Two bugs caught and fixed before this actually worked, both the same
+  underlying mistake: the file-listing panel's own refresh signal
+  (`snap_tick`, a `reactive.Value`) was being written to **from the
+  download/copy background thread itself** -- exactly the anti-pattern
+  `ui/setup.py`'s own `dl_state` comment already warns about
+  (`reactive.Value.set()` expects Shiny's own reactive context, not an
+  arbitrary OS thread) -- so a completed copy's file never appeared in the
+  list without an unrelated click forcing a re-render first. Fixed with a
+  dedicated `_snap_poll` reactive effect: the background thread only ever
+  touches a plain dict (`snap_dl_state`); a click starts polling by
+  bumping a *different* value (`snap_op_seq`), and `_snap_poll` -- running
+  in a real reactive context -- is what safely bumps `snap_tick` every
+  0.4s for as long as the dict says an operation is running, catching the
+  final state once it stops. Verified live end to end with Playwright: the
+  panel's info lines render correctly; copying the fixture snapshot in
+  shows live progress and lands as a new timestamped file with a correct
+  provenance sidecar; the new file appears in the "other files" list
+  without any unrelated interaction; Delete opens the confirm modal with
+  the right path, and confirming removes both the file and its sidecar
+  from disk and from the list; the default-download button's real network
+  path was exercised too (blocked by this sandbox's own network policy,
+  which surfaced as the intended clean "Failed: Could not reach..."
+  message rather than a crash -- the same graceful-failure path round 4
+  already verified for the setup screen's equivalent button). Full pytest
+  suite and `tools/drive_ui.py` both still green throughout.
 
 **Layout -- items 6, 7, 8, 10 fixed together (one underlying cause)**
 

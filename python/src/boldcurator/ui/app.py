@@ -21,7 +21,10 @@ This module lays them out and wires the clicks.
 
 from __future__ import annotations
 
+import datetime as _dt
+import json
 import tempfile
+import threading
 from pathlib import Path
 
 import pandas as pd
@@ -30,6 +33,8 @@ from shiny import App, reactive, render, ui
 from ..config.constants import (
     CONTINENT_COUNTRIES,
     DEFAULT_SESSIONS_PATH,
+    DEFAULT_SNAPSHOT_DIR,
+    DEFAULT_SNAPSHOT_ZENODO_DOI,
     DOWNLOAD_LIMITS,
     FLAG_OPTIONS,
 )
@@ -40,10 +45,11 @@ from ..core.grouping import (
     SPECIES_GRADES,
 )
 from ..core.table import DEFAULT_PAGE_SIZE
-from ..data.snapshot import SnapshotStore
+from ..data.snapshot import SnapshotError, SnapshotStore
 from ..io import exports as export_io
 from ..io.annotations import merge_annotations
 from ..io.session import SessionStore
+from .setup import _pick_snapshot_file
 from .format import (
     BIN_LABELS,
     BOLD_ATTRIBUTION_SHORT,
@@ -65,6 +71,51 @@ from .format import (
 from .state import AppState, ResultTooLargeToAnalyse
 
 PAGE_SIZES = [25, 50, 100, 250, 500]
+
+
+# --------------------------------------------------------------------------
+# Snapshot file management (round 5, file handling items 1-3)
+# --------------------------------------------------------------------------
+#
+# "Which file, downloaded when, what BOLD package version" needs an honest
+# answer even for a file nobody downloaded through this app (a colleague's
+# copy, a shared drive) -- there is no reliable "download date" for that
+# case, so a small sidecar JSON records it accurately for anything this app
+# *does* fetch or copy in, and the file's own mtime is the best available
+# fallback for anything it didn't.
+
+
+def _provenance_path(snapshot_path: Path) -> Path:
+    return snapshot_path.with_suffix(snapshot_path.suffix + ".meta.json")
+
+
+def _write_provenance(snapshot_path: Path, *, source: str) -> None:
+    meta = {"downloaded_at": _dt.datetime.now().isoformat(timespec="seconds"),
+            "source": source}
+    _provenance_path(snapshot_path).write_text(json.dumps(meta), encoding="utf-8")
+
+
+def _read_provenance(snapshot_path: Path) -> dict:
+    meta_path = _provenance_path(snapshot_path)
+    if meta_path.exists():
+        try:
+            return json.loads(meta_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
+
+
+def _obtained_date(snapshot_path: Path) -> str:
+    recorded = _read_provenance(snapshot_path).get("downloaded_at")
+    if recorded:
+        return recorded
+    try:
+        mtime = snapshot_path.stat().st_mtime
+    except OSError:
+        return "unknown"
+    return (_dt.datetime.fromtimestamp(mtime).isoformat(timespec="seconds")
+            + " (file's own modified date -- not downloaded through this app)")
+
 
 def _all_columns_ordered(frame: pd.DataFrame) -> list[str]:
     """Every column ``frame`` carries, curated ones first -- nothing dropped.
@@ -284,6 +335,11 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     Shiny.setInputValue(th.dataset.sortInput, th.dataset.sortCol,
                         {{priority: 'event'}});
                 }}
+                var del = e.target.closest && e.target.closest('.bc-del-snapshot');
+                if (del) {{
+                    Shiny.setInputValue('delete_snapshot_click', del.dataset.path,
+                        {{priority: 'event'}});
+                }}
             }});
             // A table re-renders as one HTML string on every interaction
             // (paging, checking a row, sorting...), which replaces its
@@ -347,6 +403,72 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         ui.navset_pill_list(
             ui.nav_panel(
                 "Data Input",
+                # Round 5, file handling items 1-3: reachable from the
+                # running app, not only the one-time first-run setup screen
+                # (ui/setup.py, unchanged and still what a curator sees
+                # before any snapshot is configured at all).
+                ui.tags.details(
+                    ui.tags.summary(
+                        ui.tags.strong("Snapshot file"),
+                        " -- which file, when it was obtained, and how to "
+                        "change it",
+                        class_="small", style="cursor:pointer;"),
+                    ui.output_ui("snapshot_panel"),
+                    ui.div(
+                        ui.tags.strong("Download a snapshot", class_="small"),
+                        ui.div(
+                            ui.input_action_button(
+                                "snap_download_default",
+                                "Download the latest public BOLD snapshot",
+                                class_="btn-sm btn-primary"),
+                            style="margin:6px 0;",
+                        ),
+                        ui.tags.details(
+                            ui.tags.summary("Or provide your own source",
+                                           class_="small text-muted"),
+                            ui.div(
+                                ui.input_text(
+                                    "snap_source", None, width="360px",
+                                    placeholder="A direct URL, a manifest.json "
+                                               "URL, or a Zenodo record/DOI"),
+                                ui.input_action_button("snap_download",
+                                                       "Download",
+                                                       class_="btn-sm"),
+                                style="display:flex;gap:8px;align-items:center;"
+                                      "margin-top:6px;flex-wrap:wrap;",
+                            ),
+                        ),
+                        ui.tags.strong("Use an existing file instead",
+                                      class_="small",
+                                      style="display:block;margin-top:14px;"),
+                        ui.div(
+                            ui.input_text(
+                                "snap_path", None, width="360px",
+                                placeholder="/path/to/a/bold_snapshot.duckdb"),
+                            ui.input_action_button("snap_browse", "Browse…",
+                                                   class_="btn-sm "
+                                                         "btn-outline-secondary"),
+                            ui.input_action_button(
+                                "snap_copy",
+                                "Copy into BOLDcurator's data folder",
+                                class_="btn-sm"),
+                            style="display:flex;gap:8px;align-items:center;"
+                                  "flex-wrap:wrap;margin-top:4px;",
+                        ),
+                        ui.tags.span(
+                            "A download or copy lands in BOLDcurator's own "
+                            "data folder as a new file -- it does not "
+                            "replace the file this session is using. "
+                            "Restart BOLDcurator to switch to it.",
+                            class_="small text-muted",
+                            style="display:block;margin-top:6px;"),
+                        ui.output_ui("snapshot_mgmt_status"),
+                        style="margin-top:10px;padding:10px 14px;"
+                              "background:#f8f9fa;border:1px solid #dee2e6;"
+                              "border-radius:5px;max-width:900px;",
+                    ),
+                    style="margin-bottom:16px;",
+                ),
                 ui.row(
                     ui.column(5,
                         ui.input_text_area(
@@ -469,6 +591,246 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
 
         def touch() -> None:
             revision.set(revision.get() + 1)
+
+        # -- snapshot file management (round 5, file handling 1-3) ---------
+        #
+        # A download or a copy lands as a *new* file, never overwriting the
+        # one this session already has an open (read-only) DuckDB handle on
+        # -- that handle stays valid for the life of this process regardless
+        # of what shows up alongside it. Picking up a new file needs a
+        # restart (a fresh `create_app(new_path)`/`SnapshotStore`), which
+        # this panel says plainly rather than pretending to hot-swap it.
+        snap_msg = reactive.Value("")
+        snap_dl_state = {"running": False, "message": ""}
+        #: Bumped only from a real Shiny reactive context (a click effect, or
+        #: ``_snap_poll`` below) -- never from the download/copy background
+        #: thread itself. ``reactive.Value.set()`` from an arbitrary OS
+        #: thread is unsafe (see ``ui/setup.py``'s own ``dl_state`` for the
+        #: same reasoning); the thread only ever touches ``snap_dl_state``,
+        #: a plain dict, and ``_snap_poll`` is what notices it changed.
+        snap_tick = reactive.Value(0)
+        #: Bumped only by a click that starts a download/copy -- wakes
+        #: ``_snap_poll`` up to start (re-)polling ``snap_dl_state``.
+        snap_op_seq = reactive.Value(0)
+        pending_delete = reactive.Value("")
+
+        @reactive.effect
+        def _snap_poll():
+            snap_op_seq.get()  # dependency: (re-)start polling on each click
+            if snap_dl_state["running"]:
+                reactive.invalidate_later(0.4)
+            with reactive.isolate():
+                snap_tick.set(snap_tick.get() + 1)
+
+        def _other_snapshot_files() -> list[Path]:
+            try:
+                files = sorted(DEFAULT_SNAPSHOT_DIR.glob("*.duckdb"))
+            except OSError:
+                return []
+            current = store.path.resolve()
+            return [f for f in files if f.resolve() != current]
+
+        @output
+        @render.ui
+        def snapshot_panel():
+            snap_tick.get()
+            rows = [
+                ui.div(ui.tags.strong("File in use: "), str(store.path),
+                      class_="small"),
+                ui.div(ui.tags.strong("BOLD package version: "),
+                      f"{info.snapshot_id} (built {info.built_at})",
+                      class_="small"),
+                ui.div(ui.tags.strong("Obtained: "), _obtained_date(store.path),
+                      class_="small"),
+            ]
+            others = _other_snapshot_files()
+            if others:
+                rows.append(ui.tags.strong(
+                    "Other snapshot files in BOLDcurator's data folder",
+                    class_="small", style="display:block;margin-top:10px;"))
+                for f in others:
+                    try:
+                        size_mb = f.stat().st_size / 1e6
+                    except OSError:
+                        size_mb = 0.0
+                    rows.append(ui.div(
+                        ui.tags.span(
+                            f"{f.name} -- {size_mb:,.0f} MB, obtained "
+                            f"{_obtained_date(f)}", class_="small"),
+                        ui.tags.button(
+                            "Delete", type="button",
+                            class_="btn btn-sm btn-outline-danger "
+                                  "bc-del-snapshot",
+                            data_path=str(f)),
+                        style="display:flex;gap:10px;align-items:center;"
+                              "margin-top:4px;",
+                    ))
+            return ui.div(*rows)
+
+        @reactive.effect
+        @reactive.event(input.delete_snapshot_click)
+        def _confirm_delete_snapshot():
+            path = input.delete_snapshot_click()
+            if not path:
+                return
+            pending_delete.set(path)
+            ui.modal_show(ui.modal(
+                f"Delete {path}? This cannot be undone.",
+                title="Delete snapshot file",
+                footer=ui.div(
+                    ui.input_action_button("cancel_delete_snapshot", "Cancel",
+                                           class_="btn-sm"),
+                    ui.input_action_button("confirm_delete_snapshot", "Delete",
+                                           class_="btn-sm btn-danger"),
+                ),
+                easy_close=True,
+            ))
+
+        @reactive.effect
+        @reactive.event(input.cancel_delete_snapshot)
+        def _cancel_delete_snapshot():
+            pending_delete.set("")
+            ui.modal_remove()
+
+        @reactive.effect
+        @reactive.event(input.confirm_delete_snapshot)
+        def _do_delete_snapshot():
+            target = Path(pending_delete.get())
+            pending_delete.set("")
+            ui.modal_remove()
+            try:
+                target.unlink(missing_ok=True)
+                _provenance_path(target).unlink(missing_ok=True)
+                snap_msg.set(f"Deleted {target}.")
+            except OSError as exc:
+                snap_msg.set(f"Could not delete {target}: {exc}")
+            snap_tick.set(snap_tick.get() + 1)
+
+        def _snap_run_download(resolve_source, out_path: Path) -> None:
+            from ..build import fetch_snapshot as fs
+
+            try:
+                source = resolve_source(fs)
+
+                def progress(text, end="\n"):
+                    snap_dl_state["message"] = text.strip("\r")
+
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                fs.download(source, out_path, progress=progress)
+                _write_provenance(out_path, source=source.url)
+                snap_dl_state["message"] = (
+                    f"Downloaded to {out_path}. Restart BOLDcurator to use it.")
+            except fs.FetchError as exc:
+                snap_dl_state["message"] = f"Failed: {exc}"
+            finally:
+                # Only the plain dict, from this background thread -- see
+                # ``_snap_poll`` above for why no reactive.Value is touched
+                # here.
+                snap_dl_state["running"] = False
+
+        def _snap_start_download(resolve_source) -> None:
+            if snap_dl_state["running"]:
+                return
+            out_path = (DEFAULT_SNAPSHOT_DIR
+                       / f"snapshot-{export_io.timestamp()}.duckdb")
+            snap_dl_state.update(running=True, message="Starting...")
+            threading.Thread(target=_snap_run_download,
+                             args=(resolve_source, out_path), daemon=True).start()
+            snap_op_seq.set(snap_op_seq.get() + 1)
+
+        @reactive.effect
+        @reactive.event(input.snap_download_default)
+        def _snap_download_default():
+            _snap_start_download(
+                lambda fs: fs.resolve_zenodo_record(DEFAULT_SNAPSHOT_ZENODO_DOI))
+
+        @reactive.effect
+        @reactive.event(input.snap_download)
+        def _snap_download_custom():
+            source_text = (input.snap_source() or "").strip()
+            if not source_text:
+                return
+
+            def resolve(fs):
+                looks_like_manifest = (
+                    source_text.startswith(("http://", "https://"))
+                    and source_text.rstrip("/").endswith(".json"))
+                if looks_like_manifest:
+                    return fs.resolve_manifest(source_text)
+                if source_text.startswith(("http://", "https://")):
+                    return fs.Source(url=source_text)
+                return fs.resolve_zenodo_record(source_text)
+
+            _snap_start_download(resolve)
+
+        @reactive.effect
+        @reactive.event(input.snap_browse)
+        def _snap_browse():
+            chosen = _pick_snapshot_file()
+            if chosen:
+                ui.update_text("snap_path", value=chosen)
+            else:
+                snap_msg.set("No file chosen -- type the path above instead "
+                             "if Browse… didn't work.")
+
+        def _snap_run_copy(src: Path, out_path: Path) -> None:
+            try:
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                tmp = out_path.with_suffix(out_path.suffix + ".part")
+                total = src.stat().st_size
+                written = 0
+                with open(src, "rb") as fin, open(tmp, "wb") as fout:
+                    while chunk := fin.read(1 << 20):
+                        fout.write(chunk)
+                        written += len(chunk)
+                        pct = written / total if total else 0
+                        snap_dl_state["message"] = (
+                            f"Copying... {pct:.0%} "
+                            f"({written / 1e6:.0f} / {total / 1e6:.0f} MB)")
+                tmp.replace(out_path)
+                _write_provenance(out_path, source=str(src))
+                snap_dl_state["message"] = (
+                    f"Copied to {out_path}. Restart BOLDcurator to use it.")
+            except OSError as exc:
+                snap_dl_state["message"] = f"Copy failed: {exc}"
+            finally:
+                # Plain dict only -- see _snap_run_download above.
+                snap_dl_state["running"] = False
+
+        @reactive.effect
+        @reactive.event(input.snap_copy)
+        def _snap_copy():
+            if snap_dl_state["running"]:
+                return
+            candidate = Path((input.snap_path() or "").strip()).expanduser()
+            if not candidate.exists():
+                snap_msg.set(f"No file at {candidate}.")
+                return
+            if candidate.resolve().parent == DEFAULT_SNAPSHOT_DIR.resolve():
+                snap_msg.set(f"{candidate} is already in BOLDcurator's data "
+                             "folder.")
+                return
+            try:
+                with SnapshotStore(candidate) as candidate_store:
+                    candidate_store.info()
+            except SnapshotError as exc:
+                snap_msg.set(f"Not a valid snapshot: {exc}")
+                return
+            out_path = (DEFAULT_SNAPSHOT_DIR
+                       / f"snapshot-{export_io.timestamp()}.duckdb")
+            snap_dl_state.update(running=True, message="Starting...")
+            threading.Thread(target=_snap_run_copy,
+                             args=(candidate, out_path), daemon=True).start()
+            snap_op_seq.set(snap_op_seq.get() + 1)
+
+        @output
+        @render.ui
+        def snapshot_mgmt_status():
+            snap_tick.get()
+            if snap_dl_state["running"]:
+                reactive.invalidate_later(0.5)
+            text = snap_dl_state["message"] or snap_msg.get()
+            return ui.div(text, class_="small mt-2") if text else ui.div()
 
         def _register_memory_sort(input_id: str, sort_state: reactive.Value):
             """Click a header: same column flips direction, a new one sorts

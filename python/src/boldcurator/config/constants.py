@@ -292,6 +292,14 @@ DEFAULT_SESSIONS_PATH = Path.home() / ".boldcurator" / "sessions.sqlite"
 # Snapshot download -- plan 4.2/5.1
 # --------------------------------------------------------------------------
 
+#: Where a snapshot lands when it is downloaded or copied in through the app
+#: (the first-run setup screen, or the round 5 "manage snapshot" panel in the
+#: running app) -- a curator's own app-data folder, never a literal
+#: program-install folder (often not writable without admin rights, e.g.
+#: under Program Files on Windows; decided with the project owner, round 5,
+#: file handling item 2). Sibling to ``DEFAULT_SESSIONS_PATH`` above.
+DEFAULT_SNAPSHOT_DIR = Path.home() / ".boldcurator"
+
 #: The Zenodo record this project's own rebuilt BOLD snapshots are published
 #: to, so the first-run setup screen can offer a single "download the latest
 #: public snapshot" button with nothing for a curator to type or look up.
