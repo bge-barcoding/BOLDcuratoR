@@ -127,6 +127,127 @@ def test_launch_enables_pywebview_downloads_before_opening_the_window(
     assert fake_webview.settings["ALLOW_DOWNLOADS"] is True
 
 
+@pytest.fixture
+def fake_edgechromium(monkeypatch):
+    """A minimal stand-in for pywebview's Windows backend module, just
+
+    enough surface for ``_patch_edgechromium_download_extension`` to patch
+    and for the patched method to run against: a fake WinForms namespace
+    (``SaveFileDialog``, ``DialogResult``), the module's own
+    ``webview_settings`` dict, and an ``EdgeChrome`` class with a
+    placeholder ``on_download_starting``.
+    """
+    calls: list = []
+
+    class FakeDialogResult:
+        OK = "OK"
+        CANCEL = "CANCEL"
+
+    class FakeSaveFileDialog:
+        last_instance = None
+
+        def __init__(self):
+            self.Filter = None
+            self.DefaultExt = None
+            self.AddExtension = None
+            self.RestoreDirectory = None
+            self.InitialDirectory = None
+            self.FileName = None
+            FakeSaveFileDialog.last_instance = self
+
+        def ShowDialog(self, form):
+            calls.append(("ShowDialog",))
+            return FakeSaveFileDialog._result
+
+    FakeSaveFileDialog._result = FakeDialogResult.OK
+
+    class FakeWinForms:
+        SaveFileDialog = FakeSaveFileDialog
+        DialogResult = FakeDialogResult
+
+    class FakeArgs:
+        def __init__(self, result_file_path):
+            self.ResultFilePath = result_file_path
+            self.Cancel = False
+
+    class EdgeChrome:
+        def __init__(self):
+            self.form = object()
+
+        def on_download_starting(self, sender, args):
+            calls.append(("original",))
+
+    edgechromium = types.ModuleType("webview.platforms.edgechromium")
+    edgechromium.WinForms = FakeWinForms
+    edgechromium.webview_settings = {"ALLOW_DOWNLOADS": True}
+    edgechromium.EdgeChrome = EdgeChrome
+    edgechromium.calls = calls
+    edgechromium.FakeArgs = FakeArgs
+    edgechromium.FakeSaveFileDialog = FakeSaveFileDialog
+
+    platforms = types.ModuleType("webview.platforms")
+    platforms.edgechromium = edgechromium
+    webview_pkg = types.ModuleType("webview")
+    webview_pkg.platforms = platforms
+
+    monkeypatch.setitem(sys.modules, "webview", webview_pkg)
+    monkeypatch.setitem(sys.modules, "webview.platforms", platforms)
+    monkeypatch.setitem(sys.modules, "webview.platforms.edgechromium", edgechromium)
+    monkeypatch.setitem(sys.modules, "winreg", types.ModuleType("winreg"))
+    monkeypatch.setattr(sys, "platform", "win32")
+    return edgechromium
+
+
+def test_edgechromium_download_extension_patch_sets_default_ext(fake_edgechromium):
+    """Round 6, downloads item 1: a native window's own Save As dialog
+
+    dropped every download's file extension. pywebview's own dialog is
+    built with an "All files (*.*)" filter and no ``DefaultExt`` -- the
+    patch must give it both, derived from the file's own suggested name.
+    """
+    desktop._patch_edgechromium_download_extension()
+
+    patched = fake_edgechromium.EdgeChrome.on_download_starting
+    instance = fake_edgechromium.EdgeChrome()
+    args = fake_edgechromium.FakeArgs(r"C:\Users\curator\Downloads\all_specimens_20260101.tsv")
+
+    patched(instance, sender=None, args=args)
+
+    dialog_calls = [c for c in fake_edgechromium.calls if c[0] == "ShowDialog"]
+    assert dialog_calls, "the patched method never opened a save dialog"
+    assert ("original",) not in fake_edgechromium.calls  # replaced, not wrapped
+    assert args.Cancel is False
+    assert args.ResultFilePath.endswith(".tsv")
+
+    dialog = fake_edgechromium.FakeSaveFileDialog.last_instance
+    assert dialog.DefaultExt == "tsv"
+    assert dialog.AddExtension is True
+    assert "*.tsv" in dialog.Filter
+
+
+def test_edgechromium_download_extension_patch_is_noop_off_windows(
+    fake_edgechromium, monkeypatch
+):
+    monkeypatch.setattr(sys, "platform", "linux")
+    original = fake_edgechromium.EdgeChrome.on_download_starting
+
+    desktop._patch_edgechromium_download_extension()
+
+    assert fake_edgechromium.EdgeChrome.on_download_starting is original
+
+
+def test_edgechromium_download_extension_patch_survives_a_missing_module(monkeypatch):
+    """A future pywebview version could rename/restructure this module --
+
+    the patch must skip quietly, never crash `launch()`.
+    """
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.delitem(sys.modules, "webview.platforms.edgechromium", raising=False)
+    monkeypatch.delitem(sys.modules, "webview.platforms", raising=False)
+
+    desktop._patch_edgechromium_download_extension()  # must not raise
+
+
 def test_launch_with_an_explicit_snapshot_skips_setup(
     fake_webview, tmp_path, store, monkeypatch
 ):

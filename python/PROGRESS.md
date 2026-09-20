@@ -54,10 +54,53 @@ one at a time, one commit per item, verified with the existing test suite
 and a live `tools/drive_ui.py` run before moving to the next.
 
 **Downloads**
-- [ ] 1. Downloads work now (round 5, item 12's fix), but every one lands
+- [x] 1. Downloads work now (round 5, item 12's fix), but every one lands
   with no file extension (`.xlsx`/`.tsv`/`.fasta`/`.csv` all affected
   alike) -- curator is running the native window (only `boldcurator.exe` in
-  Task Manager, no separate browser process).
+  Task Manager, no separate browser process). All four extensions affected
+  alike rules out a MIME-type problem (`.tsv`/`.csv`/`.xlsx` are all
+  correctly recognised by Python's own `mimetypes`; only `.fasta` isn't,
+  yet it loses its extension too) -- and Shiny's own `Content-Disposition`
+  header already carries the right filename in every case (confirmed: a
+  real Chromium download via Playwright gets the extension right against
+  the exact same server). Points at pywebview's own Windows glue code, not
+  this app's server side.
+
+  Read pywebview 6.2.1's actual source (`pip download --no-deps
+  --no-binary :none:` -- its wheel doesn't *build* in this sandbox, but
+  reading it doesn't need a build) to find it:
+  `EdgeChrome.on_download_starting` (`platforms/edgechromium.py`) opens a
+  `SaveFileDialog` with `Filter = "All files (*.*)|*.*"` and no
+  `DefaultExt` -- a well-documented WinForms footgun on its own regardless
+  of exactly how/where the extension gets dropped along the way (the
+  dialog's own filename box, or something else the OS does with a
+  wildcard-only filter and no default to fall back on): with `DefaultExt`
+  unset, there's nothing for the dialog to re-apply if it's lost, and with
+  only `*.*`, there's no concrete extension tied to a "save as type"
+  choice either.
+
+  Fixed in `desktop.py`: `_patch_edgechromium_download_extension`
+  monkeypatches `EdgeChrome.on_download_starting` with a reimplementation
+  that builds the filter from the file's own real extension (offering "All
+  files" second) and sets `DefaultExt`/`AddExtension` explicitly -- the
+  standard fix for this exact WinForms symptom. Windows-only (checks
+  `sys.platform`), and skips quietly rather than crashing if pywebview's
+  internals have moved by a future version (module or class not found).
+  Called alongside `_enable_webview_downloads` (round 5, item 12) at all
+  three places a native window can open.
+
+  `tests/test_desktop.py` gained a `fake_edgechromium` fixture (a fake
+  `WinForms`/`EdgeChrome`/`webview_settings` surface) and three tests: the
+  patch builds a correctly-`DefaultExt`ed dialog and preserves the
+  extension end to end, it's a no-op off Windows, and it survives the
+  module not existing at all. 328 tests pass (was 327 with round 5's own
+  new test).
+
+  **Not verified on a real Windows/WebView2 machine** -- this sandbox
+  cannot install pywebview at all (`packaging/README.md`'s own "not
+  verified anywhere yet"), so this is reasoned from the published source,
+  not observed live running. Confirming on the curator's own machine is the
+  next thing to do.
 
 **Data input**
 - [ ] 2. No need for the tab's own horizontal *and* vertical scroll --
