@@ -44,6 +44,44 @@ project owner installed it and confirmed the app launches in its own
 browser-app window, "looks like a regular app." That same real-world test
 surfaced **round 4** (7 issues) -- now also closed, see below.
 
+## Open issues from curator feedback, round 6 -- 6 open
+
+Reported after round 5 shipped, including an immediate follow-up on round
+5's own download-visibility fix (see "downloads item 1" below). Installers
+now exist for all three operating systems, so that item from earlier
+rounds' open-work lists is done and no longer tracked separately. Fixing
+one at a time, one commit per item, verified with the existing test suite
+and a live `tools/drive_ui.py` run before moving to the next.
+
+**Downloads**
+- [ ] 1. Downloads work now (round 5, item 12's fix), but every one lands
+  with no file extension (`.xlsx`/`.tsv`/`.fasta`/`.csv` all affected
+  alike) -- curator is running the native window (only `boldcurator.exe` in
+  Task Manager, no separate browser process).
+
+**Data input**
+- [ ] 2. No need for the tab's own horizontal *and* vertical scroll --
+  rework spacing/scale so it fits on one page without either. A scrollbar
+  when opening the snapshot-file panel is fine. If a same-page fix is
+  complicated, consider moving the snapshot-file panel to its own new tab,
+  first in the list, ahead of Data Input -- and put the session save/load
+  controls there too, so all the "data" concerns live on one dedicated tab.
+- [ ] 3. Rename the "Data Input" tab to "Search".
+
+**All tables**
+- [ ] 4. Enforce a maximum column width so tables don't become unwieldy --
+  columns currently expand to fit their contents, which can make a table
+  very wide for the sake of one long value in one column.
+
+**BAGS logic**
+- [ ] 5. A species is showing as BAGS grade A with 9 records, when grade A's
+  own threshold is a minimum of 11 -- the grading logic needs checking.
+
+**Curation tools on the Specimens and BAGS tables**
+- [ ] 6. The toolbar of dropdowns and buttons above these tables needs to be
+  more compact, ideally a single line -- spacing looks uneven and there is
+  unused space to the right (per the curator's screenshots).
+
 ## Open issues from curator feedback, round 5 -- all twelve resolved
 
 Reported after the project owner tried the app for real curation work. Fixing
