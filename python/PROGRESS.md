@@ -92,8 +92,20 @@ Files-style install location is often not writable without admin rights.
   vertical scroll (same underlying issue as item 7, on this tab).
 
 **Gap analysis tab**
-- [ ] 11. Add a table download as xlsx, the same as the Species tab already
-  has.
+- [x] 11. Add a table download as xlsx, the same as the Species tab already
+  has. Fixed -- the Species tab's download already produces one workbook
+  with Summary/Species checklist/Gap analysis sheets
+  (`export_species_analysis`), so the Gap analysis tab now offers the same
+  export rather than a new one. Reused the same underlying handler under a
+  **second** output id (`dl_gap_analysis`) instead of placing the existing
+  `dl_species_analysis` button's markup a second time in the DOM -- two
+  elements sharing one Shiny output id means two elements with the same
+  HTML `id`, which is unreliable. `ui/app.py`: `_species_analysis_download`
+  factored out of the old `_dl_species_analysis` handler,
+  `_register_species_analysis_download(output_id)` registers it under both
+  ids. Verified live: `tools/drive_ui.py` still all-green, plus a Playwright
+  check clicking the new button on the Gap analysis tab and confirming a
+  real `.xlsx` download.
 
 **Data download from the app**
 - [ ] 12. Curator can't see where downloads go, running the Windows desktop

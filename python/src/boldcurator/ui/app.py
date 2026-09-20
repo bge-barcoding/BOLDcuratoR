@@ -686,6 +686,17 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                         style="display:flex;gap:10px;margin:10px 0 12px;"
                               "flex-wrap:wrap;",
                     ),
+                    # Round 5, item 11: the same workbook the Species tab
+                    # downloads (it already carries a Gap analysis sheet
+                    # alongside the checklist) -- reachable from here too, so
+                    # a curator working this tab doesn't have to switch tabs
+                    # for it. A second output id, not a second element bound
+                    # to "dl_species_analysis" -- two DOM elements sharing one
+                    # Shiny output id is unreliable (duplicate HTML ids), so
+                    # this gets its own id wired to the same export below.
+                    ui.download_button("dl_gap_analysis",
+                                       "Download species analysis (xlsx)",
+                                       class_="btn-sm mb-2"),
                     ui.HTML(_gap_html(_sorted_by(gaps, gap_sort),
                                       sort_state=gap_sort.get())),
                 )
@@ -1292,12 +1303,11 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 return
             yield from _stream_file(written, tmpdir)
 
-        @output(id="dl_species_analysis")
-        @render.download_button(
-            filename=lambda: f"species_analysis_{export_io.timestamp()}.xlsx",
-            media_type="application/vnd.openxmlformats-officedocument"
-                       ".spreadsheetml.sheet")
-        def _dl_species_analysis():
+        def _species_analysis_download():
+            """The Summary/Species checklist/Gap analysis workbook -- shared by
+            the Species tab's own download button and the Gap analysis tab's
+            (round 5, item 11), which offer the same export under two output
+            ids rather than one element duplicated in the DOM."""
             search = state.search
             if search is None:
                 yield from _empty_download("run a search first")
@@ -1310,6 +1320,18 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 yield from _empty_download("no species in this result")
                 return
             yield from _stream_file(written, tmpdir)
+
+        def _register_species_analysis_download(output_id: str):
+            @output(id=output_id)
+            @render.download_button(
+                filename=lambda: f"species_analysis_{export_io.timestamp()}.xlsx",
+                media_type="application/vnd.openxmlformats-officedocument"
+                           ".spreadsheetml.sheet")
+            def _handler():
+                yield from _species_analysis_download()
+
+        _register_species_analysis_download("dl_species_analysis")
+        _register_species_analysis_download("dl_gap_analysis")
 
     return App(app_ui, server)
 
