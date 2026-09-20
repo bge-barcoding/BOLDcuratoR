@@ -44,7 +44,27 @@ project owner installed it and confirmed the app launches in its own
 browser-app window, "looks like a regular app." That same real-world test
 surfaced **round 4** (7 issues) -- now also closed, see below.
 
-## Open issues from curator feedback, round 6 -- 6 open
+**Update, current as of round 6: six rounds of curator feedback are now
+closed** (round 5's 12 issues and round 6's 6 issues, on top of the four
+above), **installers exist for all three operating systems** (per the
+project owner -- Windows' own Inno Setup installer is this session's own
+work and confirmed on a real machine; the macOS/Linux installers were not
+built or verified by this session, so treat `packaging/` as unfamiliar if
+one of them needs a change), and **328 tests pass**. The two headline fixes
+from round 6: a real BAGS grading bug (a species could show fewer records
+in its own group table than the count that graded it -- `core/grouping.py`
+required a BIN for group membership, which neither R nor this port's own
+grading count ever required) and a from-source-reading fix for native
+Windows downloads losing their file extension (pywebview's own Save As
+dialog has no `DefaultExt`) that **still needs confirming on a real
+Windows/WebView2 machine** -- see "NEXT SESSION" immediately below. Round
+6 also moved the snapshot-file/session panels off the search tab onto
+their own new "Data" tab (renamed the old "Data Input" tab to "Search"),
+capped every table's column width, and flattened the Specimens/BAGS
+curation toolbar to one row. Full details, as always, under each round's
+own "Open issues" section below.
+
+## Open issues from curator feedback, round 6 -- all six resolved
 
 Reported after round 5 shipped, including an immediate follow-up on round
 5's own download-visibility fix (see "downloads item 1" below). Installers
@@ -253,6 +273,11 @@ starting: **keep the snapshot under the user app-data folder**
 Files-style install location is often not writable without admin rights.
 
 **File handling -- items 1-3 fixed together (one panel)**
+
+*(Round 6 update: this panel moved off the Data Input tab onto its own new
+"Data" tab -- see round 6, data input items 2/3, below, and its own
+"Session" panel too. The panel's own content, described here, is otherwise
+unchanged.)*
 - [x] 1. File load/download should always be reachable from the running app,
   not only the one-time first-run setup screen -- showing which file is in
   use, when it was downloaded, and the BOLD package version. A button on the
@@ -524,23 +549,34 @@ the full pytest suite both green.
 
 ## NEXT SESSION — START HERE, in priority order
 
-No open curator-reported bugs right now -- four rounds are closed (see the
-"Open issues" sections below for what was wrong and how each was fixed, if
-a similar bug resurfaces). CI (plan 2.6) is green on all three platforms,
-and **the release build has now been confirmed working on real Windows**:
-the installer runs, the app launches in a `browser-app` window, and round 4
-(the issues that same real run surfaced) is closed too. What's left:
+No open curator-reported bugs right now -- **six rounds are closed** (see
+the "Open issues" sections below for what was wrong and how each was
+fixed, if a similar bug resurfaces: round 6, 6 issues; round 5, 12 issues;
+rounds 1-4 before that). CI (plan 2.6) is green on all three platforms, and
+the release build has been confirmed working on real Windows (installer
+runs, app launches in a `browser-app` window). **Installers now exist for
+all three operating systems** (per the project owner -- the "macOS/Linux
+installer doesn't exist yet" item that used to be here is done; this
+session did not build or verify those installers itself, so if one needs
+changes, treat it as unfamiliar and read `packaging/` fresh). What's left:
 
-1. **4.4 Signing** — still a deliberate no (project owner's call, curator
-   testing doesn't need it) and **4.5 installer smoke test on a clean VM**
-   still not done for macOS/Linux (Windows is now covered by the project
-   owner's own real-machine test) — the release workflow's own smoke test is
-   a CI proxy for this, not a replacement for someone actually
-   double-clicking a downloaded build.
-2. **A macOS/Linux installer** (a `.dmg`, or similar) doesn't exist yet --
-   only Windows has one (Inno Setup). Not requested; worth asking the
-   project owner before building it speculatively.
-3. **Also open, not urgent:**
+1. **Two round 6 fixes need confirming on a real Windows/WebView2 machine**
+   -- this sandbox cannot install pywebview at all (see "not verified
+   anywhere yet" further down), so both were reasoned from pywebview
+   6.2.1's published source, not observed live:
+   - `desktop._patch_edgechromium_download_extension` (downloads item 1):
+     does a native window's Save As dialog now keep the file extension?
+   - `desktop._enable_webview_downloads` (round 5, item 12, already
+     shipped, but worth re-confirming alongside the above): does a native
+     window's download still work at all, now that item 1's monkeypatch
+     also touches the same code path?
+2. **4.4 Signing** — still a deliberate no (project owner's call, curator
+   testing doesn't need it).
+3. **4.5 installer smoke test on a clean VM** — still not independently
+   confirmed for macOS/Linux beyond CI's own smoke test (a CI proxy, not a
+   replacement for someone actually double-clicking a downloaded build);
+   Windows is covered by the project owner's own real-machine test.
+4. **Also open, not urgent:**
    - The R app (not this rewrite) rejects 4% of real BOLD dataset codes --
      `mod_data_import_utils.R:50`'s `^DS-[A-Z0-9]+$` pattern; 544 of 13,706
      real `DS-` codes don't match. Live bug in the *shipped* app. The SQL to
@@ -556,7 +592,7 @@ the installer runs, the app launches in a `browser-app` window, and round 4
      `snapshot_builder.py`/`schema.py` and republished. The code fix alone
      does not retroactively add columns to a `.duckdb` file already on disk.
 
-Before starting any of the above: `python -m pytest tests/ -q` (323 passing)
+Before starting any of the above: `python -m pytest tests/ -q` (328 passing)
 and `python parity/compare.py` (PASS) from a clean checkout, per "First, 60
 seconds of setup" below -- and drive any UI change through
 `tools/drive_ui.py` before believing it works, per "the rules this session
@@ -1194,7 +1230,7 @@ to learn" below for why that matters here specifically.
 cd C:\GitHub\BOLDcurator\python
 git pull
 pip install -e ".[dev,gui]"
-python -m pytest tests/ -q          # 289 passing
+python -m pytest tests/ -q          # 328 passing
 python parity/compare.py            # PASS
 
 python -m boldcurator.cli gui --snapshot "<the reordered snapshot>"
