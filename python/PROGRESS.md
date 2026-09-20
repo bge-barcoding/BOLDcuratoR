@@ -68,11 +68,28 @@ Files-style install location is often not writable without admin rights.
   silent deletion.
 
 **Data input tab**
-- [ ] 4. Auto-save should be the default, fixed at 1 minute, with no option
+- [x] 4. Auto-save should be the default, fixed at 1 minute, with no option
   to change the interval -- hide the interval box and tidy up the control.
-- [ ] 5. Curator asked where sessions are saved, and what would remove or
+  Fixed -- `ui/app.py`: dropped the `autosave` checkbox and
+  `autosave_interval` numeric input entirely, replaced with one line of
+  static text ("Auto-saves every minute..."). `_autosave_tick` no longer
+  reads either input: it unconditionally calls `reactive.invalidate_later(60)`
+  and saves every tick, for the life of the session -- no way to turn it off
+  from the UI. Verified live: no `#autosave`/`#autosave_interval` elements
+  in the DOM, the static text renders, `tools/drive_ui.py` still green.
+- [x] 5. Curator asked where sessions are saved, and what would remove or
   lose them -- needs a real answer plus something visible in the app so this
-  doesn't have to be asked again.
+  doesn't have to be asked again. Answer: one SQLite file
+  (`io.session.SessionStore`, default `~/.boldcurator/sessions.sqlite`,
+  configurable via `create_app(sessions_path=...)`/`boldcurator gui
+  --sessions`); a session is lost only by deleting that file or that one
+  session with the Delete button -- never by closing the app, the browser
+  tab, or a normal shutdown. Fixed by putting this on screen: a new
+  `session_location` output under the Session panel states the real path
+  and the two ways to lose a session. Verified live: renders
+  "Sessions are stored in /root/.boldcurator/sessions.sqlite -- deleting
+  that file (or the Delete button above) is the only way to lose them;
+  closing the app does not."
 - [ ] 6. The window should not need to scroll vertically -- everything should
   fit on one page. This applies to the whole app, not just this tab.
 

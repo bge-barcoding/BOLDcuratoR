@@ -326,18 +326,13 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                         style="display:flex;gap:8px;align-items:center;"
                               "flex-wrap:wrap;margin-top:4px;",
                     ),
-                    ui.div(
-                        ui.input_checkbox("autosave", "Auto-save every",
-                                          value=False),
-                        ui.input_numeric("autosave_interval", None, value=1,
-                                         min=1, max=60, width="70px"),
-                        ui.tags.span("minute(s), under the name above (or "
-                                     "\"Auto-save\" if blank)",
-                                     class_="small text-muted"),
-                        style="display:flex;gap:8px;align-items:center;"
-                              "flex-wrap:wrap;margin-top:6px;",
-                    ),
+                    ui.tags.span(
+                        "Auto-saves every minute, under the name above (or "
+                        "\"Auto-save\" if left blank).",
+                        class_="small text-muted", style="display:block;"
+                              "margin-top:6px;"),
                     ui.output_ui("session_status"),
+                    ui.output_ui("session_location"),
                     style="margin-top:16px;padding:10px 14px;"
                           "background:#f8f9fa;border:1px solid #dee2e6;"
                           "border-radius:5px;max-width:900px;",
@@ -512,23 +507,16 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
 
         @reactive.effect
         def _autosave_tick():
-            """Runs once at startup (autosave off, nothing to do) and then
+            """Every minute, unconditionally -- round 5, item 4: auto-save is
 
-            once per interval for as long as the checkbox stays on --
-            `reactive.invalidate_later` has to be called on every run to keep
-            rescheduling itself, including the run that finds the checkbox
-            off, or it would never check again once turned off and back on.
-            `autosave_interval`/`session_name` are read isolated: changing
-            the interval or typing a name should not itself trigger a save,
-            only the timer firing or the checkbox being ticked should.
+            always on, fixed at one minute, with no checkbox or interval to
+            turn it off or change (previously an opt-in checkbox with a
+            configurable interval). `reactive.invalidate_later` has to be
+            called on every run to keep rescheduling itself.
+            `session_name` is read isolated: typing a name should not itself
+            trigger a save, only the timer firing should.
             """
-            enabled = input.autosave()
-            with reactive.isolate():
-                minutes = max(1, int(input.autosave_interval() or 1))
-            if enabled:
-                reactive.invalidate_later(minutes * 60)
-            else:
-                return
+            reactive.invalidate_later(60)
             with reactive.isolate():
                 name = (input.session_name() or "").strip()
             _do_save(name, default_name="Auto-save", quiet_on_no_search=True)
@@ -563,6 +551,26 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         def session_status():
             text = session_msg.get()
             return ui.div(text, class_="small text-muted mt-1") if text else ui.div()
+
+        @output
+        @render.ui
+        def session_location():
+            """Round 5, item 5: a curator asked where sessions are saved and
+
+            what would lose them -- put the real answer on screen instead of
+            leaving it to be asked again. Sessions live in one SQLite file
+            (`io.session.SessionStore`); they are lost only by deleting that
+            file, deleting the session with the Delete button above, or (for
+            a specific session) resuming it against a different snapshot's
+            worth of retracted records -- never by closing the app or the
+            browser tab.
+            """
+            return ui.div(
+                f"Sessions are stored in {sessions_path} -- deleting that "
+                "file (or the Delete button above) is the only way to lose "
+                "them; closing the app does not.",
+                class_="small text-muted mt-1",
+            )
 
         @output
         @render.ui
