@@ -29,15 +29,22 @@ def _frame(rows):
     return pd.DataFrame(rows)
 
 
-def test_specimen_count_includes_records_without_a_bin():
+def test_specimen_count_excludes_records_without_a_bin():
+    """Round 7: a BIN-less record cannot be judged on "single BIN, N
+
+    specimens" at all, so it must not count -- deliberately diverging from
+    the original R app, which counts it (round 6 of this port matched R on
+    purpose, before this request reversed it; see core.bags's own
+    docstring).
+    """
     rows = [{"species": "Danaus plexippus", "bin_uri": "BOLD:A",
              "identification_rank": "species"} for _ in range(2)]
     rows.append({"species": "Danaus plexippus", "bin_uri": "",
                  "identification_rank": "species"})
     grades = calculate_bags_grades(_frame(rows))
-    assert grades["specimen_count"].iloc[0] == 3
+    assert grades["specimen_count"].iloc[0] == 2
     assert grades["bin_count"].iloc[0] == 1
-    assert grades["bags_grade"].iloc[0] == "B"   # 3 specimens, not D
+    assert grades["bags_grade"].iloc[0] == "D"   # 2 specimens, not B
 
 
 def test_shared_bin_gives_both_species_grade_e():

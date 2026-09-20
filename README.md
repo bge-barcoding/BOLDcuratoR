@@ -1,5 +1,7 @@
-A shiny app to check and curate data on BOLD based on input taxonomy, geography, datasets and projects. 
-Uses BOLDconnectR (https://github.com/boldsystems-central/BOLDconnectR)
+Tools to check and curate data on BOLD based on input taxonomy, geography, datasets and projects. This repository holds two implementations, developed together so they can reference each other and stay in sync:
+
+- **This R Shiny app** (root of the repo, this README) — works against BOLD's live API. Uses BOLDconnectR (https://github.com/boldsystems-central/BOLDconnectR). Requires a BOLD API key and an internet connection for every search.
+- **[BOLDcurator (Python)](python/)** — an offline desktop rewrite that curates against a local snapshot of BOLD's public data package instead: no API key, no internet needed once you have a snapshot. See **[the project website](https://bge-barcoding.github.io/BOLDcuratoR/)** for downloads, setup instructions and an FAQ, or [`python/README.md`](python/README.md) and [`python/PROGRESS.md`](python/PROGRESS.md) for development details.
 
 ## Features
 - Process multiple species level taxa with their synonyms

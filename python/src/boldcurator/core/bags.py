@@ -12,6 +12,18 @@ under-detected.  Given the snapshot's ``bin_species`` table, sharing is
 evaluated against every record in the snapshot.  That is a scientific
 improvement rather than a speedup, and it means grade E will not match the
 Shiny app's; ``shared_bin_scope`` records which was used.
+
+**A BIN-less record is excluded entirely (round 7), unlike R.**  R's own
+``calculate_bags_grade`` counts every species-level record toward
+``specimen_count`` whether or not it has a BIN yet.  This port matched
+that faithfully through round 6 -- until the project owner asked for the
+opposite: a record with no BIN cannot be judged on "single BIN, N
+specimens" at all, so it should not count toward a grade, and should not
+appear in that grade's group table either.  ``calculate_bags_grades``
+drops it before counting anything; a species with *no* BIN-assigned
+records at all gets no grade rather than one computed from nothing it can
+be judged on.  The record itself is untouched -- still in the specimen
+table, just outside BAGS.
 """
 
 from __future__ import annotations
@@ -108,6 +120,21 @@ def calculate_bags_grades(
     eligible["_species"] = to_text(eligible["species"]).str.strip()
     bin_text = to_text(column_or_missing(eligible, "bin_uri")).str.strip()
     eligible["_bin"] = bin_text.mask(is_empty(column_or_missing(eligible, "bin_uri")), "")
+
+    # Round 7: a record with no BIN yet cannot be assessed for "single BIN,
+    # N specimens" at all, so it must not move a species' grade one way or
+    # the other -- drop it before anything is counted. This is a deliberate
+    # divergence from the original R app (``calculate_bags_grade``,
+    # ``R/utils/bags_grading.R``, counts every species-level record
+    # regardless of BIN, and round 6 of this port matched that on purpose)
+    # -- the project owner's own explicit call, not a parity target any
+    # more for this one behaviour. A species with no BIN-assigned records
+    # at all now gets no grade rather than one computed from nothing it can
+    # actually be judged on; the records themselves are untouched and still
+    # show up in the specimen table, just not in any BAGS grade or group.
+    eligible = eligible[eligible["_bin"] != ""]
+    if len(eligible) == 0:
+        return empty
 
     scope = "snapshot" if bin_species is not None else "local"
     shared = shared_bins(bin_species if bin_species is not None else eligible)

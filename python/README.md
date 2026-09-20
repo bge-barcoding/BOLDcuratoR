@@ -4,15 +4,21 @@ Offline rewrite of the BOLDcuratoR Shiny app. Curates BOLD specimen records
 against a local DuckDB snapshot of the BOLD public data package — no BOLD API,
 no API key, no network at query time.
 
-Being developed in this repository alongside the R app so the R code stays
-available as the reference implementation; it moves to its own repository once
-stable. Plan and checklist: [`../docs/python-app-plan.md`](../docs/python-app-plan.md).
+Developed in this repository alongside the R app (the reference
+implementation) rather than a separate one — the project owner's call, so
+work on either app can reference the other and both stay in sync. See the
+curator-facing project website (`../website/`) for downloads and setup
+instructions, or the plan and checklist:
+[`../docs/python-app-plan.md`](../docs/python-app-plan.md).
 
 ## Status
 
-Phases 0–2 are complete: the snapshot builds and verifies, the core library is
-at parity with the R app, and the CLI and exports work. Phase 3 (the GUI) has
-started — the specimen table spike is in, the rest of the screens are not.
+All six screens (Data/Search, Species, BINs, the five BAGS grades,
+Specimens) are built and working, with installers for Windows, macOS and
+Linux built automatically on every tagged release
+(`.github/workflows/python-release.yml`). Seven rounds of curator-reported
+feedback have been fixed; see `PROGRESS.md` for the full history and
+current state.
 
 ## Setup
 

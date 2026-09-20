@@ -32,7 +32,13 @@ DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir=Output
-OutputBaseFilename=BOLDcuratorSetup-{#MyAppVersion}-x64
+; Fixed, not version-suffixed: the project website (website/index.html)
+; links straight to
+; https://github.com/<org>/<repo>/releases/latest/download/BOLDcuratorSetup-x64.exe,
+; which only stays correct release after release if this name never
+; changes. The version itself is still recorded in AppVersion above (shown
+; in the wizard and Add/Remove Programs) -- only the filename drops it.
+OutputBaseFilename=BOLDcuratorSetup-x64
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern

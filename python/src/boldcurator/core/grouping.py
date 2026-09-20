@@ -94,10 +94,24 @@ def specimens_for_grade(specimens: pd.DataFrame, grades: pd.DataFrame,
                         grade: str) -> pd.DataFrame:
     """Every record a grade's screen should show.
 
-    Species-level records of the grade's species that have a BIN, **plus** every
-    non-species-level record sharing one of those BINs.  The second half is the
-    point: those records have no grade of their own but they are part of the
-    problem being looked at.
+    Every species-level, **BIN-assigned** record of the grade's species, plus
+    every non-species-level record sharing one of those species' BINs. The
+    second half is the point: those records have no grade of their own but
+    they are part of the problem being looked at.
+
+    Round 7, BAGS analysis item 1: a BIN-less record must not count toward a
+    grade at all -- ``core.bags.calculate_bags_grades`` now drops it before
+    counting anything, on the project owner's explicit instruction (a
+    deliberate divergence from R, which counts it; see that module's own
+    docstring). This function has to agree, or the same "graded on records
+    the curator never actually sees" mismatch round 6 fixed the other
+    direction would reappear here, just flipped: a BIN-less record excluded
+    from the *count* but still shown in the *group* would inflate what looks
+    like the group's own size past what actually earned the grade.
+    ``has_bin`` is therefore required for a record to be a "core" member of
+    its species' group, same as it always was for finding **riders**: a
+    BIN-less record has no BIN to share with anything, so it can only ever
+    be judged as part of its own species (and now, not even that).
     """
     if specimens is None or len(specimens) == 0 or grades is None or not len(grades):
         return specimens.iloc[:0] if specimens is not None else pd.DataFrame()

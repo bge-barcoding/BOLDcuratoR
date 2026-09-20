@@ -16,10 +16,20 @@ The R reference runs with `has_image = FALSE` on every record, so R's 16th crite
 
 | Divergence | Differences |
 |---|---|
+| `BIN_LESS_EXCLUDED_FROM_BAGS` | 2 |
 | `CF_AFF_CONCORDANCE` | 2 |
 | `RANK2_IMAGE_REMOVED` | 5 |
 | `R_ROW_ERROR_ZEROES_SCORE` | 3 |
 | `UNIFIED_SPECIES_RULE` | 9 |
+
+## BIN_LESS_EXCLUDED_FROM_BAGS
+
+Round 7: a species-level record with no BIN assigned yet is deliberately excluded from BAGS grading entirely here (it cannot be judged on "single BIN, N specimens"), on the project owner's explicit instruction -- core.bags.calculate_bags_grades drops it before counting anything. R's calculate_bags_grade (R/utils/bags_grading.R) counts it regardless of BIN. This is a deliberate, requested divergence from R, not a bug -- round 6 of this port matched R on purpose here, before this request reversed it. A species can also disappear from Python's graded set entirely if none of its records have a BIN, which R would still grade.
+
+| Aspect | Key | Field | R | Python | Fixture case |
+|---|---|---|---|---|---|
+| bags | `Bagsus nobin` | presence | `True` | `False` |  |
+| bags | `Danaus plexippus` | specimen_count | `44` | `15` |  |
 
 ## CF_AFF_CONCORDANCE
 

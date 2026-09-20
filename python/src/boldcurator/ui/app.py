@@ -21,7 +21,10 @@ This module lays them out and wires the clicks.
 
 from __future__ import annotations
 
+import datetime as _dt
+import json
 import tempfile
+import threading
 from pathlib import Path
 
 import pandas as pd
@@ -30,6 +33,8 @@ from shiny import App, reactive, render, ui
 from ..config.constants import (
     CONTINENT_COUNTRIES,
     DEFAULT_SESSIONS_PATH,
+    DEFAULT_SNAPSHOT_DIR,
+    DEFAULT_SNAPSHOT_ZENODO_DOI,
     DOWNLOAD_LIMITS,
     FLAG_OPTIONS,
 )
@@ -40,10 +45,11 @@ from ..core.grouping import (
     SPECIES_GRADES,
 )
 from ..core.table import DEFAULT_PAGE_SIZE
-from ..data.snapshot import SnapshotStore
+from ..data.snapshot import SnapshotError, SnapshotStore
 from ..io import exports as export_io
 from ..io.annotations import merge_annotations
 from ..io.session import SessionStore
+from .setup import _pick_snapshot_file
 from .format import (
     BIN_LABELS,
     BOLD_ATTRIBUTION_SHORT,
@@ -65,6 +71,51 @@ from .format import (
 from .state import AppState, ResultTooLargeToAnalyse
 
 PAGE_SIZES = [25, 50, 100, 250, 500]
+
+
+# --------------------------------------------------------------------------
+# Snapshot file management (round 5, file handling items 1-3)
+# --------------------------------------------------------------------------
+#
+# "Which file, downloaded when, what BOLD package version" needs an honest
+# answer even for a file nobody downloaded through this app (a colleague's
+# copy, a shared drive) -- there is no reliable "download date" for that
+# case, so a small sidecar JSON records it accurately for anything this app
+# *does* fetch or copy in, and the file's own mtime is the best available
+# fallback for anything it didn't.
+
+
+def _provenance_path(snapshot_path: Path) -> Path:
+    return snapshot_path.with_suffix(snapshot_path.suffix + ".meta.json")
+
+
+def _write_provenance(snapshot_path: Path, *, source: str) -> None:
+    meta = {"downloaded_at": _dt.datetime.now().isoformat(timespec="seconds"),
+            "source": source}
+    _provenance_path(snapshot_path).write_text(json.dumps(meta), encoding="utf-8")
+
+
+def _read_provenance(snapshot_path: Path) -> dict:
+    meta_path = _provenance_path(snapshot_path)
+    if meta_path.exists():
+        try:
+            return json.loads(meta_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
+
+
+def _obtained_date(snapshot_path: Path) -> str:
+    recorded = _read_provenance(snapshot_path).get("downloaded_at")
+    if recorded:
+        return recorded
+    try:
+        mtime = snapshot_path.stat().st_mtime
+    except OSError:
+        return "unknown"
+    return (_dt.datetime.fromtimestamp(mtime).isoformat(timespec="seconds")
+            + " (file's own modified date -- not downloaded through this app)")
+
 
 def _all_columns_ordered(frame: pd.DataFrame) -> list[str]:
     """Every column ``frame`` carries, curated ones first -- nothing dropped.
@@ -134,18 +185,30 @@ def _annotation_controls(prefix: str) -> list:
     element and will otherwise take the full width and stack, turning a
     one-line toolbar into half a screen of form.
 
+    Round 6, curation tools item 6: no per-field label stacked above its own
+    input any more -- that was three different heights (a one-word "Flag"
+    label next to a much longer "Corrected identification" one) is exactly
+    what made the toolbar look uneven, on top of taking a second line
+    vertically it didn't need. A compact inline "Flag" tag replaces its
+    label (a `<select>`'s own options don't show a placeholder the way a
+    text input's greyed-out text can); the two text fields use `placeholder`
+    instead of `label` -- same information, without a label row of its own.
+
     "Apply to checked" acts on ``Annotations.working`` -- the disposable
     bulk-edit selection, not the representative pick. See ``io.annotations``'s
     module docstring.
     """
     return [
-        ui.div(ui.input_select(f"{prefix}_flag", "Flag",
-                               choices=sorted(FLAG_OPTIONS), width="180px"),
-               class_="mb-0"),
-        ui.div(ui.input_text(f"{prefix}_note", "Curator note", width="260px"),
-               class_="mb-0"),
-        ui.div(ui.input_text(f"{prefix}_updated_id", "Corrected identification",
-                             width="220px"), class_="mb-0"),
+        ui.div(
+            ui.tags.span("Flag", class_="small text-muted"),
+            ui.input_select(f"{prefix}_flag", None,
+                            choices=sorted(FLAG_OPTIONS), width="115px"),
+            style="display:flex;align-items:center;gap:6px;",
+        ),
+        ui.input_text(f"{prefix}_note", None, placeholder="Curator note",
+                     width="170px"),
+        ui.input_text(f"{prefix}_updated_id", None,
+                     placeholder="Corrected identification", width="150px"),
         ui.input_action_button(f"{prefix}_apply", "Apply to checked",
                                class_="btn-primary btn-sm"),
     ]
@@ -175,7 +238,7 @@ def _grade_panel(grade: str) -> ui.Tag:
             style=f"background:{colour};color:#fff;padding:8px 14px;"
                   "border-radius:5px;margin-bottom:10px;",
         ),
-        ui.output_ui(f"grade_{grade}_body"),
+        ui.div(ui.output_ui(f"grade_{grade}_body"), class_="bc-fill-output"),
         value=f"grade_{grade}",
     )
 
@@ -187,6 +250,110 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
     sessions_path = sessions_path or DEFAULT_SESSIONS_PATH
 
     app_ui = ui.page_fluid(
+        # Round 5, items 6/7/8/10: the page itself must never need its own
+        # vertical scrollbar -- only a table (".bc-scroll", see _table) does,
+        # and only when the window is too short for it. Without this, a
+        # table capped at a fixed viewport-relative height (the old
+        # "max-height:62vh") still left the *rest* of a screen's own chrome
+        # (toolbars, captions, a BAGS group's note) free to push the whole
+        # page past 100vh -- invisible with few rows, visible the moment
+        # anything nudges the total over, e.g. the "Showing N of M rows"
+        # note that only appears past 500 rows. Fixed with a real flex chain
+        # instead: ".bc-app-shell" pins the header/banner/nav row to exactly
+        # 100vh, ".bc-fill-output"/".bc-tab-body" carry that height down
+        # through Shiny's own output wrapper div into each screen's markup,
+        # and only the last child of ".bc-tab-body" (always the table, see
+        # each *_body function below) is allowed to grow and scroll -- every
+        # row above it (toolbars, captions) keeps its natural height.
+        # ".tab-pane.active" also gets its own overflow-y:auto as a fallback
+        # for the tabs with no table at all (Data, Search): if their content
+        # is ever taller than the window, that tab scrolls on its own rather
+        # than the whole page doing it.
+        ui.tags.style("""
+            html, body { height: 100%; margin: 0; }
+            body { overflow: hidden; }
+            .bc-app-shell {
+                height: 100vh; display: flex; flex-direction: column;
+                overflow: hidden;
+            }
+            .bc-app-shell > * { flex: none; }
+            .bc-nav-fill {
+                flex: 1 1 auto; min-height: 0;
+                display: flex; flex-direction: column;
+            }
+            .bc-nav-fill > .row {
+                flex: 1 1 auto; min-height: 0; flex-wrap: nowrap;
+                align-items: stretch;
+            }
+            .bc-nav-fill .row > .col-sm-2 { overflow-y: auto; }
+            .bc-nav-fill .row > .col-sm-10 {
+                display: flex; flex-direction: column; min-height: 0;
+            }
+            .bc-nav-fill .tab-content {
+                flex: 1 1 auto; min-height: 0; position: relative;
+            }
+            .bc-nav-fill .tab-pane.active {
+                display: flex !important; flex-direction: column;
+                height: 100%; min-height: 0; overflow-y: auto;
+                /* Round 7, search tab item 1: overflow-y:auto alone makes a
+                   browser compute overflow-x as auto too (the CSS spec's own
+                   visible/non-visible interaction rule), so Bootstrap's own
+                   row/column gutter (a .row is deliberately slightly wider
+                   than its parent via negative margins, self-cancelling
+                   against each .col's matching padding) showed up as a real
+                   horizontal scrollbar on the Search tab's form -- nothing
+                   was actually cut off by hiding it, only that unused gutter
+                   sliver. Only the table tabs (".bc-scroll", nested deeper)
+                   should ever scroll sideways. */
+                overflow-x: hidden;
+            }
+            /* A grade tab's own coloured banner (_grade_panel) sits above
+               ".bc-fill-output" in the same tab-pane -- keep its natural
+               height instead of letting flex shrink it. */
+            .bc-nav-fill .tab-pane.active > *:not(.bc-fill-output) {
+                flex: none;
+            }
+            .bc-fill-output, .bc-fill-output > .shiny-html-output {
+                flex: 1 1 auto; min-height: 0;
+                display: flex; flex-direction: column;
+            }
+            .bc-tab-body {
+                flex: 1 1 auto; min-height: 0; height: 100%;
+                display: flex; flex-direction: column;
+            }
+            .bc-tab-body > * { flex: none; }
+            .bc-tab-body > *:last-child {
+                flex: 1 1 auto; min-height: 0; overflow: auto;
+            }
+            /* Round 5, item 8: compact rows, not wrapped text -- a wide
+               table (item 9's full column set) scrolls horizontally instead
+               of every cell wrapping to several lines and inflating row
+               height. */
+            .bc-scroll td, .bc-scroll th {
+                white-space: nowrap; padding-top: 3px; padding-bottom: 3px;
+            }
+            /* Round 6, all tables item 1: one long value (a free-text notes
+               field, say) used to stretch its whole column -- and every row
+               with it -- to fit, however long. Capped per cell; a sticky
+               column's own inline width (STICKY_COLUMN_WIDTHS) already wins
+               over this, being more specific, so this only affects the
+               ordinary scrolling columns. The full value is still one hover
+               away via each cell's own `title` attribute (_table's default
+               cell renderer). */
+            .bc-scroll td {
+                max-width: 280px; overflow: hidden; text-overflow: ellipsis;
+            }
+            /* Round 5, item 12: a download click's own visible
+               acknowledgement -- see the click listener below. */
+            .bc-toast {
+                position: fixed; bottom: 20px; right: 20px; z-index: 2000;
+                background: #202020; color: #fff; padding: 10px 16px;
+                border-radius: 6px; font-size: 13px; opacity: 0;
+                transition: opacity 0.3s ease; pointer-events: none;
+                max-width: 320px; box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+            }
+        """),
+        ui.tags.div(id="bc-toast", class_="bc-toast"),
         # One delegated listener, attached to the page once. The specimen and
         # group tables are re-rendered as raw HTML on every click (paging,
         # sorting, "next problem"...), which replaces the checkboxes' own
@@ -211,6 +378,38 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 if (th) {{
                     Shiny.setInputValue(th.dataset.sortInput, th.dataset.sortCol,
                         {{priority: 'event'}});
+                }}
+                var del = e.target.closest && e.target.closest('.bc-del-snapshot');
+                if (del) {{
+                    Shiny.setInputValue('delete_snapshot_click', del.dataset.path,
+                        {{priority: 'event'}});
+                }}
+                // Round 5, item 12: a curator running the packaged desktop
+                // build in a chrome-less window (see desktop.py) has no
+                // visible browser UI at all -- no toolbar, no
+                // download-shelf/bubble a normal browser tab would show --
+                // so a real, successful download can look like nothing
+                // happened. This toast is that visible acknowledgement.
+                // (A native pywebview window's own downloads were actually
+                // broken until desktop._enable_webview_downloads -- see
+                // that function's docstring -- so this toast could fire on
+                // a click that pywebview then silently cancelled. Fixed
+                // there, not here; this only makes the click itself
+                // visible, whichever window mode is running.)
+                var dl = e.target.closest &&
+                    e.target.closest('a.shiny-download-link');
+                if (dl && !dl.classList.contains('disabled')) {{
+                    var toast = document.getElementById('bc-toast');
+                    if (toast) {{
+                        toast.textContent = 'Downloading -- check your '
+                            + "Downloads folder, or a save dialog if one "
+                            + "opens.";
+                        toast.style.opacity = '1';
+                        clearTimeout(toast._bcTimer);
+                        toast._bcTimer = setTimeout(function() {{
+                            toast.style.opacity = '0';
+                        }}, 4000);
+                    }}
                 }}
             }});
             // A table re-renders as one HTML string on every interaction
@@ -252,6 +451,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             }});
         """),
         ui.div(
+        ui.div(
             ui.tags.h4("BOLDcurator", style="margin:0;"),
             ui.tags.span(
                 f"{info.snapshot_id} · {info.row_count:,} records · "
@@ -270,9 +470,114 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                   "border-bottom:1px solid #dee2e6;margin-bottom:12px;",
         ),
         ui.output_ui("banner"),
+        ui.div(
         ui.navset_pill_list(
             ui.nav_panel(
-                "Data Input",
+                "Data",
+                # Round 6, data input items 2/3: the snapshot-file panel
+                # (round 5, file handling items 1-3) and the session
+                # save/load controls used to live at the top of the Search
+                # tab, where -- combined with the actual search form -- they
+                # pushed that tab past one page's worth of height. Its own
+                # tab now, ahead of Search, so every "which data am I
+                # working with" concern lives in one place. Reachable from
+                # the running app, not only the one-time first-run setup
+                # screen (ui/setup.py, unchanged and still what a curator
+                # sees before any snapshot is configured at all).
+                ui.tags.h5("Snapshot file", style="margin-top:0;"),
+                ui.output_ui("snapshot_panel"),
+                ui.div(
+                    ui.tags.strong("Download a snapshot", class_="small"),
+                    ui.div(
+                        ui.input_action_button(
+                            "snap_download_default",
+                            "Download the latest public BOLD snapshot",
+                            class_="btn-sm btn-primary"),
+                        style="margin:6px 0;",
+                    ),
+                    ui.tags.details(
+                        ui.tags.summary("Or provide your own source",
+                                       class_="small text-muted"),
+                        ui.div(
+                            ui.input_text(
+                                "snap_source", None, width="360px",
+                                placeholder="A direct URL, a manifest.json "
+                                           "URL, or a Zenodo record/DOI"),
+                            ui.input_action_button("snap_download",
+                                                   "Download",
+                                                   class_="btn-sm"),
+                            style="display:flex;gap:8px;align-items:center;"
+                                  "margin-top:6px;flex-wrap:wrap;",
+                        ),
+                    ),
+                    ui.tags.strong("Use an existing file instead",
+                                  class_="small",
+                                  style="display:block;margin-top:14px;"),
+                    ui.div(
+                        ui.input_text(
+                            "snap_path", None, width="360px",
+                            placeholder="/path/to/a/bold_snapshot.duckdb"),
+                        ui.input_action_button("snap_browse", "Browse…",
+                                               class_="btn-sm "
+                                                     "btn-outline-secondary"),
+                        ui.input_action_button(
+                            "snap_copy",
+                            "Copy into BOLDcurator's data folder",
+                            class_="btn-sm"),
+                        style="display:flex;gap:8px;align-items:center;"
+                              "flex-wrap:wrap;margin-top:4px;",
+                    ),
+                    ui.tags.span(
+                        "A download or copy lands in BOLDcurator's own "
+                        "data folder as a new file -- it does not "
+                        "replace the file this session is using. "
+                        "Restart BOLDcurator to switch to it.",
+                        class_="small text-muted",
+                        style="display:block;margin-top:6px;"),
+                    ui.output_ui("snapshot_mgmt_status"),
+                    style="margin-top:10px;padding:10px 14px;"
+                          "background:#f8f9fa;border:1px solid #dee2e6;"
+                          "border-radius:5px;max-width:900px;",
+                ),
+                ui.tags.h5("Session", style="margin-top:22px;"),
+                ui.div(
+                    ui.div(
+                        ui.input_text("session_name", None,
+                                      placeholder="Session name",
+                                      width="220px"),
+                        ui.input_action_button("save_session", "Save",
+                                               class_="btn-sm"),
+                        ui.input_select("load_session_id", None, choices={},
+                                        width="320px"),
+                        ui.input_action_button("load_session", "Load",
+                                               class_="btn-sm"),
+                        ui.input_action_button("delete_session", "Delete",
+                                               class_="btn-sm btn-outline-danger"),
+                        style="display:flex;gap:8px;align-items:center;"
+                              "flex-wrap:wrap;",
+                    ),
+                    ui.tags.span(
+                        "Auto-saves every minute, under the name above (or "
+                        "\"Auto-save\" if left blank).",
+                        class_="small text-muted", style="display:block;"
+                              "margin-top:6px;"),
+                    ui.output_ui("session_status"),
+                    ui.output_ui("session_location"),
+                    style="margin-top:6px;padding:10px 14px;"
+                          "background:#f8f9fa;border:1px solid #dee2e6;"
+                          "border-radius:5px;max-width:900px;",
+                ),
+                ui.div(
+                    BOLD_ATTRIBUTION_TEXT + " ",
+                    ui.tags.a("Full licence text.", href=CC_BY_SA_URL,
+                             target="_blank", rel="noopener noreferrer"),
+                    class_="small text-muted", style="margin-top:18px;"
+                          "max-width:900px;",
+                ),
+                value="data",
+            ),
+            ui.nav_panel(
+                "Search",
                 ui.row(
                     ui.column(5,
                         ui.input_text_area(
@@ -309,56 +614,27 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 ),
                 ui.output_ui("estimate_box"),
                 ui.output_ui("search_summary"),
-                ui.div(
-                    ui.tags.strong("Session", class_="small"),
-                    ui.div(
-                        ui.input_text("session_name", None,
-                                      placeholder="Session name",
-                                      width="220px"),
-                        ui.input_action_button("save_session", "Save",
-                                               class_="btn-sm"),
-                        ui.input_select("load_session_id", None, choices={},
-                                        width="320px"),
-                        ui.input_action_button("load_session", "Load",
-                                               class_="btn-sm"),
-                        ui.input_action_button("delete_session", "Delete",
-                                               class_="btn-sm btn-outline-danger"),
-                        style="display:flex;gap:8px;align-items:center;"
-                              "flex-wrap:wrap;margin-top:4px;",
-                    ),
-                    ui.div(
-                        ui.input_checkbox("autosave", "Auto-save every",
-                                          value=False),
-                        ui.input_numeric("autosave_interval", None, value=1,
-                                         min=1, max=60, width="70px"),
-                        ui.tags.span("minute(s), under the name above (or "
-                                     "\"Auto-save\" if blank)",
-                                     class_="small text-muted"),
-                        style="display:flex;gap:8px;align-items:center;"
-                              "flex-wrap:wrap;margin-top:6px;",
-                    ),
-                    ui.output_ui("session_status"),
-                    style="margin-top:16px;padding:10px 14px;"
-                          "background:#f8f9fa;border:1px solid #dee2e6;"
-                          "border-radius:5px;max-width:900px;",
-                ),
-                ui.div(
-                    BOLD_ATTRIBUTION_TEXT + " ",
-                    ui.tags.a("Full licence text.", href=CC_BY_SA_URL,
-                             target="_blank", rel="noopener noreferrer"),
-                    class_="small text-muted", style="margin-top:18px;"
-                          "max-width:900px;",
-                ),
                 value="input",
             ),
-            ui.nav_panel("Gap analysis", ui.output_ui("gap_body"), value="gap"),
-            ui.nav_panel("Species", ui.output_ui("species_body"), value="species"),
-            ui.nav_panel("BINs", ui.output_ui("bins_body"), value="bins"),
+            ui.nav_panel("Gap analysis",
+                        ui.div(ui.output_ui("gap_body"), class_="bc-fill-output"),
+                        value="gap"),
+            ui.nav_panel("Species",
+                        ui.div(ui.output_ui("species_body"), class_="bc-fill-output"),
+                        value="species"),
+            ui.nav_panel("BINs",
+                        ui.div(ui.output_ui("bins_body"), class_="bc-fill-output"),
+                        value="bins"),
             *[_grade_panel(g) for g in GRADES],
-            ui.nav_panel("Specimens", ui.output_ui("specimens_body"),
-                         value="specimens"),
+            ui.nav_panel("Specimens",
+                        ui.div(ui.output_ui("specimens_body"), class_="bc-fill-output"),
+                        value="specimens"),
             id="nav",
             widths=(2, 10),
+        ),
+        class_="bc-nav-fill",
+        ),
+        class_="bc-app-shell",
         ),
     )
 
@@ -389,6 +665,246 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
 
         def touch() -> None:
             revision.set(revision.get() + 1)
+
+        # -- snapshot file management (round 5, file handling 1-3) ---------
+        #
+        # A download or a copy lands as a *new* file, never overwriting the
+        # one this session already has an open (read-only) DuckDB handle on
+        # -- that handle stays valid for the life of this process regardless
+        # of what shows up alongside it. Picking up a new file needs a
+        # restart (a fresh `create_app(new_path)`/`SnapshotStore`), which
+        # this panel says plainly rather than pretending to hot-swap it.
+        snap_msg = reactive.Value("")
+        snap_dl_state = {"running": False, "message": ""}
+        #: Bumped only from a real Shiny reactive context (a click effect, or
+        #: ``_snap_poll`` below) -- never from the download/copy background
+        #: thread itself. ``reactive.Value.set()`` from an arbitrary OS
+        #: thread is unsafe (see ``ui/setup.py``'s own ``dl_state`` for the
+        #: same reasoning); the thread only ever touches ``snap_dl_state``,
+        #: a plain dict, and ``_snap_poll`` is what notices it changed.
+        snap_tick = reactive.Value(0)
+        #: Bumped only by a click that starts a download/copy -- wakes
+        #: ``_snap_poll`` up to start (re-)polling ``snap_dl_state``.
+        snap_op_seq = reactive.Value(0)
+        pending_delete = reactive.Value("")
+
+        @reactive.effect
+        def _snap_poll():
+            snap_op_seq.get()  # dependency: (re-)start polling on each click
+            if snap_dl_state["running"]:
+                reactive.invalidate_later(0.4)
+            with reactive.isolate():
+                snap_tick.set(snap_tick.get() + 1)
+
+        def _other_snapshot_files() -> list[Path]:
+            try:
+                files = sorted(DEFAULT_SNAPSHOT_DIR.glob("*.duckdb"))
+            except OSError:
+                return []
+            current = store.path.resolve()
+            return [f for f in files if f.resolve() != current]
+
+        @output
+        @render.ui
+        def snapshot_panel():
+            snap_tick.get()
+            rows = [
+                ui.div(ui.tags.strong("File in use: "), str(store.path),
+                      class_="small"),
+                ui.div(ui.tags.strong("BOLD package version: "),
+                      f"{info.snapshot_id} (built {info.built_at})",
+                      class_="small"),
+                ui.div(ui.tags.strong("Obtained: "), _obtained_date(store.path),
+                      class_="small"),
+            ]
+            others = _other_snapshot_files()
+            if others:
+                rows.append(ui.tags.strong(
+                    "Other snapshot files in BOLDcurator's data folder",
+                    class_="small", style="display:block;margin-top:10px;"))
+                for f in others:
+                    try:
+                        size_mb = f.stat().st_size / 1e6
+                    except OSError:
+                        size_mb = 0.0
+                    rows.append(ui.div(
+                        ui.tags.span(
+                            f"{f.name} -- {size_mb:,.0f} MB, obtained "
+                            f"{_obtained_date(f)}", class_="small"),
+                        ui.tags.button(
+                            "Delete", type="button",
+                            class_="btn btn-sm btn-outline-danger "
+                                  "bc-del-snapshot",
+                            data_path=str(f)),
+                        style="display:flex;gap:10px;align-items:center;"
+                              "margin-top:4px;",
+                    ))
+            return ui.div(*rows)
+
+        @reactive.effect
+        @reactive.event(input.delete_snapshot_click)
+        def _confirm_delete_snapshot():
+            path = input.delete_snapshot_click()
+            if not path:
+                return
+            pending_delete.set(path)
+            ui.modal_show(ui.modal(
+                f"Delete {path}? This cannot be undone.",
+                title="Delete snapshot file",
+                footer=ui.div(
+                    ui.input_action_button("cancel_delete_snapshot", "Cancel",
+                                           class_="btn-sm"),
+                    ui.input_action_button("confirm_delete_snapshot", "Delete",
+                                           class_="btn-sm btn-danger"),
+                ),
+                easy_close=True,
+            ))
+
+        @reactive.effect
+        @reactive.event(input.cancel_delete_snapshot)
+        def _cancel_delete_snapshot():
+            pending_delete.set("")
+            ui.modal_remove()
+
+        @reactive.effect
+        @reactive.event(input.confirm_delete_snapshot)
+        def _do_delete_snapshot():
+            target = Path(pending_delete.get())
+            pending_delete.set("")
+            ui.modal_remove()
+            try:
+                target.unlink(missing_ok=True)
+                _provenance_path(target).unlink(missing_ok=True)
+                snap_msg.set(f"Deleted {target}.")
+            except OSError as exc:
+                snap_msg.set(f"Could not delete {target}: {exc}")
+            snap_tick.set(snap_tick.get() + 1)
+
+        def _snap_run_download(resolve_source, out_path: Path) -> None:
+            from ..build import fetch_snapshot as fs
+
+            try:
+                source = resolve_source(fs)
+
+                def progress(text, end="\n"):
+                    snap_dl_state["message"] = text.strip("\r")
+
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                fs.download(source, out_path, progress=progress)
+                _write_provenance(out_path, source=source.url)
+                snap_dl_state["message"] = (
+                    f"Downloaded to {out_path}. Restart BOLDcurator to use it.")
+            except fs.FetchError as exc:
+                snap_dl_state["message"] = f"Failed: {exc}"
+            finally:
+                # Only the plain dict, from this background thread -- see
+                # ``_snap_poll`` above for why no reactive.Value is touched
+                # here.
+                snap_dl_state["running"] = False
+
+        def _snap_start_download(resolve_source) -> None:
+            if snap_dl_state["running"]:
+                return
+            out_path = (DEFAULT_SNAPSHOT_DIR
+                       / f"snapshot-{export_io.timestamp()}.duckdb")
+            snap_dl_state.update(running=True, message="Starting...")
+            threading.Thread(target=_snap_run_download,
+                             args=(resolve_source, out_path), daemon=True).start()
+            snap_op_seq.set(snap_op_seq.get() + 1)
+
+        @reactive.effect
+        @reactive.event(input.snap_download_default)
+        def _snap_download_default():
+            _snap_start_download(
+                lambda fs: fs.resolve_zenodo_record(DEFAULT_SNAPSHOT_ZENODO_DOI))
+
+        @reactive.effect
+        @reactive.event(input.snap_download)
+        def _snap_download_custom():
+            source_text = (input.snap_source() or "").strip()
+            if not source_text:
+                return
+
+            def resolve(fs):
+                looks_like_manifest = (
+                    source_text.startswith(("http://", "https://"))
+                    and source_text.rstrip("/").endswith(".json"))
+                if looks_like_manifest:
+                    return fs.resolve_manifest(source_text)
+                if source_text.startswith(("http://", "https://")):
+                    return fs.Source(url=source_text)
+                return fs.resolve_zenodo_record(source_text)
+
+            _snap_start_download(resolve)
+
+        @reactive.effect
+        @reactive.event(input.snap_browse)
+        def _snap_browse():
+            chosen = _pick_snapshot_file()
+            if chosen:
+                ui.update_text("snap_path", value=chosen)
+            else:
+                snap_msg.set("No file chosen -- type the path above instead "
+                             "if Browse… didn't work.")
+
+        def _snap_run_copy(src: Path, out_path: Path) -> None:
+            try:
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                tmp = out_path.with_suffix(out_path.suffix + ".part")
+                total = src.stat().st_size
+                written = 0
+                with open(src, "rb") as fin, open(tmp, "wb") as fout:
+                    while chunk := fin.read(1 << 20):
+                        fout.write(chunk)
+                        written += len(chunk)
+                        pct = written / total if total else 0
+                        snap_dl_state["message"] = (
+                            f"Copying... {pct:.0%} "
+                            f"({written / 1e6:.0f} / {total / 1e6:.0f} MB)")
+                tmp.replace(out_path)
+                _write_provenance(out_path, source=str(src))
+                snap_dl_state["message"] = (
+                    f"Copied to {out_path}. Restart BOLDcurator to use it.")
+            except OSError as exc:
+                snap_dl_state["message"] = f"Copy failed: {exc}"
+            finally:
+                # Plain dict only -- see _snap_run_download above.
+                snap_dl_state["running"] = False
+
+        @reactive.effect
+        @reactive.event(input.snap_copy)
+        def _snap_copy():
+            if snap_dl_state["running"]:
+                return
+            candidate = Path((input.snap_path() or "").strip()).expanduser()
+            if not candidate.exists():
+                snap_msg.set(f"No file at {candidate}.")
+                return
+            if candidate.resolve().parent == DEFAULT_SNAPSHOT_DIR.resolve():
+                snap_msg.set(f"{candidate} is already in BOLDcurator's data "
+                             "folder.")
+                return
+            try:
+                with SnapshotStore(candidate) as candidate_store:
+                    candidate_store.info()
+            except SnapshotError as exc:
+                snap_msg.set(f"Not a valid snapshot: {exc}")
+                return
+            out_path = (DEFAULT_SNAPSHOT_DIR
+                       / f"snapshot-{export_io.timestamp()}.duckdb")
+            snap_dl_state.update(running=True, message="Starting...")
+            threading.Thread(target=_snap_run_copy,
+                             args=(candidate, out_path), daemon=True).start()
+            snap_op_seq.set(snap_op_seq.get() + 1)
+
+        @output
+        @render.ui
+        def snapshot_mgmt_status():
+            snap_tick.get()
+            if snap_dl_state["running"]:
+                reactive.invalidate_later(0.5)
+            text = snap_dl_state["message"] or snap_msg.get()
+            return ui.div(text, class_="small mt-2") if text else ui.div()
 
         def _register_memory_sort(input_id: str, sort_state: reactive.Value):
             """Click a header: same column flips direction, a new one sorts
@@ -512,23 +1028,16 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
 
         @reactive.effect
         def _autosave_tick():
-            """Runs once at startup (autosave off, nothing to do) and then
+            """Every minute, unconditionally -- round 5, item 4: auto-save is
 
-            once per interval for as long as the checkbox stays on --
-            `reactive.invalidate_later` has to be called on every run to keep
-            rescheduling itself, including the run that finds the checkbox
-            off, or it would never check again once turned off and back on.
-            `autosave_interval`/`session_name` are read isolated: changing
-            the interval or typing a name should not itself trigger a save,
-            only the timer firing or the checkbox being ticked should.
+            always on, fixed at one minute, with no checkbox or interval to
+            turn it off or change (previously an opt-in checkbox with a
+            configurable interval). `reactive.invalidate_later` has to be
+            called on every run to keep rescheduling itself.
+            `session_name` is read isolated: typing a name should not itself
+            trigger a save, only the timer firing should.
             """
-            enabled = input.autosave()
-            with reactive.isolate():
-                minutes = max(1, int(input.autosave_interval() or 1))
-            if enabled:
-                reactive.invalidate_later(minutes * 60)
-            else:
-                return
+            reactive.invalidate_later(60)
             with reactive.isolate():
                 name = (input.session_name() or "").strip()
             _do_save(name, default_name="Auto-save", quiet_on_no_search=True)
@@ -563,6 +1072,26 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         def session_status():
             text = session_msg.get()
             return ui.div(text, class_="small text-muted mt-1") if text else ui.div()
+
+        @output
+        @render.ui
+        def session_location():
+            """Round 5, item 5: a curator asked where sessions are saved and
+
+            what would lose them -- put the real answer on screen instead of
+            leaving it to be asked again. Sessions live in one SQLite file
+            (`io.session.SessionStore`); they are lost only by deleting that
+            file, deleting the session with the Delete button above, or (for
+            a specific session) resuming it against a different snapshot's
+            worth of retracted records -- never by closing the app or the
+            browser tab.
+            """
+            return ui.div(
+                f"Sessions are stored in {sessions_path} -- deleting that "
+                "file (or the Delete button above) is the only way to lose "
+                "them; closing the app does not.",
+                class_="small text-muted mt-1",
+            )
 
         @output
         @render.ui
@@ -686,8 +1215,20 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                         style="display:flex;gap:10px;margin:10px 0 12px;"
                               "flex-wrap:wrap;",
                     ),
+                    # Round 5, item 11: the same workbook the Species tab
+                    # downloads (it already carries a Gap analysis sheet
+                    # alongside the checklist) -- reachable from here too, so
+                    # a curator working this tab doesn't have to switch tabs
+                    # for it. A second output id, not a second element bound
+                    # to "dl_species_analysis" -- two DOM elements sharing one
+                    # Shiny output id is unreliable (duplicate HTML ids), so
+                    # this gets its own id wired to the same export below.
+                    ui.download_button("dl_gap_analysis",
+                                       "Download species analysis (xlsx)",
+                                       class_="btn-sm mb-2"),
                     ui.HTML(_gap_html(_sorted_by(gaps, gap_sort),
                                       sort_state=gap_sort.get())),
+                    class_="bc-tab-body",
                 )
             return _needs_analysis(body)
 
@@ -718,6 +1259,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                                        "Download species analysis (xlsx)",
                                        class_="btn-sm mb-2"),
                     ui.HTML(_checklist_html(checklist, sort_state=checklist_sort.get())),
+                    class_="bc-tab-body",
                 )
             return _needs_analysis(body)
 
@@ -750,6 +1292,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                                        "Download BIN analysis (xlsx)",
                                        class_="btn-sm mb-2"),
                     ui.HTML(_bins_html(content, sort_state=bins_sort.get())),
+                    class_="bc-tab-body",
                 )
             return _needs_analysis(body)
 
@@ -792,11 +1335,19 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                         ui.tags.span(f"{len(groups):,} "
                                      f"{unit if len(groups) == 1 else plural_unit} "
                                      "to work through", class_="small text-muted"),
-                        ui.input_select(
-                            f"group_{grade}", None,
-                            choices={str(i): f"{g.caption}  ({g.specimen_count})"
-                                     for i, g in enumerate(groups)},
-                            selected=str(index), width="420px"),
+                        # Round 7, BAGS A/B/D item 1: a fixed 420px cut off a
+                        # long caption ("Species: X (>10 specimens, single
+                        # BIN)  (404)") -- flexible instead of another fixed
+                        # guess, so it actually uses the room a wide window
+                        # has rather than truncating regardless of it.
+                        ui.div(
+                            ui.input_select(
+                                f"group_{grade}", None,
+                                choices={str(i): f"{g.caption}  ({g.specimen_count})"
+                                         for i, g in enumerate(groups)},
+                                selected=str(index), width="100%"),
+                            style="flex:1 1 auto;min-width:280px;max-width:720px;",
+                        ),
                         ui.input_action_button(f"prev_{grade}", "‹ Previous",
                                                class_="btn-sm"),
                         ui.tags.span(f"{index + 1} of {len(groups):,}",
@@ -812,30 +1363,41 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                            class_="mb-1"),
                     ui.div(group.note, class_="alert alert-info py-1 px-2 small")
                     if group.note else ui.div(),
+                    # Round 6, curation tools item 6: one flat row, not a
+                    # column of buttons/count beside a separately-aligned
+                    # cluster of labelled inputs -- that mix of a
+                    # flex-direction:column block and align-items:end is
+                    # what made the whole toolbar look uneven and taller
+                    # than it needed to be.
                     ui.div(
-                        ui.div(
-                            ui.input_action_button(
-                                f"selall_{grade}", "Check this group",
-                                class_="btn-sm"),
-                            ui.input_action_button(f"clear_{grade}",
-                                                   "Clear checked",
-                                                   class_="btn-sm"),
-                            ui.div(f"{len(checked_here):,} checked here"
-                                   + (f" ({len(state.annotations.working):,} "
-                                      "checked in total)"
-                                      if len(state.annotations.working)
-                                      > len(checked_here) else ""),
-                                   class_="small text-muted pt-1"),
-                            style="display:flex;flex-direction:column;gap:4px;",
-                        ),
+                        ui.input_action_button(
+                            f"selall_{grade}", "Check this group",
+                            class_="btn-sm"),
+                        ui.input_action_button(f"clear_{grade}",
+                                               "Clear checked",
+                                               class_="btn-sm"),
+                        ui.tags.span(
+                            f"{len(checked_here):,} checked here"
+                            + (f" ({len(state.annotations.working):,} "
+                               "checked in total)"
+                               if len(state.annotations.working)
+                               > len(checked_here) else ""),
+                            class_="small text-muted"),
                         *_annotation_controls(f"g{grade}"),
-                        style="display:flex;align-items:end;gap:10px;"
+                        style="display:flex;align-items:center;gap:8px;"
                               "flex-wrap:wrap;margin-bottom:10px;padding:8px;"
                               "background:#f8f9fa;border:1px solid #dee2e6;"
                               "border-radius:5px;",
                     ),
-                    ui.HTML(_group_html(rows, sort_input="group_sort_click",
+                    # Round 5, item 9: every column, like the Specimens tab --
+                    # a curated subset (the old default) hid raw BOLD columns
+                    # a curator might need mid-problem. `_table`'s own
+                    # horizontal scroll (inherited by `_group_html`) is what
+                    # makes that many columns usable.
+                    ui.HTML(_group_html(rows, _all_columns_ordered(rows),
+                                        sort_input="group_sort_click",
                                         sort_state=group_sort.get())),
+                    class_="bc-tab-body",
                 )
             return _needs_analysis(body)
 
@@ -999,20 +1561,19 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     style="display:flex;align-items:center;gap:10px;"
                           "flex-wrap:wrap;margin-bottom:8px;",
                 ),
+                # Round 6, curation tools item 6: one flat row -- see the
+                # matching change in _grade_body for why.
                 ui.div(
-                    ui.div(
-                        ui.input_action_button("select_page", "Check page",
-                                               class_="btn-sm"),
-                        ui.input_action_button("select_all", "Check all",
-                                               class_="btn-sm"),
-                        ui.input_action_button("clear_selection", "Clear checked",
-                                               class_="btn-sm"),
-                        ui.div(f"{len(state.annotations.working):,} checked",
-                               class_="small text-muted pt-1"),
-                        style="display:flex;flex-direction:column;gap:4px;",
-                    ),
+                    ui.input_action_button("select_page", "Check page",
+                                           class_="btn-sm"),
+                    ui.input_action_button("select_all", "Check all",
+                                           class_="btn-sm"),
+                    ui.input_action_button("clear_selection", "Clear checked",
+                                           class_="btn-sm"),
+                    ui.tags.span(f"{len(state.annotations.working):,} checked",
+                                class_="small text-muted"),
                     *_annotation_controls("sp"),
-                    style="display:flex;align-items:end;gap:10px;flex-wrap:wrap;"
+                    style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;"
                           "margin-bottom:10px;padding:8px;background:#f8f9fa;"
                           "border:1px solid #dee2e6;border-radius:5px;",
                 ),
@@ -1028,13 +1589,20 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     ui.download_button("dl_fasta", "Download FASTA", class_="btn-sm"),
                     ui.download_button("dl_selected_fasta", "Download Selected FASTA",
                                        class_="btn-sm"),
-                    style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;",
+                    style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:2px;",
                 ),
+                ui.tags.span(
+                    "Downloads save to your computer's usual Downloads "
+                    "folder (a native app window may instead show a save "
+                    "dialog, defaulting to Downloads too).",
+                    class_="small text-muted",
+                    style="display:block;margin-bottom:10px;"),
                 ui.HTML(_group_html(
                     rows, columns=_all_columns_ordered(rows), limit=len(rows),
                     sort_input="spec_sort_click",
                     sortable=frozenset(table.sortable_columns),
                     sort_state=(table.sort_column, table.sort_descending))),
+                class_="bc-tab-body",
             )
 
         @reactive.effect
@@ -1178,7 +1746,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         # -- downloads -------------------------------------------------------
         #
         # The six specimen-handling buttons above, plus the search-results CSV
-        # (Data Input) and the BIN-analysis workbook (BINs) below. All eight
+        # (Search) and the BIN-analysis workbook (BINs) below. All eight
         # write through `io.exports`, the same code the CLI and the parity
         # harness already exercise, so a download and `boldcurator export`
         # agree by construction rather than by two implementations staying in
@@ -1292,12 +1860,11 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 return
             yield from _stream_file(written, tmpdir)
 
-        @output(id="dl_species_analysis")
-        @render.download_button(
-            filename=lambda: f"species_analysis_{export_io.timestamp()}.xlsx",
-            media_type="application/vnd.openxmlformats-officedocument"
-                       ".spreadsheetml.sheet")
-        def _dl_species_analysis():
+        def _species_analysis_download():
+            """The Summary/Species checklist/Gap analysis workbook -- shared by
+            the Species tab's own download button and the Gap analysis tab's
+            (round 5, item 11), which offer the same export under two output
+            ids rather than one element duplicated in the DOM."""
             search = state.search
             if search is None:
                 yield from _empty_download("run a search first")
@@ -1310,6 +1877,18 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 yield from _empty_download("no species in this result")
                 return
             yield from _stream_file(written, tmpdir)
+
+        def _register_species_analysis_download(output_id: str):
+            @output(id=output_id)
+            @render.download_button(
+                filename=lambda: f"species_analysis_{export_io.timestamp()}.xlsx",
+                media_type="application/vnd.openxmlformats-officedocument"
+                           ".spreadsheetml.sheet")
+            def _handler():
+                yield from _species_analysis_download()
+
+        _register_species_analysis_download("dl_species_analysis")
+        _register_species_analysis_download("dl_gap_analysis")
 
     return App(app_ui, server)
 
@@ -1343,6 +1922,15 @@ def _is_missing(value: object) -> bool:
 def _escape(value: object) -> str:
     text = "" if _is_missing(value) else str(value)
     return (text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+
+def _escape_attr(value: object) -> str:
+    """``_escape``, plus the one character that matters inside a
+    single-quoted HTML attribute but not in text content: a free-text value
+    (a curator note, a collector's name) landing in a ``title='...'``
+    (round 6, all tables item 1) can easily contain an apostrophe, which
+    would otherwise close the attribute early."""
+    return _escape(value).replace("'", "&#39;")
 
 
 #: The class a clickable column header carries, so the one delegated
@@ -1454,21 +2042,41 @@ def _table(frame: pd.DataFrame, labels: dict[str, str] | None = None,
             # ``row`` too, not just the cell's own value -- a checkbox needs
             # the record's processid, which lives in a different column.
             rendered = cell(column, row[column], row) if cell else None
-            rendered = rendered if rendered is not None \
-                else f"<td>{_escape(row[column])}</td>"
-            if column in offsets and rendered.startswith("<td>"):
+            if rendered is None:
+                text = _escape(row[column])
+                # Round 6, all tables item 1: a title attribute is the
+                # hover-to-read-the-rest for a value the new max-width CSS
+                # now truncates -- only worth adding when there is
+                # something to truncate.
+                rendered = (f"<td title='{_escape_attr(row[column])}'>{text}</td>"
+                           if text else f"<td>{text}</td>")
+            if column in offsets and rendered.startswith("<td"):
+                # Not just the bare "<td>" case any more -- the default
+                # renderer above can now also emit "<td title='...'>" (round
+                # 6, all tables item 1), so this inserts the sticky style
+                # right after "<td" generically rather than assuming nothing
+                # else is already there.
                 style = _sticky_style(*offsets[column])
-                rendered = f"<td style='{style}'>" + rendered[len('<td>'):]
+                rendered = f"<td style='{style}'" + rendered[len('<td'):]
             cells.append(rendered)
         body.append("<tr>" + "".join(cells) + "</tr>")
     more = ("" if len(frame) <= limit else
-            f"<p class='text-muted small'>Showing {limit:,} of {len(frame):,} rows.</p>")
+            f"<p class='text-muted small mb-0 mt-1'>Showing {limit:,} of "
+            f"{len(frame):,} rows.</p>")
+    # A single top-level element, not two siblings (the table div and a
+    # trailing <p>) -- round 5, items 7/10: the page-level CSS makes *this*
+    # element (".bc-scroll") the one that flexes to fill whatever space its
+    # container has and scrolls internally (see the ".bc-tab-body" rules in
+    # create_app's stylesheet), which only works if it is truly the last DOM
+    # child of that container. The "Showing N of M" note lives inside it, not
+    # after it, so it is part of the scrolling content instead of extra
+    # height tacked on past the fill area.
     return (
-        f"<div class='{SCROLL_CLASS}' style='max-height:62vh;overflow:auto;'>"
+        f"<div class='{SCROLL_CLASS}' style='overflow:auto;height:100%;'>"
         "<table class='table table-sm table-hover' style='font-size:13px;"
         "border-collapse:separate;'>"
         f"<thead><tr>{head}</tr></thead>"
-        f"<tbody>{''.join(body)}</tbody></table></div>{more}"
+        f"<tbody>{''.join(body)}</tbody></table>{more}</div>"
     )
 
 

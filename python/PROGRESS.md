@@ -44,25 +44,729 @@ project owner installed it and confirmed the app launches in its own
 browser-app window, "looks like a regular app." That same real-world test
 surfaced **round 4** (7 issues) -- now also closed, see below.
 
+**Update, current as of round 6: six rounds of curator feedback are now
+closed** (round 5's 12 issues and round 6's 6 issues, on top of the four
+above), **installers exist for all three operating systems** (per the
+project owner -- Windows' own Inno Setup installer is this session's own
+work and confirmed on a real machine; the macOS/Linux installers were not
+built or verified by this session, so treat `packaging/` as unfamiliar if
+one of them needs a change), and **328 tests pass**. The two headline fixes
+from round 6: a real BAGS grading bug (a species could show fewer records
+in its own group table than the count that graded it -- `core/grouping.py`
+required a BIN for group membership, which neither R nor this port's own
+grading count ever required) and a from-source-reading fix for native
+Windows downloads losing their file extension (pywebview's own Save As
+dialog has no `DefaultExt`) that **still needs confirming on a real
+Windows/WebView2 machine** -- see "NEXT SESSION" immediately below. Round
+6 also moved the snapshot-file/session panels off the search tab onto
+their own new "Data" tab (renamed the old "Data Input" tab to "Search"),
+capped every table's column width, and flattened the Specimens/BAGS
+curation toolbar to one row. Full details, as always, under each round's
+own "Open issues" section below.
+
+## Open issues from curator feedback, round 7 -- all 5 items addressed
+
+Reported after round 6 shipped. Three concrete bugs (fixing one at a time,
+one commit per item, verified with the existing test suite and a live
+`tools/drive_ui.py` run before moving to the next) plus two larger asks
+that don't fit that shape -- a new GitHub Pages website, and a repo
+structure discussion -- tracked here too, with their own write-ups further
+down once addressed rather than squeezed into this list's format.
+
+**Search tab**
+- [x] 1. The page still has a horizontal scrollbar, and shouldn't. Possibly
+  bring the dataset-codes and project-codes boxes inward, closer to the
+  rest, to fit better. Root cause was CSS, not the column layout the
+  curator's own suggested fix targeted: `.tab-pane.active` (round 5's own
+  layout fix) set `overflow-y: auto` but never `overflow-x`, and the CSS
+  spec's own visible/non-visible interaction rule computes an unset
+  `overflow-x` as `auto` too whenever the other axis isn't `visible` --
+  so Bootstrap's own row/column gutter (a `.row` is deliberately slightly
+  wider than its parent via negative margins, self-cancelling against
+  each `.col`'s matching padding -- completely normal, invisible in
+  ordinary Bootstrap usage) showed up as a real, visible horizontal
+  scrollbar. Fixed with one line: `overflow-x: hidden` alongside the
+  existing `overflow-y: auto`. Nothing was actually cut off by hiding it
+  (confirmed: `document.documentElement.scrollWidth === window.innerWidth`
+  on the Search tab after the fix) -- only an unused gutter sliver -- so
+  the column layout itself (5/4/3) was left alone. Doesn't touch the
+  table tabs' own intentional horizontal scroll (`.bc-scroll`, nested
+  deeper, unaffected by a `.tab-pane`-level rule).
+
+**BAGS A, B, D tabs**
+- [x] 1. The species-selection dropdown truncates its own text (a fixed
+  420px cuts off the specimen count in parentheses) -- there is room to
+  widen it. Fixed -- the fixed `width="420px"` on the `<select>` itself
+  is now `width="100%"` inside a flexible wrapper
+  (`flex:1 1 auto;min-width:280px;max-width:720px;`) in the row it
+  shares with the "N species to work through" text and the
+  Previous/Next buttons, so it actually grows to use the room a wide
+  window has rather than truncating regardless of it. Verified live: the
+  full caption ("Species: Vanessa atalanta (>10 specimens, single BIN)
+  (400)") renders with nothing cut off at 1400px.
+
+**BAGS analysis**
+- [x] 1. Only records with a BIN assignment should count toward a BAGS
+  grade -- make sure a BIN-less record is excluded from grading
+  calculations. The records themselves should still appear in the
+  specimen table; only their absence from every BAGS table changes. This
+  is a deliberate reversal of round 6's own fix, on the project owner's
+  explicit instruction, not a regression of it: round 6 found that
+  `core.bags.calculate_bags_grades`'s `specimen_count` counted every
+  species-level record **regardless of BIN**, matching the original R
+  app (`R/utils/bags_grading.R`'s `calculate_bags_grade`) faithfully, and
+  made the group-table display agree with that count by also including
+  BIN-less records there. This request says R's own behaviour is wrong
+  for this app's purposes -- a record with no BIN yet cannot be judged on
+  "single BIN, N specimens" at all, so round 7 excludes it from **both**
+  sides again, just in the opposite direction: `calculate_bags_grades`
+  now drops a species-level record with no `bin_uri` before counting
+  anything (`core/bags.py`), and `specimens_for_grade`
+  (`core/grouping.py`) once again requires a BIN for a record to be a
+  "core" member of its species' group, so the two stay in agreement. A
+  species with *no* BIN-assigned records at all now gets no grade at all
+  (absent from the grades table, not defaulted to D or E) rather than one
+  computed from nothing it can actually be judged on.
+
+  Both modules' docstrings updated to record this as a deliberate,
+  requested divergence from R (not a parity target for this one
+  behaviour any more), so a future session doesn't "fix" it back.
+  `tests/test_bags.py`/`test_grouping.py` updated: the old test asserting
+  R's counting behaviour now asserts the opposite (9 BIN-assigned + 2
+  BIN-less specimens grades B on 9, not A on 11, and shows only the 9);
+  a new test covers a species with zero BIN-assigned records getting no
+  grade and appearing in no grade's groups.
+
+  The parity harness (which compares this port against a committed R
+  reference fixture, and legitimately now diverges from it by design)
+  needed a new explanation category rather than silently failing:
+  `BIN_LESS_EXCLUDED_FROM_BAGS` in `parity/compare.py`'s `EXPLANATIONS`
+  registry, recognised generically from the fixture itself (which species
+  carry a species-level, BIN-less record) since this sandbox has no R
+  installed and cannot regenerate the committed reference CSVs to add a
+  dedicated fixture case the usual way. `parity/REPORT.md` (auto-generated
+  by `compare.py`) picked up the new category on the next run.
+
+  Full suite green (329 tests, +1) including the parity gate; live
+  verification relied on the new unit/parity tests rather than a
+  hand-built fixture with BIN-less records through the running UI, since
+  `tests/make_fake_package.py`'s synthetic data doesn't currently produce
+  any.
+
+**Repo structure -- decided with the project owner before building anything**
+
+Three questions, all answered with the recommended (lowest-risk) option:
+1. Keep the R app's files at the repo root as they are (not moved into a
+   mirroring `r/` subfolder) -- avoids touching any path the live
+   shinyapps.io/rsconnect deployment, `.Rprofile`, renv or
+   `BOLDcurator.Rproj` currently relies on. "Isolated" already holds in
+   practice (R and Python share no files); `python/` is simply the newer
+   addition, staying where it already is.
+2. Python's desktop-release tag pattern (`v*`, `.github/workflows/python-release.yml`)
+   stays Python-only -- R deploys continuously to shinyapps.io and has no
+   tag-triggered release of its own to collide with. Revisit only if that
+   changes.
+3. The existing manual-only, throwaway `spike-pages.yml` (an unrelated
+   shinylive experiment) is left alone -- it only runs if someone
+   deliberately triggers it, so it coexists safely with the new website
+   workflow below (a GitHub Pages site is "whichever workflow last
+   deployed to it").
+
+Both READMEs updated to match: the root `README.md` now names both apps
+and links to `python/` and the new website; `python/README.md`'s "moves to
+its own repository once stable" line (no longer true) and its badly stale
+"Status" paragraph (still describing Phase 3 as just-started) are both
+corrected.
+
+- [x] Whether to move `python/` to a fresh repository (the original plan)
+  or keep the R and Python apps together in this one repo, tidied so each
+  stays isolated but releases (including built installers) for both can
+  be automated and kept in sync. **Decided: keep together**, per the three
+  points above.
+
+**Website (new feature) -- built**
+
+A static site (no build step, no framework) at `website/`, deployed to
+GitHub Pages by a new `.github/workflows/website-pages.yml` (mirrors the
+Actions-based deploy pattern `spike-pages.yml` already established in this
+repo, just simpler -- no build, straight `upload-pages-artifact` of the
+`website/` folder) on every push to `main` touching `website/`, or on
+demand via `workflow_dispatch`. Expected to land at
+`https://bge-barcoding.github.io/BOLDcuratoR/` once Pages' source is set to
+"GitHub Actions" in the repo's own Settings -- **not something this
+session could confirm or set itself** (no repo-admin access from here);
+first push of this workflow is what to check.
+
+- [x] A GitHub Pages site for curators: find the right install package for
+  their OS, brief setup/use instructions, room for a future screen
+  recording, and an FAQ section. One page (`website/index.html` +
+  `styles.css`, no JS framework, ~120 lines of vanilla JS total for
+  OS-detection and nothing else):
+  - **Download**: four cards (Windows/macOS Apple Silicon/macOS Intel/Linux),
+    each linking straight to
+    `https://github.com/bge-barcoding/BOLDcuratoR/releases/latest/download/<asset>`
+    -- GitHub's own "always the latest release's asset with this exact
+    name" URL, so the links never go stale after a new release **as long
+    as each asset's filename never changes**. Client-side OS detection
+    (`navigator.userAgent`/`platform`, best-effort, wrapped in try/catch
+    so a detection failure never breaks the page) highlights the matching
+    card and re-points the hero's own "Download for your computer" button
+    at it; verified live under a Linux user agent, correctly highlighted
+    the Linux card.
+  - One packaging change needed to make that stable-link scheme actually
+    work: the Windows installer's own output filename embedded the
+    version (`BOLDcuratorSetup-{version}-x64.exe`), which would have broken
+    the stable link on every release. `packaging/windows-installer.iss`'s
+    `OutputBaseFilename` is now the fixed `BOLDcuratorSetup-x64` -- the
+    version itself is unaffected, still recorded in `AppVersion` (shown in
+    the installer's own wizard and in Add/Remove Programs), only the
+    filename on disk drops it. The three zip assets
+    (`python-release.yml`'s own `matrix.name`) were already unversioned,
+    so only this one file needed the change.
+  - **Setup**: five numbered steps (download → get a snapshot → search →
+    curate → export) plus a bordered placeholder box for a future screen
+    recording, as asked -- deliberately not filled in with anything, since
+    there is no recording yet.
+  - **FAQ**: a pure CSS/HTML `<details>` accordion (no JS needed for it to
+    work), with real questions sourced from this project's own actual
+    history rather than invented ones -- offline/no API key; the
+    unsigned-build SmartScreen/Gatekeeper warning every curator on
+    Windows/macOS will hit on first run (round 5/6/7's own signing
+    decision, explained plainly rather than left to alarm someone); where
+    downloads land (round 5, item 12 / round 6, item 1's own fixes);
+    where the snapshot lives and how to update it (round 5's snapshot
+    panel); where sessions are stored and what would lose one (round 5,
+    item 5); a pointer to the original R Shiny app
+    (`https://benprice.shinyapps.io/BOLDcuratoR/`, from this repo's own
+    `rsconnect/shinyapps.io/benprice/BOLDcuratoR.dcf`) for anyone who
+    wants a no-install, always-online alternative; and where to file a
+    bug.
+  - Two real screenshots of the actual running Python desktop app
+    (Species and BAGS Grade C, via `tools/drive_ui.py`-style Playwright
+    against the same fixture snapshot used throughout this session's own
+    testing) -- **not** the old R app's screenshots already sitting in
+    `python/docs/` (`species_summary_tab.png` etc.), which show a
+    completely different UI (API key entry, BOLD API fields) that would
+    have been actively misleading attached to the offline Python app.
+  - Verified live (headless Chromium via Playwright, served locally with
+    `python3 -m http.server`): zero JS console errors; the FAQ accordion
+    opens/closes; the OS-detection highlight and hero-button re-pointing
+    both work; zero horizontal overflow at both a 1280px desktop width and
+    a 390px mobile width.
+
+## Open issues from curator feedback, round 6 -- all six resolved
+
+Reported after round 5 shipped, including an immediate follow-up on round
+5's own download-visibility fix (see "downloads item 1" below). Installers
+now exist for all three operating systems, so that item from earlier
+rounds' open-work lists is done and no longer tracked separately. Fixing
+one at a time, one commit per item, verified with the existing test suite
+and a live `tools/drive_ui.py` run before moving to the next.
+
+**Downloads**
+- [x] 1. Downloads work now (round 5, item 12's fix), but every one lands
+  with no file extension (`.xlsx`/`.tsv`/`.fasta`/`.csv` all affected
+  alike) -- curator is running the native window (only `boldcurator.exe` in
+  Task Manager, no separate browser process). All four extensions affected
+  alike rules out a MIME-type problem (`.tsv`/`.csv`/`.xlsx` are all
+  correctly recognised by Python's own `mimetypes`; only `.fasta` isn't,
+  yet it loses its extension too) -- and Shiny's own `Content-Disposition`
+  header already carries the right filename in every case (confirmed: a
+  real Chromium download via Playwright gets the extension right against
+  the exact same server). Points at pywebview's own Windows glue code, not
+  this app's server side.
+
+  Read pywebview 6.2.1's actual source (`pip download --no-deps
+  --no-binary :none:` -- its wheel doesn't *build* in this sandbox, but
+  reading it doesn't need a build) to find it:
+  `EdgeChrome.on_download_starting` (`platforms/edgechromium.py`) opens a
+  `SaveFileDialog` with `Filter = "All files (*.*)|*.*"` and no
+  `DefaultExt` -- a well-documented WinForms footgun on its own regardless
+  of exactly how/where the extension gets dropped along the way (the
+  dialog's own filename box, or something else the OS does with a
+  wildcard-only filter and no default to fall back on): with `DefaultExt`
+  unset, there's nothing for the dialog to re-apply if it's lost, and with
+  only `*.*`, there's no concrete extension tied to a "save as type"
+  choice either.
+
+  Fixed in `desktop.py`: `_patch_edgechromium_download_extension`
+  monkeypatches `EdgeChrome.on_download_starting` with a reimplementation
+  that builds the filter from the file's own real extension (offering "All
+  files" second) and sets `DefaultExt`/`AddExtension` explicitly -- the
+  standard fix for this exact WinForms symptom. Windows-only (checks
+  `sys.platform`), and skips quietly rather than crashing if pywebview's
+  internals have moved by a future version (module or class not found).
+  Called alongside `_enable_webview_downloads` (round 5, item 12) at all
+  three places a native window can open.
+
+  `tests/test_desktop.py` gained a `fake_edgechromium` fixture (a fake
+  `WinForms`/`EdgeChrome`/`webview_settings` surface) and three tests: the
+  patch builds a correctly-`DefaultExt`ed dialog and preserves the
+  extension end to end, it's a no-op off Windows, and it survives the
+  module not existing at all. 328 tests pass (was 327 with round 5's own
+  new test).
+
+  **Not verified on a real Windows/WebView2 machine** -- this sandbox
+  cannot install pywebview at all (`packaging/README.md`'s own "not
+  verified anywhere yet"), so this is reasoned from the published source,
+  not observed live running. Confirming on the curator's own machine is the
+  next thing to do.
+
+**Data input -- items 2 and 3 fixed together**
+- [x] 2. No need for the tab's own horizontal *and* vertical scroll --
+  rework spacing/scale so it fits on one page without either. A scrollbar
+  when opening the snapshot-file panel is fine. If a same-page fix is
+  complicated, consider moving the snapshot-file panel to its own new tab,
+  first in the list, ahead of Data Input -- and put the session save/load
+  controls there too, so all the "data" concerns live on one dedicated tab.
+  Took the suggested route rather than trying to squeeze both concerns onto
+  one page -- `ui/app.py`: a new **"Data"** tab, first in the nav list, now
+  holds the "Snapshot file" panel (round 5, file handling 1-3) *and* the
+  "Session" save/load/autosave panel, both moved off what was "Data Input".
+  What remains on the search tab (renamed per item 3) is just the search
+  form, the Check size/Search buttons, and the two result outputs
+  (`estimate_box`/`search_summary`) -- short enough that it was already
+  fitting on one page even before this change; the actual page-height
+  pressure was always the snapshot + session panels, now gone from it
+  entirely. The unstyled `ui.tags.details` wrapper the snapshot panel used
+  to sit inside (so it stayed collapsed/out of the way on the old, busier
+  tab) is gone too -- with a dedicated tab of its own there is no longer
+  anything else for it to crowd, so it is always visible there, in plain
+  `<h5>`-headed sections instead of a click-to-expand `<details>`.
+  `tools/drive_ui.py` updated: `show("Search", ...)` before touching
+  `#taxa` (no longer the default/first tab), matching the one place it
+  interacted with a Data Input-only control. Verified live at 1400x900:
+  `document.documentElement.scrollHeight === window.innerHeight` (zero
+  overflow) on both the Data and Search tabs; `tools/drive_ui.py` green.
+- [x] 3. Rename the "Data Input" tab to "Search". Fixed as part of the
+  above -- the label changed; the internal Shiny nav value (`"input"`) was
+  left alone since nothing outside this one label references it by name.
+
+**All tables**
+- [x] 4. Enforce a maximum column width so tables don't become unwieldy --
+  columns currently expand to fit their contents, which can make a table
+  very wide for the sake of one long value in one column. Fixed with one
+  CSS rule (`.bc-scroll td { max-width:280px; overflow:hidden;
+  text-overflow:ellipsis; }`) -- applies to every table via `_table()`'s
+  shared wrapper, so this is a single-point fix across Specimens, every
+  BAGS group, Species, BINs and Gap analysis alike. A sticky column's own
+  inline width (`STICKY_COLUMN_WIDTHS`, `_sticky_style`) already wins over
+  this class rule (inline beats class), so Rep./Check/Flag/Updated
+  ID/Notes are unaffected -- this only caps the ordinary scrolling columns,
+  which is where an unbounded one actually came from.
+
+  The truncated value is still one hover away: `_table()`'s default cell
+  renderer now also sets `title='...'` (only when there's something to
+  show). Needed a matching bug fix to do that safely -- free text (a
+  curator note, a collector's name) can contain an apostrophe, which would
+  otherwise close a single-quoted `title` attribute early; a new
+  `_escape_attr` helper additionally escapes `'` to `&#39;` for this one
+  use, leaving the existing `_escape` (fine for text content, where a raw
+  `'` is not a problem) alone. Also had to broaden the sticky-style
+  injection itself: it used to require a cell to start with the *exact*
+  string `"<td>"`, which the new `title='...'` cells (whenever a sticky
+  column -- Updated ID, Notes -- falls through to the default renderer,
+  not a chip/link/checkbox) no longer do; generalised to insert the sticky
+  `style` right after `"<td"` instead of assuming nothing else is there.
+
+  Verified live: a specimen table cell's computed `max-width` is `280px`
+  with `overflow:hidden`, a `title` attribute is present on non-empty
+  cells, and the Rep. header still pins exactly to the scrolled
+  container's top (0px difference) -- the sticky-injection change didn't
+  regress it. Full suite green; `tools/drive_ui.py` green.
+
+**BAGS logic**
+- [x] 5. A species is showing as BAGS grade A with 9 records, when grade A's
+  own threshold is a minimum of 11 -- the grading logic needs checking. Real
+  bug, found in `core/grouping.py`'s `specimens_for_grade`, and it *was* a
+  Python-port-only divergence from R, not something inherited from it.
+
+  `core.bags.calculate_bags_grades`'s `specimen_count` (what
+  `determine_grade` actually thresholds against) counts **every**
+  species-level record of a species, whether or not it has a BIN assigned
+  yet -- matching R's own `calculate_bags_grade`
+  (`R/utils/bags_grading.R`: `specimen_count <- nrow(taxon_specimens)`, no
+  BIN filter). But `specimens_for_grade` -- which decides what a curator
+  actually *sees* in that species' group table -- additionally required
+  `has_bin` for a record to count as a group member. R's own
+  `organize_grade_specimens` (`mod_bags_grading_utils.R`) has no such
+  filter either (`species_specimens <- specimens[is_species_level, ]`).
+  Net effect: a species with, say, 9 records carrying a BIN and 2 more
+  species-level records still awaiting BIN assignment crossed the
+  grade-A threshold on 11 total, while the extra `has_bin` requirement
+  silently dropped those 2 from the group table the curator was actually
+  looking at -- 9 shown, 11 counted.
+
+  Fixed by dropping `has_bin` from the core membership test
+  (`is_grade = species.isin(wanted).to_numpy() & species_level`, no BIN
+  filter) -- matching both R and `calculate_bags_grades`'s own count.
+  `has_bin` still applies exactly where it always should: computing which
+  BINs are "this species' BINs" for pulling in **riders** (non-species-level
+  records sharing one of those BINs) -- a BIN-less record has no BIN to
+  share with anything, so it can only ever count as a member of its own
+  species' group, never a rider of another's.
+
+  New test (`test_grouping.py`): a species with 9 BIN-assigned and 2
+  BIN-less species-level records grades A on 11 and now also *shows* all
+  11 in its group, not 9. Full suite green (328 -- was 327, +1); the
+  existing parity fixtures and `test_bags.py`/`test_grouping.py` were
+  already green *before* this fix too, confirming no test had ever
+  exercised a BIN-less species-level record -- the coverage gap this new
+  test closes.
+
+**Curation tools on the Specimens and BAGS tables**
+- [x] 6. The toolbar of dropdowns and buttons above these tables needs to be
+  more compact, ideally a single line -- spacing looks uneven and there is
+  unused space to the right (per the curator's screenshots). Two separate
+  causes, both in `ui/app.py`:
+
+  1. **Uneven spacing**: `_annotation_controls` (Flag/Curator note/Corrected
+     identification/Apply, shared by both screens) had a `<label>` stacked
+     *above* each of the first three inputs -- three different label
+     lengths ("Flag" vs "Corrected identification") at three different
+     widths, which is what actually looked uneven, on top of costing a
+     second line of height it didn't need. Fixed: the two text inputs use
+     `placeholder=` instead of `label=` (same information, no label row);
+     the flag `<select>` (which can't take a placeholder the way a text
+     input can) gets a small inline `<span>Flag</span>` beside it instead
+     of a label above it.
+  2. **Not actually one line, and empty space to the right**: the
+     "Check page/Check all/Clear checked" button group sat in its own
+     `flex-direction:column` block (stacked, with the checked-count text
+     as a fourth stacked line) *beside* the (also somewhat tall)
+     annotation controls, in a row aligned `align-items:end` -- a column
+     of stacked items next to a row of items, bottom-aligned, is what left
+     empty space around the shorter items and made the whole thing taller
+     than its content needed. Flattened to one real row
+     (`align-items:center`, no more nested column), on both the Specimens
+     toolbar and each BAGS group's toolbar (`_grade_body`) -- the checked
+     count moved from its own stacked line to an inline `<span>` in the
+     same row as the buttons.
+
+  Also trimmed the annotation controls' own widths (select 150px→115px,
+  note 220px→170px, corrected-ID 200px→150px) so the *entire* row --
+  check-buttons/count/flag/note/ID/Apply -- fits on one line at a normal
+  window width instead of "Apply to checked" alone being left to wrap.
+
+  Verified live at 1400x900: both the Specimens tab's toolbar and a BAGS
+  group's toolbar render as a single row with every control visible and no
+  wrap. Full suite green; `tools/drive_ui.py` green.
+
+## Open issues from curator feedback, round 5 -- all twelve resolved
+
+Reported after the project owner tried the app for real curation work. Fixing
+one at a time, one commit per item, verified with the existing test suite and
+a live `tools/drive_ui.py` run before moving to the next. Storage-location
+question below (file handling, item 2) was put to the project owner before
+starting: **keep the snapshot under the user app-data folder**
+(`~/.boldcurator/`), not literally next to the installed app -- a Program
+Files-style install location is often not writable without admin rights.
+
+**File handling -- items 1-3 fixed together (one panel)**
+
+*(Round 6 update: this panel moved off the Data Input tab onto its own new
+"Data" tab -- see round 6, data input items 2/3, below, and its own
+"Session" panel too. The panel's own content, described here, is otherwise
+unchanged.)*
+- [x] 1. File load/download should always be reachable from the running app,
+  not only the one-time first-run setup screen -- showing which file is in
+  use, when it was downloaded, and the BOLD package version. A button on the
+  Data Input tab, at the top. Fixed -- a collapsible "Snapshot file" panel
+  (`ui.tags.details`) at the very top of the Data Input tab, above the
+  taxa/countries form. Always shows: the file in use (full path), "BOLD
+  package version" (the snapshot's own id and build date, from
+  `SnapshotStore.info()`), and "Obtained" (when this file was fetched).
+  "Obtained" is exact for anything downloaded or copied in through this
+  panel (a small `<file>.meta.json` sidecar records the real timestamp,
+  written by `_write_provenance`); for a file nobody downloaded through the
+  app (a colleague's copy, a shared drive -- no sidecar exists) it falls
+  back to the file's own mtime, labelled as such so it is never mistaken
+  for a real download date (`_obtained_date`).
+- [x] 2. The snapshot database should live in the program's own data folder
+  (decided above: `~/.boldcurator/`), unzipped there (or downloaded then
+  unzipped in place), not wherever the curator happened to point the setup
+  screen at. The download path (`fetch_snapshot.download`) already
+  unzipped in place under `~/.boldcurator/` (round 4, item 2 -- gzip
+  handled, cleaned up, nothing left compressed); that constant is now
+  shared (`config.constants.DEFAULT_SNAPSHOT_DIR`) rather than duplicated
+  between `ui/setup.py` and the new panel. What was still missing: a
+  curator pointing the *existing-file* path at something outside that
+  folder never got it copied in at all -- the same panel now offers "Use
+  an existing file instead" (a path field, a native-dialog Browse… button
+  reusing `ui/setup.py`'s `_pick_snapshot_file`, and a "Copy into
+  BOLDcurator's data folder" button) that validates it is a real snapshot
+  (`SnapshotStore(candidate).info()`) before a chunked streaming copy into
+  `~/.boldcurator/snapshot-<timestamp>.duckdb`, with live progress. A
+  download from this panel is timestamped the same way, not the fixed
+  `snapshot.duckdb` name `ui/setup.py` uses -- **deliberately**: this
+  session already has an open, read-only DuckDB handle on the file it
+  launched with, and overwriting that file out from under a live handle
+  would be a real hazard, download or copy alike. Neither swaps the
+  *running* session's snapshot -- picking one up needs a restart, which the
+  panel says outright rather than pretending to hot-swap a live DB
+  connection.
+- [x] 3. When a new file is downloaded/updated, the old one should be
+  removable -- a clean-up button with a user confirmation, not automatic
+  silent deletion. Fixed -- the same panel lists every other `.duckdb` file
+  in `~/.boldcurator/` (i.e. not the one this session has open) with its
+  size and obtained-date, each with its own "Delete" button. Delete always
+  goes through a real confirmation dialog (`ui.modal`, not a bare click) --
+  "Delete `<path>`? This cannot be undone." with Cancel/Delete -- and
+  removes the file's provenance sidecar alongside it.
+
+  Two bugs caught and fixed before this actually worked, both the same
+  underlying mistake: the file-listing panel's own refresh signal
+  (`snap_tick`, a `reactive.Value`) was being written to **from the
+  download/copy background thread itself** -- exactly the anti-pattern
+  `ui/setup.py`'s own `dl_state` comment already warns about
+  (`reactive.Value.set()` expects Shiny's own reactive context, not an
+  arbitrary OS thread) -- so a completed copy's file never appeared in the
+  list without an unrelated click forcing a re-render first. Fixed with a
+  dedicated `_snap_poll` reactive effect: the background thread only ever
+  touches a plain dict (`snap_dl_state`); a click starts polling by
+  bumping a *different* value (`snap_op_seq`), and `_snap_poll` -- running
+  in a real reactive context -- is what safely bumps `snap_tick` every
+  0.4s for as long as the dict says an operation is running, catching the
+  final state once it stops. Verified live end to end with Playwright: the
+  panel's info lines render correctly; copying the fixture snapshot in
+  shows live progress and lands as a new timestamped file with a correct
+  provenance sidecar; the new file appears in the "other files" list
+  without any unrelated interaction; Delete opens the confirm modal with
+  the right path, and confirming removes both the file and its sidecar
+  from disk and from the list; the default-download button's real network
+  path was exercised too (blocked by this sandbox's own network policy,
+  which surfaced as the intended clean "Failed: Could not reach..."
+  message rather than a crash -- the same graceful-failure path round 4
+  already verified for the setup screen's equivalent button). Full pytest
+  suite and `tools/drive_ui.py` both still green throughout.
+
+**Layout -- items 6, 7, 8, 10 fixed together (one underlying cause)**
+
+All four turned out to be the same root cause: every table was capped at a
+fixed `max-height:62vh`, sized off the viewport alone with no knowledge of
+how tall the toolbar/caption/banner chrome *around* it actually was on any
+given screen. With few rows the table itself was short, so the numbers
+never collided; with enough rows to hit the table's own `limit` (500) and
+print a "Showing 500 of N rows" note **below** the scroll box, or with a
+BAGS group tall enough to need its own note banner, the extra chrome pushed
+total page height past 100vh -- a second, page-level scrollbar appeared
+*alongside* the table's own, on top of already-wrapped, tall table rows
+making everything worse. Rewritten as a real flex layout instead of a
+fixed-vh guess: `ui/app.py`'s stylesheet pins `.bc-app-shell` (header +
+banner + nav) to exactly `100vh`; `.bc-nav-fill`/`.bc-fill-output`/
+`.bc-tab-body` carry that height down through Bootstrap's own `.row`/
+`.col-sm-10` grid and Shiny's own output wrapper div into each screen's
+markup (`class_="bc-tab-body"` added to the outer `ui.div(...)` returned by
+all five *_body render functions); only the **last child** of `.bc-tab-body`
+-- always the table, by construction -- is allowed to grow and gets the
+scrollbar; every row above it (toolbars, captions, a BAGS group's note)
+keeps its natural height. `_table()`'s own wrapper div: `max-height:62vh`
+dropped for `overflow:auto;height:100%` (sized by the flex chain, not a
+viewport guess), and the "Showing N of M" note moved *inside* that div
+(it was a trailing sibling `<p>` before, which broke the ":last-child"
+assumption and, worse, was literally invisible to the intended scroll area).
+`.tab-pane.active` also carries its own `overflow-y:auto` as a fallback
+for the one tab with no table (Data Input): if its form content is ever
+taller than the window, that tab alone scrolls, never the page.
+
+Two genuine surprises while wiring the flex chain up (the classic
+"min-height:auto" flex trap, twice): Bootstrap's `.row` defaults to
+`flex-wrap:wrap`, which stopped `align-items:stretch` from actually
+stretching `.col-sm-10` to the row's own height -- fixed by forcing
+`flex-wrap:nowrap;align-items:stretch` explicitly on that one row (there
+are only ever two columns, nav and content, so wrapping was never wanted
+anyway). Round 5, item 8 (compact, non-wrapping rows) is one CSS rule
+(`.bc-scroll td, .bc-scroll th { white-space:nowrap; ... }`), needed
+anyway once round 5, item 9 put every column into the same tables that
+also had to stop wrapping.
+
+Verified live: `document.documentElement.scrollHeight` measured equal to
+`window.innerHeight` (zero page overflow) on every tab -- Data Input,
+Specimens, all five BAGS grades, Species, BINs, Gap analysis -- at three
+window sizes (1280×720, 1024×768, 1400×900); the table's own internal
+scroll still works (`tools/drive_ui.py`'s scroll-position-preserved and
+sticky-header checks both pass); horizontal scroll with sticky columns
+still pins correctly when scrolled sideways too. `tools/drive_ui.py` and
+the full pytest suite both green.
+
+**Data input tab**
+- [x] 4. Auto-save should be the default, fixed at 1 minute, with no option
+  to change the interval -- hide the interval box and tidy up the control.
+  Fixed -- `ui/app.py`: dropped the `autosave` checkbox and
+  `autosave_interval` numeric input entirely, replaced with one line of
+  static text ("Auto-saves every minute..."). `_autosave_tick` no longer
+  reads either input: it unconditionally calls `reactive.invalidate_later(60)`
+  and saves every tick, for the life of the session -- no way to turn it off
+  from the UI. Verified live: no `#autosave`/`#autosave_interval` elements
+  in the DOM, the static text renders, `tools/drive_ui.py` still green.
+- [x] 5. Curator asked where sessions are saved, and what would remove or
+  lose them -- needs a real answer plus something visible in the app so this
+  doesn't have to be asked again. Answer: one SQLite file
+  (`io.session.SessionStore`, default `~/.boldcurator/sessions.sqlite`,
+  configurable via `create_app(sessions_path=...)`/`boldcurator gui
+  --sessions`); a session is lost only by deleting that file or that one
+  session with the Delete button -- never by closing the app, the browser
+  tab, or a normal shutdown. Fixed by putting this on screen: a new
+  `session_location` output under the Session panel states the real path
+  and the two ways to lose a session. Verified live: renders
+  "Sessions are stored in /root/.boldcurator/sessions.sqlite -- deleting
+  that file (or the Delete button above) is the only way to lose them;
+  closing the app does not."
+- [x] 6. The window should not need to scroll vertically -- everything should
+  fit on one page. This applies to the whole app, not just this tab. Fixed
+  together with items 7, 8 and 10 (one root cause) -- see "Layout" above.
+
+**BAGS tabs**
+- [x] 7. With a few records there is no page scroll, but with many records
+  the *whole page* grows a vertical scrollbar in addition to the table's own
+  vertical scroll. Only the table should scroll when the window is
+  maximized -- investigate why the page grows at all. Fixed -- see "Layout"
+  above.
+- [x] 8. Rows should not wrap text; rows should be vertically compact so more
+  fit in the same space. Fixed -- see "Layout" above.
+- [x] 9. Every BAGS group specimen table should show all columns (with
+  horizontal scroll), the same as the Specimens tab's table -- currently they
+  show a curated subset instead. Fixed -- `_group_html`'s `columns` parameter
+  already existed for exactly this (added in round 3 for the Specimens
+  tab), but the BAGS grade screen's own call site in `_grade_body` was still
+  passing nothing, which defaults to the curated `GROUP_COLUMNS` subset.
+  One-line fix: `_group_html(rows, _all_columns_ordered(rows), ...)`.
+  Verified live: BAGS grade A's group table and the Specimens tab both
+  render 83 headers, in the same curated-first order; `tools/drive_ui.py`
+  still green.
+
+**Specimen tab**
+- [x] 10. Remove the page's own vertical scroll; keep only the table's
+  vertical scroll (same underlying issue as item 7, on this tab). Fixed --
+  see "Layout" above.
+
+**Gap analysis tab**
+- [x] 11. Add a table download as xlsx, the same as the Species tab already
+  has. Fixed -- the Species tab's download already produces one workbook
+  with Summary/Species checklist/Gap analysis sheets
+  (`export_species_analysis`), so the Gap analysis tab now offers the same
+  export rather than a new one. Reused the same underlying handler under a
+  **second** output id (`dl_gap_analysis`) instead of placing the existing
+  `dl_species_analysis` button's markup a second time in the DOM -- two
+  elements sharing one Shiny output id means two elements with the same
+  HTML `id`, which is unreliable. `ui/app.py`: `_species_analysis_download`
+  factored out of the old `_dl_species_analysis` handler,
+  `_register_species_analysis_download(output_id)` registers it under both
+  ids. Verified live: `tools/drive_ui.py` still all-green, plus a Playwright
+  check clicking the new button on the Gap analysis tab and confirming a
+  real `.xlsx` download.
+
+**Data download from the app**
+- [x] 12. Curator can't see where downloads go, running the Windows desktop
+  build in its own (chrome-less) browser window -- investigate and make the
+  destination visible/obvious. Investigated: this app cannot control, and
+  never has controlled, *where* a download lands -- every "Download..."
+  button is an ordinary `<a download>` link (`shiny.ui.download_button`),
+  the same mechanism any website uses, so it always goes to the browser's
+  (or OS's) configured Downloads folder. What changed under this curator is
+  the window, not the download: `desktop.py`'s `browser-app` window mode
+  (round 4's Windows delivery work) launches a Chromium browser with
+  `--app=<url>` specifically to hide the toolbar/address bar and look like
+  a native app -- but a real Chrome/Edge tab would normally show a download
+  arrow or a bottom "shelf" confirming a download just happened, and that
+  browser chrome is exactly what `--app` mode hides. The download still
+  completes; nothing on screen ever said so.
+
+  Fixed two ways, both in `ui/app.py`: (1) a small always-on line under the
+  Specimens tab's six download buttons -- "Downloads save to your
+  computer's usual Downloads folder, the same as any other website
+  download." -- a permanent, written answer to "where does it go"; (2) a
+  toast (`#bc-toast`, plain CSS opacity transition, no new dependency)
+  that appears on **any** download click, app-wide -- a delegated listener
+  on `a.shiny-download-link` (the class every `download_button` carries)
+  rather than one per button, so a new download button added later is
+  covered automatically. It can only confirm the click was made, not that
+  the transfer finished (a web page has no API for that, by browser
+  design) -- accurate rather than overclaiming. Verified live:
+  `#dl_all` on the Specimens tab actually downloads a real `.tsv` (via
+  Playwright's `expect_download`) while the toast's opacity is observed
+  rising through its fade-in; `tools/drive_ui.py` still green throughout.
+
+  **Follow-up, reported immediately after the above shipped: the toast was
+  lying.** The curator (on the packaged Windows desktop build) still could
+  not find any downloaded file at all -- the fix above only made the
+  *click* visible, and the real problem turned out to be that no download
+  was happening in the first place. Root-caused by reading pywebview's own
+  source (its wheel doesn't build in this sandbox -- see
+  `packaging/README.md`'s "not verified anywhere yet" -- so `pip download
+  --no-deps --no-binary :none:` pulled the wheel without building it, good
+  enough to read): **every** pywebview backend
+  (`platforms/edgechromium.py`/Windows, `gtk.py`/Linux, `cocoa.py`/macOS,
+  `qt.py`) checks `webview.settings['ALLOW_DOWNLOADS']` before letting a
+  browser-triggered download through, defaults it to `False`, and
+  **silently cancels** the download when it's off (Windows:
+  `args.Cancel = True` in `on_download_starting`) -- no exception, no
+  console output, nothing this app could ever have caught or reported.
+  Indistinguishable from "nothing happened" because, from pywebview's own
+  perspective inside a native window, nothing did. This explains exactly
+  why the curator's copy behaved differently from what round 4's own
+  real-Windows test saw: that test landed in `browser-app` mode (a genuine
+  external Chrome/Edge process, immune to this entirely), while this
+  curator's machine evidently opened a working **native** pywebview window
+  -- the one path `packaging/README.md` had explicitly flagged as never
+  verified to even open successfully, let alone confirmed to handle
+  downloads.
+
+  Fixed in `desktop.py`: a new `_enable_webview_downloads(webview_module)`
+  sets `webview.settings['ALLOW_DOWNLOADS'] = True` right after `import
+  webview`, before `create_window`/`start()`, at all three call sites
+  (`_run_setup`'s native/auto branch, `_show_window_blocking`'s explicit
+  `"native"` branch, and its `"auto"` branch). With it on, Windows shows a
+  real native "Save As" dialog defaulting to the Downloads folder (the
+  same registry key Explorer itself reads for that folder); GTK/Qt/Cocoa
+  save straight to each OS's Downloads folder without a prompt -- either
+  way a download now actually happens and lands somewhere findable. The
+  round 5 toast/hint text above was softened to say "check your Downloads
+  folder, or a save dialog if one opens" rather than asserting a silent
+  auto-save, since a native window's own behaviour (a dialog) genuinely
+  differs from a browser tab's (silent, straight to Downloads).
+
+  `tests/test_desktop.py`'s `fake_webview` fixture gained a `.settings`
+  dict (a bare `types.ModuleType` has no such attribute, so every
+  native-window test would otherwise fail before reaching
+  `create_window`/`start()` at all) plus a new regression test asserting
+  `launch()` actually flips `ALLOW_DOWNLOADS` to `True` before the window
+  opens. 324 tests pass (was 323). Not yet re-verified on the real Windows
+  machine that reported this -- that is the next thing to do, not
+  something this sandbox (no display, no way to install pywebview itself)
+  could confirm end to end; reading pywebview's own source and unit-testing
+  the setting is as far as this session could go.
+
 ## NEXT SESSION — START HERE, in priority order
 
-No open curator-reported bugs right now -- four rounds are closed (see the
-"Open issues" sections below for what was wrong and how each was fixed, if
-a similar bug resurfaces). CI (plan 2.6) is green on all three platforms,
-and **the release build has now been confirmed working on real Windows**:
-the installer runs, the app launches in a `browser-app` window, and round 4
-(the issues that same real run surfaced) is closed too. What's left:
+No open curator-reported bugs right now -- **six rounds are closed** (see
+the "Open issues" sections below for what was wrong and how each was
+fixed, if a similar bug resurfaces: round 6, 6 issues; round 5, 12 issues;
+rounds 1-4 before that). CI (plan 2.6) is green on all three platforms, and
+the release build has been confirmed working on real Windows (installer
+runs, app launches in a `browser-app` window). **Installers now exist for
+all three operating systems** (per the project owner -- the "macOS/Linux
+installer doesn't exist yet" item that used to be here is done; this
+session did not build or verify those installers itself, so if one needs
+changes, treat it as unfamiliar and read `packaging/` fresh). What's left:
 
-1. **4.4 Signing** — still a deliberate no (project owner's call, curator
-   testing doesn't need it) and **4.5 installer smoke test on a clean VM**
-   still not done for macOS/Linux (Windows is now covered by the project
-   owner's own real-machine test) — the release workflow's own smoke test is
-   a CI proxy for this, not a replacement for someone actually
-   double-clicking a downloaded build.
-2. **A macOS/Linux installer** (a `.dmg`, or similar) doesn't exist yet --
-   only Windows has one (Inno Setup). Not requested; worth asking the
-   project owner before building it speculatively.
-3. **Also open, not urgent:**
+1. **Two round 6 fixes need confirming on a real Windows/WebView2 machine**
+   -- this sandbox cannot install pywebview at all (see "not verified
+   anywhere yet" further down), so both were reasoned from pywebview
+   6.2.1's published source, not observed live:
+   - `desktop._patch_edgechromium_download_extension` (downloads item 1):
+     does a native window's Save As dialog now keep the file extension?
+   - `desktop._enable_webview_downloads` (round 5, item 12, already
+     shipped, but worth re-confirming alongside the above): does a native
+     window's download still work at all, now that item 1's monkeypatch
+     also touches the same code path?
+2. **4.4 Signing** — still a deliberate no (project owner's call, curator
+   testing doesn't need it).
+3. **4.5 installer smoke test on a clean VM** — still not independently
+   confirmed for macOS/Linux beyond CI's own smoke test (a CI proxy, not a
+   replacement for someone actually double-clicking a downloaded build);
+   Windows is covered by the project owner's own real-machine test.
+4. **Also open, not urgent:**
    - The R app (not this rewrite) rejects 4% of real BOLD dataset codes --
      `mod_data_import_utils.R:50`'s `^DS-[A-Z0-9]+$` pattern; 544 of 13,706
      real `DS-` codes don't match. Live bug in the *shipped* app. The SQL to
@@ -78,7 +782,7 @@ the installer runs, the app launches in a `browser-app` window, and round 4
      `snapshot_builder.py`/`schema.py` and republished. The code fix alone
      does not retroactively add columns to a `.duckdb` file already on disk.
 
-Before starting any of the above: `python -m pytest tests/ -q` (323 passing)
+Before starting any of the above: `python -m pytest tests/ -q` (328 passing)
 and `python parity/compare.py` (PASS) from a clean checkout, per "First, 60
 seconds of setup" below -- and drive any UI change through
 `tools/drive_ui.py` before believing it works, per "the rules this session
@@ -716,7 +1420,7 @@ to learn" below for why that matters here specifically.
 cd C:\GitHub\BOLDcurator\python
 git pull
 pip install -e ".[dev,gui]"
-python -m pytest tests/ -q          # 289 passing
+python -m pytest tests/ -q          # 328 passing
 python parity/compare.py            # PASS
 
 python -m boldcurator.cli gui --snapshot "<the reordered snapshot>"

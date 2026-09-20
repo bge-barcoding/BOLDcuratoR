@@ -1,4 +1,4 @@
-"""The Data Input form: every field, and the pre-check that sizes a search."""
+"""The Search form: every field, and the pre-check that sizes a search."""
 
 from __future__ import annotations
 

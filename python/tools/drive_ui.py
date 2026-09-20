@@ -93,6 +93,10 @@ def main(argv: list[str] | None = None) -> int:
             time.sleep(settle)
 
         # -- the pre-check, before anything is fetched
+        # Round 6, data input items 2/3: "Data" (snapshot/session) is now
+        # the first tab, ahead of "Search" (renamed from "Data Input") --
+        # the taxa field isn't on the tab that's selected by default anymore.
+        show("Search", settle=1.0)
         page.fill("#user", "Driver")
         page.fill("#taxa", args.taxon)
         page.click("#check")
@@ -312,7 +316,7 @@ def main(argv: list[str] | None = None) -> int:
         # representative pick (auto-selected best per BIN x country) -- see
         # io.annotations's module docstring for why the two are separate.
         def value_box_count(label: str) -> int:
-            show("Data Input", settle=1.5)
+            show("Search", settle=1.5)
             body = page.locator("#search_summary").inner_text()
             match = re.search(rf"([\d,]+)\s*\n?{label}", body)
             return int(match.group(1).replace(",", "")) if match else -1

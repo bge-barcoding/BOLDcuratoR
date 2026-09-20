@@ -90,6 +90,134 @@ def save_snapshot_path(path: Path, config_path: Path = DEFAULT_CONFIG_PATH) -> N
     config_path.write_text(json.dumps({"snapshot_path": str(path)}), encoding="utf-8")
 
 
+def _enable_webview_downloads(webview_module) -> None:
+    """A curator reported round 5, item 12's own fix (a toast saying "your
+
+    download is going to the Downloads folder") as not actually true in a
+    native window: nothing was there. Root cause, found in pywebview's own
+    source (every backend -- ``edgechromium.py``/Windows, ``gtk.py``/Linux,
+    ``cocoa.py``/macOS, ``qt.py``): ``webview.settings['ALLOW_DOWNLOADS']``
+    defaults to ``False``, and every one of them **silently cancels** a
+    browser-triggered download (``args.Cancel = True`` on Windows) rather
+    than erroring -- indistinguishable, from this app's side, from a
+    download that simply never happened. This app's own server-side
+    downloads (the snapshot fetch/copy in ``ui/app.py``'s "Snapshot file"
+    panel) write straight to disk and were never affected; only the
+    ``ui.download_button`` exports (specimens, FASTA, the xlsx reports) go
+    through the browser's own download machinery, which is what a *native*
+    pywebview window intercepts.
+
+    Must be set before ``create_window``/``start()`` -- pywebview reads it
+    when the download event fires, but nothing stops setting it as early as
+    right after import. With it on, Windows shows a real native "Save As"
+    dialog defaulting to the Downloads folder (via the same registry key
+    Explorer itself uses); GTK/Qt/Cocoa save straight to each OS's
+    Downloads folder without a prompt. Either way, a download now actually
+    happens and lands somewhere findable -- neither silently vanishes.
+    """
+    webview_module.settings["ALLOW_DOWNLOADS"] = True
+    _patch_edgechromium_download_extension()
+
+
+def _patch_edgechromium_download_extension() -> None:
+    """Round 6, downloads item 1: every download in a native Windows window
+
+    landed with no file extension at all (``.tsv``/``.xlsx``/``.fasta``/
+    ``.csv`` alike) -- reported right after round 5's item 12 fix made
+    downloads work at all in that window. Every one of these already has
+    the right extension in Shiny's own ``Content-Disposition`` header
+    (``ui/app.py``'s ``filename=`` lambdas), and a *browser* window
+    (Playwright's Chromium, this project's own test harness; presumably
+    "browser-app" mode too) reads that correctly -- so this is specific to
+    pywebview's own Windows glue code, not this app's server side.
+
+    Root cause, in pywebview's own source (``platforms/edgechromium.py``,
+    ``EdgeChrome.on_download_starting``): its ``SaveFileDialog`` is built
+    with ``Filter = "All files (*.*)|*.*"`` and no ``DefaultExt`` set. This
+    is a well-documented WinForms footgun independent of exactly how the
+    extension goes missing along the way (in the dialog's own edit box, or
+    whatever else the OS does with a wildcard-only filter and no default
+    extension to fall back on): with ``DefaultExt`` unset, there is nothing
+    for ``SaveFileDialog`` to re-apply if the extension is dropped, and
+    with only a ``*.*`` filter, there is no concrete extension tied to the
+    dialog's own "save as type" choice either. The fix, replicated here, is
+    the one universally recommended for this exact WinForms symptom: give
+    the dialog a filter built from the file's own real extension (with
+    "All files" still offered second) and set ``DefaultExt`` explicitly.
+
+    Implemented as a monkeypatch of ``EdgeChrome.on_download_starting``
+    (reimplemented in full, since the extension has to be set *before*
+    ``ShowDialog()`` is called, and that dialog is a local variable inside
+    pywebview's own method -- there is no smaller seam to patch) rather
+    than a change to pywebview's own package, since this project vendors
+    nothing and pywebview is a third-party dependency. Applied defensively:
+    if pywebview's internals have moved by the time this runs (a version
+    upgrade renaming/restructuring this method), the patch is simply
+    skipped -- the original, already-known-broken-for-extensions behaviour
+    is what a curator would have seen anyway, never a crash.
+
+    **Not verified on a real Windows/WebView2 machine** -- this sandbox
+    cannot install or run pywebview at all (see ``packaging/README.md``'s
+    "not verified anywhere yet"); this is reasoned from pywebview 6.2.1's
+    published source, not observed live. Confirming this on the curator's
+    own machine is the next thing to do.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        from webview.platforms import edgechromium
+    except Exception:
+        return  # this backend isn't in use (or isn't importable) here
+
+    def _patched_on_download_starting(self, sender, args):
+        winreg = __import__("winreg")
+        WinForms = edgechromium.WinForms
+        webview_settings = edgechromium.webview_settings
+
+        if not webview_settings["ALLOW_DOWNLOADS"]:
+            args.Cancel = True
+            return
+
+        dialog = WinForms.SaveFileDialog()
+        try:
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders",
+            ) as windows_key:
+                dialog.InitialDirectory = winreg.QueryValueEx(
+                    windows_key, "{374DE290-123F-4565-9164-39C4925E467B}"
+                )[0]
+        except Exception:
+            pass
+
+        suggested = os.path.basename(args.ResultFilePath)
+        ext = os.path.splitext(suggested)[1].lstrip(".")
+        if ext:
+            dialog.Filter = (
+                f"{ext.upper()} files (*.{ext})|*.{ext}|All files (*.*)|*.*")
+            dialog.DefaultExt = ext
+        else:
+            dialog.Filter = "All files (*.*)|*.*"
+        dialog.AddExtension = True
+        dialog.RestoreDirectory = True
+        dialog.FileName = suggested
+
+        result = dialog.ShowDialog(self.form)
+        if result == WinForms.DialogResult.OK:
+            args.ResultFilePath = dialog.FileName
+        else:
+            args.Cancel = True
+
+    try:
+        if hasattr(edgechromium, "EdgeChrome") and hasattr(
+            edgechromium.EdgeChrome, "on_download_starting"
+        ):
+            edgechromium.EdgeChrome.on_download_starting = (
+                _patched_on_download_starting)
+    except Exception:
+        pass  # leave pywebview's own (extension-losing) behaviour in place
+
+
 def _free_port() -> int:
     """An ephemeral local port, free at the moment of asking.
 
@@ -225,6 +353,7 @@ def _run_setup(config_path: Path, *, window: str = "auto") -> Path:
         try:
             import webview
 
+            _enable_webview_downloads(webview)
             win = webview.create_window("BOLDcurator -- set up", url,
                                         width=760, height=640)
             win.events.closed += lambda: resolved.put(None)
@@ -294,6 +423,7 @@ def _show_window_blocking(url: str, *, window: str) -> None:
     if window == "native":
         import webview
 
+        _enable_webview_downloads(webview)
         webview.create_window("BOLDcurator", url, width=1400, height=900)
         webview.start()
         return
@@ -311,6 +441,7 @@ def _show_window_blocking(url: str, *, window: str) -> None:
     try:
         import webview
 
+        _enable_webview_downloads(webview)
         webview.create_window("BOLDcurator", url, width=1400, height=900)
         webview.start()
         return

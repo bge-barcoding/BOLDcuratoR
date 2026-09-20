@@ -34,6 +34,7 @@ from shiny import App, reactive, render, ui
 from ..config.constants import (
     BOLD_ATTRIBUTION_TEXT,
     CC_BY_SA_URL,
+    DEFAULT_SNAPSHOT_DIR,
     DEFAULT_SNAPSHOT_ZENODO_DOI,
 )
 from ..data.snapshot import SnapshotError, SnapshotStore
@@ -42,7 +43,7 @@ from ..data.snapshot import SnapshotError, SnapshotStore
 #: than an existing file -- next to the session store and config file this
 #: module's caller already uses, not next to whatever the app is installed
 #: into (which may not be writable).
-DEFAULT_DOWNLOAD_PATH = Path.home() / ".boldcurator" / "snapshot.duckdb"
+DEFAULT_DOWNLOAD_PATH = DEFAULT_SNAPSHOT_DIR / "snapshot.duckdb"
 
 
 def _dialog_worker(result_queue: "multiprocessing.Queue[str | None]") -> None:

@@ -1,0 +1,46 @@
+# Deploys the curator-facing project website (website/) to GitHub Pages.
+#
+# Plain static HTML/CSS/JS, no build step -- this just uploads website/ as
+# the Pages artifact. Runs on any push to main that touches website/, and
+# can be triggered manually to redeploy without a content change (e.g.
+# after editing the release asset names it links to).
+#
+# The repo also has a separate, manual-only Pages workflow
+# (spike-pages.yml) for an unrelated shinylive experiment. A GitHub Pages
+# site is "whichever workflow last deployed to it", so the two coexist
+# safely as long as spike-pages.yml is only ever run deliberately.
+
+name: website
+
+on:
+  push:
+    branches: [main]
+    paths: ['website/**', '.github/workflows/website-pages.yml']
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: website
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
