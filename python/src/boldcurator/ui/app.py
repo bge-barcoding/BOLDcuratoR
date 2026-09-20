@@ -254,9 +254,9 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         # each *_body function below) is allowed to grow and scroll -- every
         # row above it (toolbars, captions) keeps its natural height.
         # ".tab-pane.active" also gets its own overflow-y:auto as a fallback
-        # for the one tab with no table at all (Data Input): if its form
-        # content is ever taller than the window, that tab scrolls on its
-        # own rather than the whole page doing it.
+        # for the tabs with no table at all (Data, Search): if their content
+        # is ever taller than the window, that tab scrolls on its own rather
+        # than the whole page doing it.
         ui.tags.style("""
             html, body { height: 100%; margin: 0; }
             body { overflow: hidden; }
@@ -439,73 +439,111 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         ui.div(
         ui.navset_pill_list(
             ui.nav_panel(
-                "Data Input",
-                # Round 5, file handling items 1-3: reachable from the
-                # running app, not only the one-time first-run setup screen
-                # (ui/setup.py, unchanged and still what a curator sees
-                # before any snapshot is configured at all).
-                ui.tags.details(
-                    ui.tags.summary(
-                        ui.tags.strong("Snapshot file"),
-                        " -- which file, when it was obtained, and how to "
-                        "change it",
-                        class_="small", style="cursor:pointer;"),
-                    ui.output_ui("snapshot_panel"),
+                "Data",
+                # Round 6, data input items 2/3: the snapshot-file panel
+                # (round 5, file handling items 1-3) and the session
+                # save/load controls used to live at the top of the Search
+                # tab, where -- combined with the actual search form -- they
+                # pushed that tab past one page's worth of height. Its own
+                # tab now, ahead of Search, so every "which data am I
+                # working with" concern lives in one place. Reachable from
+                # the running app, not only the one-time first-run setup
+                # screen (ui/setup.py, unchanged and still what a curator
+                # sees before any snapshot is configured at all).
+                ui.tags.h5("Snapshot file", style="margin-top:0;"),
+                ui.output_ui("snapshot_panel"),
+                ui.div(
+                    ui.tags.strong("Download a snapshot", class_="small"),
                     ui.div(
-                        ui.tags.strong("Download a snapshot", class_="small"),
-                        ui.div(
-                            ui.input_action_button(
-                                "snap_download_default",
-                                "Download the latest public BOLD snapshot",
-                                class_="btn-sm btn-primary"),
-                            style="margin:6px 0;",
-                        ),
-                        ui.tags.details(
-                            ui.tags.summary("Or provide your own source",
-                                           class_="small text-muted"),
-                            ui.div(
-                                ui.input_text(
-                                    "snap_source", None, width="360px",
-                                    placeholder="A direct URL, a manifest.json "
-                                               "URL, or a Zenodo record/DOI"),
-                                ui.input_action_button("snap_download",
-                                                       "Download",
-                                                       class_="btn-sm"),
-                                style="display:flex;gap:8px;align-items:center;"
-                                      "margin-top:6px;flex-wrap:wrap;",
-                            ),
-                        ),
-                        ui.tags.strong("Use an existing file instead",
-                                      class_="small",
-                                      style="display:block;margin-top:14px;"),
+                        ui.input_action_button(
+                            "snap_download_default",
+                            "Download the latest public BOLD snapshot",
+                            class_="btn-sm btn-primary"),
+                        style="margin:6px 0;",
+                    ),
+                    ui.tags.details(
+                        ui.tags.summary("Or provide your own source",
+                                       class_="small text-muted"),
                         ui.div(
                             ui.input_text(
-                                "snap_path", None, width="360px",
-                                placeholder="/path/to/a/bold_snapshot.duckdb"),
-                            ui.input_action_button("snap_browse", "Browse…",
-                                                   class_="btn-sm "
-                                                         "btn-outline-secondary"),
-                            ui.input_action_button(
-                                "snap_copy",
-                                "Copy into BOLDcurator's data folder",
-                                class_="btn-sm"),
+                                "snap_source", None, width="360px",
+                                placeholder="A direct URL, a manifest.json "
+                                           "URL, or a Zenodo record/DOI"),
+                            ui.input_action_button("snap_download",
+                                                   "Download",
+                                                   class_="btn-sm"),
                             style="display:flex;gap:8px;align-items:center;"
-                                  "flex-wrap:wrap;margin-top:4px;",
+                                  "margin-top:6px;flex-wrap:wrap;",
                         ),
-                        ui.tags.span(
-                            "A download or copy lands in BOLDcurator's own "
-                            "data folder as a new file -- it does not "
-                            "replace the file this session is using. "
-                            "Restart BOLDcurator to switch to it.",
-                            class_="small text-muted",
-                            style="display:block;margin-top:6px;"),
-                        ui.output_ui("snapshot_mgmt_status"),
-                        style="margin-top:10px;padding:10px 14px;"
-                              "background:#f8f9fa;border:1px solid #dee2e6;"
-                              "border-radius:5px;max-width:900px;",
                     ),
-                    style="margin-bottom:16px;",
+                    ui.tags.strong("Use an existing file instead",
+                                  class_="small",
+                                  style="display:block;margin-top:14px;"),
+                    ui.div(
+                        ui.input_text(
+                            "snap_path", None, width="360px",
+                            placeholder="/path/to/a/bold_snapshot.duckdb"),
+                        ui.input_action_button("snap_browse", "Browse…",
+                                               class_="btn-sm "
+                                                     "btn-outline-secondary"),
+                        ui.input_action_button(
+                            "snap_copy",
+                            "Copy into BOLDcurator's data folder",
+                            class_="btn-sm"),
+                        style="display:flex;gap:8px;align-items:center;"
+                              "flex-wrap:wrap;margin-top:4px;",
+                    ),
+                    ui.tags.span(
+                        "A download or copy lands in BOLDcurator's own "
+                        "data folder as a new file -- it does not "
+                        "replace the file this session is using. "
+                        "Restart BOLDcurator to switch to it.",
+                        class_="small text-muted",
+                        style="display:block;margin-top:6px;"),
+                    ui.output_ui("snapshot_mgmt_status"),
+                    style="margin-top:10px;padding:10px 14px;"
+                          "background:#f8f9fa;border:1px solid #dee2e6;"
+                          "border-radius:5px;max-width:900px;",
                 ),
+                ui.tags.h5("Session", style="margin-top:22px;"),
+                ui.div(
+                    ui.div(
+                        ui.input_text("session_name", None,
+                                      placeholder="Session name",
+                                      width="220px"),
+                        ui.input_action_button("save_session", "Save",
+                                               class_="btn-sm"),
+                        ui.input_select("load_session_id", None, choices={},
+                                        width="320px"),
+                        ui.input_action_button("load_session", "Load",
+                                               class_="btn-sm"),
+                        ui.input_action_button("delete_session", "Delete",
+                                               class_="btn-sm btn-outline-danger"),
+                        style="display:flex;gap:8px;align-items:center;"
+                              "flex-wrap:wrap;",
+                    ),
+                    ui.tags.span(
+                        "Auto-saves every minute, under the name above (or "
+                        "\"Auto-save\" if left blank).",
+                        class_="small text-muted", style="display:block;"
+                              "margin-top:6px;"),
+                    ui.output_ui("session_status"),
+                    ui.output_ui("session_location"),
+                    style="margin-top:6px;padding:10px 14px;"
+                          "background:#f8f9fa;border:1px solid #dee2e6;"
+                          "border-radius:5px;max-width:900px;",
+                ),
+                ui.div(
+                    BOLD_ATTRIBUTION_TEXT + " ",
+                    ui.tags.a("Full licence text.", href=CC_BY_SA_URL,
+                             target="_blank", rel="noopener noreferrer"),
+                    class_="small text-muted", style="margin-top:18px;"
+                          "max-width:900px;",
+                ),
+                value="data",
+            ),
+            ui.nav_panel(
+                "Search",
                 ui.row(
                     ui.column(5,
                         ui.input_text_area(
@@ -542,41 +580,6 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 ),
                 ui.output_ui("estimate_box"),
                 ui.output_ui("search_summary"),
-                ui.div(
-                    ui.tags.strong("Session", class_="small"),
-                    ui.div(
-                        ui.input_text("session_name", None,
-                                      placeholder="Session name",
-                                      width="220px"),
-                        ui.input_action_button("save_session", "Save",
-                                               class_="btn-sm"),
-                        ui.input_select("load_session_id", None, choices={},
-                                        width="320px"),
-                        ui.input_action_button("load_session", "Load",
-                                               class_="btn-sm"),
-                        ui.input_action_button("delete_session", "Delete",
-                                               class_="btn-sm btn-outline-danger"),
-                        style="display:flex;gap:8px;align-items:center;"
-                              "flex-wrap:wrap;margin-top:4px;",
-                    ),
-                    ui.tags.span(
-                        "Auto-saves every minute, under the name above (or "
-                        "\"Auto-save\" if left blank).",
-                        class_="small text-muted", style="display:block;"
-                              "margin-top:6px;"),
-                    ui.output_ui("session_status"),
-                    ui.output_ui("session_location"),
-                    style="margin-top:16px;padding:10px 14px;"
-                          "background:#f8f9fa;border:1px solid #dee2e6;"
-                          "border-radius:5px;max-width:900px;",
-                ),
-                ui.div(
-                    BOLD_ATTRIBUTION_TEXT + " ",
-                    ui.tags.a("Full licence text.", href=CC_BY_SA_URL,
-                             target="_blank", rel="noopener noreferrer"),
-                    class_="small text-muted", style="margin-top:18px;"
-                          "max-width:900px;",
-                ),
                 value="input",
             ),
             ui.nav_panel("Gap analysis",
@@ -1698,7 +1701,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         # -- downloads -------------------------------------------------------
         #
         # The six specimen-handling buttons above, plus the search-results CSV
-        # (Data Input) and the BIN-analysis workbook (BINs) below. All eight
+        # (Search) and the BIN-analysis workbook (BINs) below. All eight
         # write through `io.exports`, the same code the CLI and the parity
         # harness already exercise, so a download and `boldcurator export`
         # agree by construction rather than by two implementations staying in

@@ -102,14 +102,35 @@ and a live `tools/drive_ui.py` run before moving to the next.
   not observed live running. Confirming on the curator's own machine is the
   next thing to do.
 
-**Data input**
-- [ ] 2. No need for the tab's own horizontal *and* vertical scroll --
+**Data input -- items 2 and 3 fixed together**
+- [x] 2. No need for the tab's own horizontal *and* vertical scroll --
   rework spacing/scale so it fits on one page without either. A scrollbar
   when opening the snapshot-file panel is fine. If a same-page fix is
   complicated, consider moving the snapshot-file panel to its own new tab,
   first in the list, ahead of Data Input -- and put the session save/load
   controls there too, so all the "data" concerns live on one dedicated tab.
-- [ ] 3. Rename the "Data Input" tab to "Search".
+  Took the suggested route rather than trying to squeeze both concerns onto
+  one page -- `ui/app.py`: a new **"Data"** tab, first in the nav list, now
+  holds the "Snapshot file" panel (round 5, file handling 1-3) *and* the
+  "Session" save/load/autosave panel, both moved off what was "Data Input".
+  What remains on the search tab (renamed per item 3) is just the search
+  form, the Check size/Search buttons, and the two result outputs
+  (`estimate_box`/`search_summary`) -- short enough that it was already
+  fitting on one page even before this change; the actual page-height
+  pressure was always the snapshot + session panels, now gone from it
+  entirely. The unstyled `ui.tags.details` wrapper the snapshot panel used
+  to sit inside (so it stayed collapsed/out of the way on the old, busier
+  tab) is gone too -- with a dedicated tab of its own there is no longer
+  anything else for it to crowd, so it is always visible there, in plain
+  `<h5>`-headed sections instead of a click-to-expand `<details>`.
+  `tools/drive_ui.py` updated: `show("Search", ...)` before touching
+  `#taxa` (no longer the default/first tab), matching the one place it
+  interacted with a Data Input-only control. Verified live at 1400x900:
+  `document.documentElement.scrollHeight === window.innerHeight` (zero
+  overflow) on both the Data and Search tabs; `tools/drive_ui.py` green.
+- [x] 3. Rename the "Data Input" tab to "Search". Fixed as part of the
+  above -- the label changed; the internal Shiny nav value (`"input"`) was
+  left alone since nothing outside this one label references it by name.
 
 **All tables**
 - [ ] 4. Enforce a maximum column width so tables don't become unwieldy --
