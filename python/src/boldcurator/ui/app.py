@@ -175,7 +175,7 @@ def _grade_panel(grade: str) -> ui.Tag:
             style=f"background:{colour};color:#fff;padding:8px 14px;"
                   "border-radius:5px;margin-bottom:10px;",
         ),
-        ui.output_ui(f"grade_{grade}_body"),
+        ui.div(ui.output_ui(f"grade_{grade}_body"), class_="bc-fill-output"),
         value=f"grade_{grade}",
     )
 
@@ -187,6 +187,78 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
     sessions_path = sessions_path or DEFAULT_SESSIONS_PATH
 
     app_ui = ui.page_fluid(
+        # Round 5, items 6/7/8/10: the page itself must never need its own
+        # vertical scrollbar -- only a table (".bc-scroll", see _table) does,
+        # and only when the window is too short for it. Without this, a
+        # table capped at a fixed viewport-relative height (the old
+        # "max-height:62vh") still left the *rest* of a screen's own chrome
+        # (toolbars, captions, a BAGS group's note) free to push the whole
+        # page past 100vh -- invisible with few rows, visible the moment
+        # anything nudges the total over, e.g. the "Showing N of M rows"
+        # note that only appears past 500 rows. Fixed with a real flex chain
+        # instead: ".bc-app-shell" pins the header/banner/nav row to exactly
+        # 100vh, ".bc-fill-output"/".bc-tab-body" carry that height down
+        # through Shiny's own output wrapper div into each screen's markup,
+        # and only the last child of ".bc-tab-body" (always the table, see
+        # each *_body function below) is allowed to grow and scroll -- every
+        # row above it (toolbars, captions) keeps its natural height.
+        # ".tab-pane.active" also gets its own overflow-y:auto as a fallback
+        # for the one tab with no table at all (Data Input): if its form
+        # content is ever taller than the window, that tab scrolls on its
+        # own rather than the whole page doing it.
+        ui.tags.style("""
+            html, body { height: 100%; margin: 0; }
+            body { overflow: hidden; }
+            .bc-app-shell {
+                height: 100vh; display: flex; flex-direction: column;
+                overflow: hidden;
+            }
+            .bc-app-shell > * { flex: none; }
+            .bc-nav-fill {
+                flex: 1 1 auto; min-height: 0;
+                display: flex; flex-direction: column;
+            }
+            .bc-nav-fill > .row {
+                flex: 1 1 auto; min-height: 0; flex-wrap: nowrap;
+                align-items: stretch;
+            }
+            .bc-nav-fill .row > .col-sm-2 { overflow-y: auto; }
+            .bc-nav-fill .row > .col-sm-10 {
+                display: flex; flex-direction: column; min-height: 0;
+            }
+            .bc-nav-fill .tab-content {
+                flex: 1 1 auto; min-height: 0; position: relative;
+            }
+            .bc-nav-fill .tab-pane.active {
+                display: flex !important; flex-direction: column;
+                height: 100%; min-height: 0; overflow-y: auto;
+            }
+            /* A grade tab's own coloured banner (_grade_panel) sits above
+               ".bc-fill-output" in the same tab-pane -- keep its natural
+               height instead of letting flex shrink it. */
+            .bc-nav-fill .tab-pane.active > *:not(.bc-fill-output) {
+                flex: none;
+            }
+            .bc-fill-output, .bc-fill-output > .shiny-html-output {
+                flex: 1 1 auto; min-height: 0;
+                display: flex; flex-direction: column;
+            }
+            .bc-tab-body {
+                flex: 1 1 auto; min-height: 0; height: 100%;
+                display: flex; flex-direction: column;
+            }
+            .bc-tab-body > * { flex: none; }
+            .bc-tab-body > *:last-child {
+                flex: 1 1 auto; min-height: 0; overflow: auto;
+            }
+            /* Round 5, item 8: compact rows, not wrapped text -- a wide
+               table (item 9's full column set) scrolls horizontally instead
+               of every cell wrapping to several lines and inflating row
+               height. */
+            .bc-scroll td, .bc-scroll th {
+                white-space: nowrap; padding-top: 3px; padding-bottom: 3px;
+            }
+        """),
         # One delegated listener, attached to the page once. The specimen and
         # group tables are re-rendered as raw HTML on every click (paging,
         # sorting, "next problem"...), which replaces the checkboxes' own
@@ -252,6 +324,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             }});
         """),
         ui.div(
+        ui.div(
             ui.tags.h4("BOLDcurator", style="margin:0;"),
             ui.tags.span(
                 f"{info.snapshot_id} · {info.row_count:,} records · "
@@ -270,6 +343,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                   "border-bottom:1px solid #dee2e6;margin-bottom:12px;",
         ),
         ui.output_ui("banner"),
+        ui.div(
         ui.navset_pill_list(
             ui.nav_panel(
                 "Data Input",
@@ -346,14 +420,25 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 ),
                 value="input",
             ),
-            ui.nav_panel("Gap analysis", ui.output_ui("gap_body"), value="gap"),
-            ui.nav_panel("Species", ui.output_ui("species_body"), value="species"),
-            ui.nav_panel("BINs", ui.output_ui("bins_body"), value="bins"),
+            ui.nav_panel("Gap analysis",
+                        ui.div(ui.output_ui("gap_body"), class_="bc-fill-output"),
+                        value="gap"),
+            ui.nav_panel("Species",
+                        ui.div(ui.output_ui("species_body"), class_="bc-fill-output"),
+                        value="species"),
+            ui.nav_panel("BINs",
+                        ui.div(ui.output_ui("bins_body"), class_="bc-fill-output"),
+                        value="bins"),
             *[_grade_panel(g) for g in GRADES],
-            ui.nav_panel("Specimens", ui.output_ui("specimens_body"),
-                         value="specimens"),
+            ui.nav_panel("Specimens",
+                        ui.div(ui.output_ui("specimens_body"), class_="bc-fill-output"),
+                        value="specimens"),
             id="nav",
             widths=(2, 10),
+        ),
+        class_="bc-nav-fill",
+        ),
+        class_="bc-app-shell",
         ),
     )
 
@@ -707,6 +792,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                                        class_="btn-sm mb-2"),
                     ui.HTML(_gap_html(_sorted_by(gaps, gap_sort),
                                       sort_state=gap_sort.get())),
+                    class_="bc-tab-body",
                 )
             return _needs_analysis(body)
 
@@ -737,6 +823,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                                        "Download species analysis (xlsx)",
                                        class_="btn-sm mb-2"),
                     ui.HTML(_checklist_html(checklist, sort_state=checklist_sort.get())),
+                    class_="bc-tab-body",
                 )
             return _needs_analysis(body)
 
@@ -769,6 +856,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                                        "Download BIN analysis (xlsx)",
                                        class_="btn-sm mb-2"),
                     ui.HTML(_bins_html(content, sort_state=bins_sort.get())),
+                    class_="bc-tab-body",
                 )
             return _needs_analysis(body)
 
@@ -861,6 +949,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     ui.HTML(_group_html(rows, _all_columns_ordered(rows),
                                         sort_input="group_sort_click",
                                         sort_state=group_sort.get())),
+                    class_="bc-tab-body",
                 )
             return _needs_analysis(body)
 
@@ -1060,6 +1149,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     sort_input="spec_sort_click",
                     sortable=frozenset(table.sortable_columns),
                     sort_state=(table.sort_column, table.sort_descending))),
+                class_="bc-tab-body",
             )
 
         @reactive.effect
@@ -1498,13 +1588,22 @@ def _table(frame: pd.DataFrame, labels: dict[str, str] | None = None,
             cells.append(rendered)
         body.append("<tr>" + "".join(cells) + "</tr>")
     more = ("" if len(frame) <= limit else
-            f"<p class='text-muted small'>Showing {limit:,} of {len(frame):,} rows.</p>")
+            f"<p class='text-muted small mb-0 mt-1'>Showing {limit:,} of "
+            f"{len(frame):,} rows.</p>")
+    # A single top-level element, not two siblings (the table div and a
+    # trailing <p>) -- round 5, items 7/10: the page-level CSS makes *this*
+    # element (".bc-scroll") the one that flexes to fill whatever space its
+    # container has and scrolls internally (see the ".bc-tab-body" rules in
+    # create_app's stylesheet), which only works if it is truly the last DOM
+    # child of that container. The "Showing N of M" note lives inside it, not
+    # after it, so it is part of the scrolling content instead of extra
+    # height tacked on past the fill area.
     return (
-        f"<div class='{SCROLL_CLASS}' style='max-height:62vh;overflow:auto;'>"
+        f"<div class='{SCROLL_CLASS}' style='overflow:auto;height:100%;'>"
         "<table class='table table-sm table-hover' style='font-size:13px;"
         "border-collapse:separate;'>"
         f"<thead><tr>{head}</tr></thead>"
-        f"<tbody>{''.join(body)}</tbody></table></div>{more}"
+        f"<tbody>{''.join(body)}</tbody></table>{more}</div>"
     )
 
 

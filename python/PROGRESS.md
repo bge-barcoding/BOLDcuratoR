@@ -67,6 +67,55 @@ Files-style install location is often not writable without admin rights.
   removable -- a clean-up button with a user confirmation, not automatic
   silent deletion.
 
+**Layout -- items 6, 7, 8, 10 fixed together (one underlying cause)**
+
+All four turned out to be the same root cause: every table was capped at a
+fixed `max-height:62vh`, sized off the viewport alone with no knowledge of
+how tall the toolbar/caption/banner chrome *around* it actually was on any
+given screen. With few rows the table itself was short, so the numbers
+never collided; with enough rows to hit the table's own `limit` (500) and
+print a "Showing 500 of N rows" note **below** the scroll box, or with a
+BAGS group tall enough to need its own note banner, the extra chrome pushed
+total page height past 100vh -- a second, page-level scrollbar appeared
+*alongside* the table's own, on top of already-wrapped, tall table rows
+making everything worse. Rewritten as a real flex layout instead of a
+fixed-vh guess: `ui/app.py`'s stylesheet pins `.bc-app-shell` (header +
+banner + nav) to exactly `100vh`; `.bc-nav-fill`/`.bc-fill-output`/
+`.bc-tab-body` carry that height down through Bootstrap's own `.row`/
+`.col-sm-10` grid and Shiny's own output wrapper div into each screen's
+markup (`class_="bc-tab-body"` added to the outer `ui.div(...)` returned by
+all five *_body render functions); only the **last child** of `.bc-tab-body`
+-- always the table, by construction -- is allowed to grow and gets the
+scrollbar; every row above it (toolbars, captions, a BAGS group's note)
+keeps its natural height. `_table()`'s own wrapper div: `max-height:62vh`
+dropped for `overflow:auto;height:100%` (sized by the flex chain, not a
+viewport guess), and the "Showing N of M" note moved *inside* that div
+(it was a trailing sibling `<p>` before, which broke the ":last-child"
+assumption and, worse, was literally invisible to the intended scroll area).
+`.tab-pane.active` also carries its own `overflow-y:auto` as a fallback
+for the one tab with no table (Data Input): if its form content is ever
+taller than the window, that tab alone scrolls, never the page.
+
+Two genuine surprises while wiring the flex chain up (the classic
+"min-height:auto" flex trap, twice): Bootstrap's `.row` defaults to
+`flex-wrap:wrap`, which stopped `align-items:stretch` from actually
+stretching `.col-sm-10` to the row's own height -- fixed by forcing
+`flex-wrap:nowrap;align-items:stretch` explicitly on that one row (there
+are only ever two columns, nav and content, so wrapping was never wanted
+anyway). Round 5, item 8 (compact, non-wrapping rows) is one CSS rule
+(`.bc-scroll td, .bc-scroll th { white-space:nowrap; ... }`), needed
+anyway once round 5, item 9 put every column into the same tables that
+also had to stop wrapping.
+
+Verified live: `document.documentElement.scrollHeight` measured equal to
+`window.innerHeight` (zero page overflow) on every tab -- Data Input,
+Specimens, all five BAGS grades, Species, BINs, Gap analysis -- at three
+window sizes (1280×720, 1024×768, 1400×900); the table's own internal
+scroll still works (`tools/drive_ui.py`'s scroll-position-preserved and
+sticky-header checks both pass); horizontal scroll with sticky columns
+still pins correctly when scrolled sideways too. `tools/drive_ui.py` and
+the full pytest suite both green.
+
 **Data input tab**
 - [x] 4. Auto-save should be the default, fixed at 1 minute, with no option
   to change the interval -- hide the interval box and tidy up the control.
@@ -90,16 +139,18 @@ Files-style install location is often not writable without admin rights.
   "Sessions are stored in /root/.boldcurator/sessions.sqlite -- deleting
   that file (or the Delete button above) is the only way to lose them;
   closing the app does not."
-- [ ] 6. The window should not need to scroll vertically -- everything should
-  fit on one page. This applies to the whole app, not just this tab.
+- [x] 6. The window should not need to scroll vertically -- everything should
+  fit on one page. This applies to the whole app, not just this tab. Fixed
+  together with items 7, 8 and 10 (one root cause) -- see "Layout" above.
 
 **BAGS tabs**
-- [ ] 7. With a few records there is no page scroll, but with many records
+- [x] 7. With a few records there is no page scroll, but with many records
   the *whole page* grows a vertical scrollbar in addition to the table's own
   vertical scroll. Only the table should scroll when the window is
-  maximized -- investigate why the page grows at all.
-- [ ] 8. Rows should not wrap text; rows should be vertically compact so more
-  fit in the same space.
+  maximized -- investigate why the page grows at all. Fixed -- see "Layout"
+  above.
+- [x] 8. Rows should not wrap text; rows should be vertically compact so more
+  fit in the same space. Fixed -- see "Layout" above.
 - [x] 9. Every BAGS group specimen table should show all columns (with
   horizontal scroll), the same as the Specimens tab's table -- currently they
   show a curated subset instead. Fixed -- `_group_html`'s `columns` parameter
@@ -112,8 +163,9 @@ Files-style install location is often not writable without admin rights.
   still green.
 
 **Specimen tab**
-- [ ] 10. Remove the page's own vertical scroll; keep only the table's
-  vertical scroll (same underlying issue as item 7, on this tab).
+- [x] 10. Remove the page's own vertical scroll; keep only the table's
+  vertical scroll (same underlying issue as item 7, on this tab). Fixed --
+  see "Layout" above.
 
 **Gap analysis tab**
 - [x] 11. Add a table download as xlsx, the same as the Species tab already
