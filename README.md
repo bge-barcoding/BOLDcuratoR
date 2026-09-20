@@ -1,3 +1,5 @@
+# BOLDCuratoR
+
 Tools to check and curate data on BOLD based on input taxonomy, geography, datasets and projects. This repository holds two implementations, developed together so they can reference each other and stay in sync:
 
 - **This R Shiny app** (root of the repo, this README) — works against BOLD's live API. Uses BOLDconnectR (https://github.com/boldsystems-central/BOLDconnectR). Requires a BOLD API key and an internet connection for every search.
