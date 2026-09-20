@@ -64,6 +64,106 @@ capped every table's column width, and flattened the Specimens/BAGS
 curation toolbar to one row. Full details, as always, under each round's
 own "Open issues" section below.
 
+## Open issues from curator feedback, round 7 -- 3 bugs resolved, 2 larger items in progress
+
+Reported after round 6 shipped. Three concrete bugs (fixing one at a time,
+one commit per item, verified with the existing test suite and a live
+`tools/drive_ui.py` run before moving to the next) plus two larger asks
+that don't fit that shape -- a new GitHub Pages website, and a repo
+structure discussion -- tracked here too, with their own write-ups further
+down once addressed rather than squeezed into this list's format.
+
+**Search tab**
+- [x] 1. The page still has a horizontal scrollbar, and shouldn't. Possibly
+  bring the dataset-codes and project-codes boxes inward, closer to the
+  rest, to fit better. Root cause was CSS, not the column layout the
+  curator's own suggested fix targeted: `.tab-pane.active` (round 5's own
+  layout fix) set `overflow-y: auto` but never `overflow-x`, and the CSS
+  spec's own visible/non-visible interaction rule computes an unset
+  `overflow-x` as `auto` too whenever the other axis isn't `visible` --
+  so Bootstrap's own row/column gutter (a `.row` is deliberately slightly
+  wider than its parent via negative margins, self-cancelling against
+  each `.col`'s matching padding -- completely normal, invisible in
+  ordinary Bootstrap usage) showed up as a real, visible horizontal
+  scrollbar. Fixed with one line: `overflow-x: hidden` alongside the
+  existing `overflow-y: auto`. Nothing was actually cut off by hiding it
+  (confirmed: `document.documentElement.scrollWidth === window.innerWidth`
+  on the Search tab after the fix) -- only an unused gutter sliver -- so
+  the column layout itself (5/4/3) was left alone. Doesn't touch the
+  table tabs' own intentional horizontal scroll (`.bc-scroll`, nested
+  deeper, unaffected by a `.tab-pane`-level rule).
+
+**BAGS A, B, D tabs**
+- [x] 1. The species-selection dropdown truncates its own text (a fixed
+  420px cuts off the specimen count in parentheses) -- there is room to
+  widen it. Fixed -- the fixed `width="420px"` on the `<select>` itself
+  is now `width="100%"` inside a flexible wrapper
+  (`flex:1 1 auto;min-width:280px;max-width:720px;`) in the row it
+  shares with the "N species to work through" text and the
+  Previous/Next buttons, so it actually grows to use the room a wide
+  window has rather than truncating regardless of it. Verified live: the
+  full caption ("Species: Vanessa atalanta (>10 specimens, single BIN)
+  (400)") renders with nothing cut off at 1400px.
+
+**BAGS analysis**
+- [x] 1. Only records with a BIN assignment should count toward a BAGS
+  grade -- make sure a BIN-less record is excluded from grading
+  calculations. The records themselves should still appear in the
+  specimen table; only their absence from every BAGS table changes. This
+  is a deliberate reversal of round 6's own fix, on the project owner's
+  explicit instruction, not a regression of it: round 6 found that
+  `core.bags.calculate_bags_grades`'s `specimen_count` counted every
+  species-level record **regardless of BIN**, matching the original R
+  app (`R/utils/bags_grading.R`'s `calculate_bags_grade`) faithfully, and
+  made the group-table display agree with that count by also including
+  BIN-less records there. This request says R's own behaviour is wrong
+  for this app's purposes -- a record with no BIN yet cannot be judged on
+  "single BIN, N specimens" at all, so round 7 excludes it from **both**
+  sides again, just in the opposite direction: `calculate_bags_grades`
+  now drops a species-level record with no `bin_uri` before counting
+  anything (`core/bags.py`), and `specimens_for_grade`
+  (`core/grouping.py`) once again requires a BIN for a record to be a
+  "core" member of its species' group, so the two stay in agreement. A
+  species with *no* BIN-assigned records at all now gets no grade at all
+  (absent from the grades table, not defaulted to D or E) rather than one
+  computed from nothing it can actually be judged on.
+
+  Both modules' docstrings updated to record this as a deliberate,
+  requested divergence from R (not a parity target for this one
+  behaviour any more), so a future session doesn't "fix" it back.
+  `tests/test_bags.py`/`test_grouping.py` updated: the old test asserting
+  R's counting behaviour now asserts the opposite (9 BIN-assigned + 2
+  BIN-less specimens grades B on 9, not A on 11, and shows only the 9);
+  a new test covers a species with zero BIN-assigned records getting no
+  grade and appearing in no grade's groups.
+
+  The parity harness (which compares this port against a committed R
+  reference fixture, and legitimately now diverges from it by design)
+  needed a new explanation category rather than silently failing:
+  `BIN_LESS_EXCLUDED_FROM_BAGS` in `parity/compare.py`'s `EXPLANATIONS`
+  registry, recognised generically from the fixture itself (which species
+  carry a species-level, BIN-less record) since this sandbox has no R
+  installed and cannot regenerate the committed reference CSVs to add a
+  dedicated fixture case the usual way. `parity/REPORT.md` (auto-generated
+  by `compare.py`) picked up the new category on the next run.
+
+  Full suite green (329 tests, +1) including the parity gate; live
+  verification relied on the new unit/parity tests rather than a
+  hand-built fixture with BIN-less records through the running UI, since
+  `tests/make_fake_package.py`'s synthetic data doesn't currently produce
+  any.
+
+**Website (new feature)**
+- [ ] A GitHub Pages site for curators: find the right install package for
+  their OS, brief setup/use instructions, room for a future screen
+  recording, and an FAQ section.
+
+**Repo structure (discuss options)**
+- [ ] Whether to move `python/` to a fresh repository (the original plan)
+  or keep the R and Python apps together in this one repo, tidied so each
+  stays isolated but releases (including built installers) for both can
+  be automated and kept in sync.
+
 ## Open issues from curator feedback, round 6 -- all six resolved
 
 Reported after round 5 shipped, including an immediate follow-up on round

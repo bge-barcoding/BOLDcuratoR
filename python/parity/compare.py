@@ -34,7 +34,7 @@ REPORT = HERE / "REPORT.md"
 from boldcurator.core import bags, bins, selection  # noqa: E402
 from boldcurator.core.pipeline import process_specimen_data  # noqa: E402
 from boldcurator.core.ranking import score_and_rank  # noqa: E402
-from boldcurator.core.species import is_valid_species_name  # noqa: E402
+from boldcurator.core.species import is_species_level, is_valid_species_name  # noqa: E402
 
 
 # --------------------------------------------------------------------------
@@ -76,6 +76,18 @@ EXPLANATIONS = {
         "means 'contains cf.' OR 'contains aff.<Reference>' -- so any cf. "
         "record passes regardless of the reference species. Under the unified "
         "rule such records are simply not species-level."
+    ),
+    "BIN_LESS_EXCLUDED_FROM_BAGS": (
+        "Round 7: a species-level record with no BIN assigned yet is "
+        "deliberately excluded from BAGS grading entirely here (it cannot be "
+        "judged on \"single BIN, N specimens\"), on the project owner's "
+        "explicit instruction -- core.bags.calculate_bags_grades drops it "
+        "before counting anything. R's calculate_bags_grade "
+        "(R/utils/bags_grading.R) counts it regardless of BIN. This is a "
+        "deliberate, requested divergence from R, not a bug -- round 6 of "
+        "this port matched R on purpose here, before this request reversed "
+        "it. A species can also disappear from Python's graded set entirely "
+        "if none of its records have a BIN, which R would still grade."
     ),
 }
 
@@ -247,7 +259,25 @@ def main() -> int:
     graded_r = set(r_bags["species"])
     graded_py = set(py_bags["species"]) if len(py_bags) else set()
 
+    # Round 7: species carrying at least one species-level record with no
+    # BIN -- R's calculate_bags_grade counts it, this port's
+    # calculate_bags_grades deliberately does not (BIN_LESS_EXCLUDED_FROM_BAGS).
+    # Computed straight from the raw fixture, not `frame` after
+    # process_specimen_data, since that is all a comparison run in this
+    # sandbox (no R, no way to regenerate the committed R reference) can
+    # check against.
+    species_level = is_species_level(fixture)
+    no_bin = fixture["bin_uri"].astype(str).str.strip() == ""
+    bin_less_species = set(
+        fixture.loc[species_level & no_bin, "species"].astype(str).str.strip()
+    )
+
     def explain_bags(key, col, rv, pv):
+        if key in bin_less_species and (
+            key in graded_r ^ graded_py or col in
+            ("specimen_count", "bags_grade", "bin_count", "shared_bins")
+        ):
+            return "BIN_LESS_EXCLUDED_FROM_BAGS"
         if key in graded_r ^ graded_py:
             return "UNIFIED_SPECIES_RULE"
         return None

@@ -116,16 +116,15 @@ def test_grade_a_groups_by_species():
     assert groups[0].specimen_count == 12
 
 
-def test_a_bin_less_record_still_counts_toward_and_shows_in_its_grade():
-    """Round 6, BAGS logic item 1: a curator found a species graded A
+def test_a_bin_less_record_does_not_count_toward_or_show_in_any_grade():
+    """Round 7, BAGS analysis item 1: a BIN-less record must not move a
 
-    (>=11 specimens) whose own group table showed only 9 rows. Cause: some
-    of its species-level records had no BIN yet -- ``calculate_bags_grades``
-    counts them toward ``specimen_count`` regardless (matching R), but
-    ``specimens_for_grade`` used to also require a BIN to treat a record as
-    a member of its species' group, silently dropping the BIN-less ones
-    from what the curator actually saw while they still counted toward the
-    threshold that put the species in grade A in the first place.
+    grade one way or the other, and must not appear in that grade's group
+    table either -- the project owner's explicit call, a deliberate
+    divergence from R (which counts it; round 6 of this port matched that,
+    before this request reversed it). 9 BIN-assigned records plus 2
+    BIN-less ones must grade B (3-10 specimens), not A, and the group must
+    show only the 9.
     """
     frame = _frame([
         *[{"processid": f"B{i}", "species": "Papilio machaon", "bin_uri": "BOLD:E",
@@ -139,14 +138,32 @@ def test_a_bin_less_record_still_counts_toward_and_shows_in_its_grade():
     ])
     grades = calculate_bags_grades(frame)
     assert grades.loc[grades["species"] == "Papilio machaon",
-                      "bags_grade"].iloc[0] == "A"
+                      "bags_grade"].iloc[0] == "B"
     assert grades.loc[grades["species"] == "Papilio machaon",
-                      "specimen_count"].iloc[0] == 11
+                      "specimen_count"].iloc[0] == 9
 
-    groups = group_specimens(frame, grades, "A")
+    groups = group_specimens(frame, grades, "B")
     assert len(groups) == 1
-    assert groups[0].specimen_count == 11
-    assert set(groups[0].specimens["processid"]) == {f"B{i}" for i in range(11)}
+    assert groups[0].specimen_count == 9
+    assert set(groups[0].specimens["processid"]) == {f"B{i}" for i in range(9)}
+
+
+def test_a_species_with_no_bin_assigned_records_gets_no_grade_at_all():
+    """Round 7: nothing to judge a BIN cohesion grade on -> no grade, not a
+
+    default one -- and it must not show up in any grade's group list.
+    """
+    frame = _frame([
+        {"processid": "N1", "species": "Bombus terrestris", "bin_uri": "",
+         "quality_score": 5},
+        {"processid": "N2", "species": "Bombus terrestris", "bin_uri": pd.NA,
+         "quality_score": 4},
+    ])
+    grades = calculate_bags_grades(frame)
+    assert "Bombus terrestris" not in set(grades["species"])
+    for grade in GRADES:
+        groups = group_specimens(frame, grades, grade)
+        assert all("Bombus terrestris" not in g.species for g in groups)
 
 
 # -- the filter ------------------------------------------------------------
