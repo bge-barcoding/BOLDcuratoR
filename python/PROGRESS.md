@@ -44,6 +44,62 @@ project owner installed it and confirmed the app launches in its own
 browser-app window, "looks like a regular app." That same real-world test
 surfaced **round 4** (7 issues) -- now also closed, see below.
 
+## Open issues from curator feedback, round 5 -- 11 open
+
+Reported after the project owner tried the app for real curation work. Fixing
+one at a time, one commit per item, verified with the existing test suite and
+a live `tools/drive_ui.py` run before moving to the next. Storage-location
+question below (file handling, item 2) was put to the project owner before
+starting: **keep the snapshot under the user app-data folder**
+(`~/.boldcurator/`), not literally next to the installed app -- a Program
+Files-style install location is often not writable without admin rights.
+
+**File handling**
+- [ ] 1. File load/download should always be reachable from the running app,
+  not only the one-time first-run setup screen -- showing which file is in
+  use, when it was downloaded, and the BOLD package version. A button on the
+  Data Input tab, at the top.
+- [ ] 2. The snapshot database should live in the program's own data folder
+  (decided above: `~/.boldcurator/`), unzipped there (or downloaded then
+  unzipped in place), not wherever the curator happened to point the setup
+  screen at.
+- [ ] 3. When a new file is downloaded/updated, the old one should be
+  removable -- a clean-up button with a user confirmation, not automatic
+  silent deletion.
+
+**Data input tab**
+- [ ] 4. Auto-save should be the default, fixed at 1 minute, with no option
+  to change the interval -- hide the interval box and tidy up the control.
+- [ ] 5. Curator asked where sessions are saved, and what would remove or
+  lose them -- needs a real answer plus something visible in the app so this
+  doesn't have to be asked again.
+- [ ] 6. The window should not need to scroll vertically -- everything should
+  fit on one page. This applies to the whole app, not just this tab.
+
+**BAGS tabs**
+- [ ] 7. With a few records there is no page scroll, but with many records
+  the *whole page* grows a vertical scrollbar in addition to the table's own
+  vertical scroll. Only the table should scroll when the window is
+  maximized -- investigate why the page grows at all.
+- [ ] 8. Rows should not wrap text; rows should be vertically compact so more
+  fit in the same space.
+- [ ] 9. Every BAGS group specimen table should show all columns (with
+  horizontal scroll), the same as the Specimens tab's table -- currently they
+  show a curated subset instead.
+
+**Specimen tab**
+- [ ] 10. Remove the page's own vertical scroll; keep only the table's
+  vertical scroll (same underlying issue as item 7, on this tab).
+
+**Gap analysis tab**
+- [ ] 11. Add a table download as xlsx, the same as the Species tab already
+  has.
+
+**Data download from the app**
+- [ ] 12. Curator can't see where downloads go, running the Windows desktop
+  build in its own (chrome-less) browser window -- investigate and make the
+  destination visible/obvious.
+
 ## NEXT SESSION — START HERE, in priority order
 
 No open curator-reported bugs right now -- four rounds are closed (see the
