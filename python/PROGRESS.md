@@ -44,7 +44,7 @@ project owner installed it and confirmed the app launches in its own
 browser-app window, "looks like a regular app." That same real-world test
 surfaced **round 4** (7 issues) -- now also closed, see below.
 
-## Open issues from curator feedback, round 5 -- 11 open
+## Open issues from curator feedback, round 5 -- all twelve resolved
 
 Reported after the project owner tried the app for real curation work. Fixing
 one at a time, one commit per item, verified with the existing test suite and
@@ -244,9 +244,35 @@ the full pytest suite both green.
   real `.xlsx` download.
 
 **Data download from the app**
-- [ ] 12. Curator can't see where downloads go, running the Windows desktop
+- [x] 12. Curator can't see where downloads go, running the Windows desktop
   build in its own (chrome-less) browser window -- investigate and make the
-  destination visible/obvious.
+  destination visible/obvious. Investigated: this app cannot control, and
+  never has controlled, *where* a download lands -- every "Download..."
+  button is an ordinary `<a download>` link (`shiny.ui.download_button`),
+  the same mechanism any website uses, so it always goes to the browser's
+  (or OS's) configured Downloads folder. What changed under this curator is
+  the window, not the download: `desktop.py`'s `browser-app` window mode
+  (round 4's Windows delivery work) launches a Chromium browser with
+  `--app=<url>` specifically to hide the toolbar/address bar and look like
+  a native app -- but a real Chrome/Edge tab would normally show a download
+  arrow or a bottom "shelf" confirming a download just happened, and that
+  browser chrome is exactly what `--app` mode hides. The download still
+  completes; nothing on screen ever said so.
+
+  Fixed two ways, both in `ui/app.py`: (1) a small always-on line under the
+  Specimens tab's six download buttons -- "Downloads save to your
+  computer's usual Downloads folder, the same as any other website
+  download." -- a permanent, written answer to "where does it go"; (2) a
+  toast (`#bc-toast`, plain CSS opacity transition, no new dependency)
+  that appears on **any** download click, app-wide -- a delegated listener
+  on `a.shiny-download-link` (the class every `download_button` carries)
+  rather than one per button, so a new download button added later is
+  covered automatically. It can only confirm the click was made, not that
+  the transfer finished (a web page has no API for that, by browser
+  design) -- accurate rather than overclaiming. Verified live:
+  `#dl_all` on the Specimens tab actually downloads a real `.tsv` (via
+  Playwright's `expect_download`) while the toast's opacity is observed
+  rising through its fade-in; `tools/drive_ui.py` still green throughout.
 
 ## NEXT SESSION — START HERE, in priority order
 

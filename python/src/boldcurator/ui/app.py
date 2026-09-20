@@ -309,7 +309,17 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             .bc-scroll td, .bc-scroll th {
                 white-space: nowrap; padding-top: 3px; padding-bottom: 3px;
             }
+            /* Round 5, item 12: a download click's own visible
+               acknowledgement -- see the click listener below. */
+            .bc-toast {
+                position: fixed; bottom: 20px; right: 20px; z-index: 2000;
+                background: #202020; color: #fff; padding: 10px 16px;
+                border-radius: 6px; font-size: 13px; opacity: 0;
+                transition: opacity 0.3s ease; pointer-events: none;
+                max-width: 320px; box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+            }
         """),
+        ui.tags.div(id="bc-toast", class_="bc-toast"),
         # One delegated listener, attached to the page once. The specimen and
         # group tables are re-rendered as raw HTML on every click (paging,
         # sorting, "next problem"...), which replaces the checkboxes' own
@@ -339,6 +349,31 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 if (del) {{
                     Shiny.setInputValue('delete_snapshot_click', del.dataset.path,
                         {{priority: 'event'}});
+                }}
+                // Round 5, item 12: a curator running the packaged desktop
+                // build in a chrome-less "browser-app" window (see
+                // desktop.py) has no visible browser UI at all -- no
+                // toolbar, no download-shelf/bubble a normal browser tab
+                // would show -- so a real, successful download can look
+                // like nothing happened. The file *is* still going to the
+                // OS's ordinary Downloads folder (this app never controls
+                // that -- it's exactly the same `<a download>` mechanism a
+                // real browser tab uses; we cannot change *where* it lands
+                // from a web page, only make the click itself visible).
+                // This toast is that visible acknowledgement.
+                var dl = e.target.closest &&
+                    e.target.closest('a.shiny-download-link');
+                if (dl && !dl.classList.contains('disabled')) {{
+                    var toast = document.getElementById('bc-toast');
+                    if (toast) {{
+                        toast.textContent = 'Downloading -- saving to your '
+                            + "computer's Downloads folder.";
+                        toast.style.opacity = '1';
+                        clearTimeout(toast._bcTimer);
+                        toast._bcTimer = setTimeout(function() {{
+                            toast.style.opacity = '0';
+                        }}, 4000);
+                    }}
                 }}
             }});
             // A table re-renders as one HTML string on every interaction
@@ -1504,8 +1539,13 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     ui.download_button("dl_fasta", "Download FASTA", class_="btn-sm"),
                     ui.download_button("dl_selected_fasta", "Download Selected FASTA",
                                        class_="btn-sm"),
-                    style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;",
+                    style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:2px;",
                 ),
+                ui.tags.span(
+                    "Downloads save to your computer's usual Downloads "
+                    "folder, the same as any other website download.",
+                    class_="small text-muted",
+                    style="display:block;margin-bottom:10px;"),
                 ui.HTML(_group_html(
                     rows, columns=_all_columns_ordered(rows), limit=len(rows),
                     sort_input="spec_sort_click",
