@@ -185,18 +185,30 @@ def _annotation_controls(prefix: str) -> list:
     element and will otherwise take the full width and stack, turning a
     one-line toolbar into half a screen of form.
 
+    Round 6, curation tools item 6: no per-field label stacked above its own
+    input any more -- that was three different heights (a one-word "Flag"
+    label next to a much longer "Corrected identification" one) is exactly
+    what made the toolbar look uneven, on top of taking a second line
+    vertically it didn't need. A compact inline "Flag" tag replaces its
+    label (a `<select>`'s own options don't show a placeholder the way a
+    text input's greyed-out text can); the two text fields use `placeholder`
+    instead of `label` -- same information, without a label row of its own.
+
     "Apply to checked" acts on ``Annotations.working`` -- the disposable
     bulk-edit selection, not the representative pick. See ``io.annotations``'s
     module docstring.
     """
     return [
-        ui.div(ui.input_select(f"{prefix}_flag", "Flag",
-                               choices=sorted(FLAG_OPTIONS), width="180px"),
-               class_="mb-0"),
-        ui.div(ui.input_text(f"{prefix}_note", "Curator note", width="260px"),
-               class_="mb-0"),
-        ui.div(ui.input_text(f"{prefix}_updated_id", "Corrected identification",
-                             width="220px"), class_="mb-0"),
+        ui.div(
+            ui.tags.span("Flag", class_="small text-muted"),
+            ui.input_select(f"{prefix}_flag", None,
+                            choices=sorted(FLAG_OPTIONS), width="115px"),
+            style="display:flex;align-items:center;gap:6px;",
+        ),
+        ui.input_text(f"{prefix}_note", None, placeholder="Curator note",
+                     width="170px"),
+        ui.input_text(f"{prefix}_updated_id", None,
+                     placeholder="Corrected identification", width="150px"),
         ui.input_action_button(f"{prefix}_apply", "Apply to checked",
                                class_="btn-primary btn-sm"),
     ]
@@ -1332,24 +1344,28 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                            class_="mb-1"),
                     ui.div(group.note, class_="alert alert-info py-1 px-2 small")
                     if group.note else ui.div(),
+                    # Round 6, curation tools item 6: one flat row, not a
+                    # column of buttons/count beside a separately-aligned
+                    # cluster of labelled inputs -- that mix of a
+                    # flex-direction:column block and align-items:end is
+                    # what made the whole toolbar look uneven and taller
+                    # than it needed to be.
                     ui.div(
-                        ui.div(
-                            ui.input_action_button(
-                                f"selall_{grade}", "Check this group",
-                                class_="btn-sm"),
-                            ui.input_action_button(f"clear_{grade}",
-                                                   "Clear checked",
-                                                   class_="btn-sm"),
-                            ui.div(f"{len(checked_here):,} checked here"
-                                   + (f" ({len(state.annotations.working):,} "
-                                      "checked in total)"
-                                      if len(state.annotations.working)
-                                      > len(checked_here) else ""),
-                                   class_="small text-muted pt-1"),
-                            style="display:flex;flex-direction:column;gap:4px;",
-                        ),
+                        ui.input_action_button(
+                            f"selall_{grade}", "Check this group",
+                            class_="btn-sm"),
+                        ui.input_action_button(f"clear_{grade}",
+                                               "Clear checked",
+                                               class_="btn-sm"),
+                        ui.tags.span(
+                            f"{len(checked_here):,} checked here"
+                            + (f" ({len(state.annotations.working):,} "
+                               "checked in total)"
+                               if len(state.annotations.working)
+                               > len(checked_here) else ""),
+                            class_="small text-muted"),
                         *_annotation_controls(f"g{grade}"),
-                        style="display:flex;align-items:end;gap:10px;"
+                        style="display:flex;align-items:center;gap:8px;"
                               "flex-wrap:wrap;margin-bottom:10px;padding:8px;"
                               "background:#f8f9fa;border:1px solid #dee2e6;"
                               "border-radius:5px;",
@@ -1526,20 +1542,19 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     style="display:flex;align-items:center;gap:10px;"
                           "flex-wrap:wrap;margin-bottom:8px;",
                 ),
+                # Round 6, curation tools item 6: one flat row -- see the
+                # matching change in _grade_body for why.
                 ui.div(
-                    ui.div(
-                        ui.input_action_button("select_page", "Check page",
-                                               class_="btn-sm"),
-                        ui.input_action_button("select_all", "Check all",
-                                               class_="btn-sm"),
-                        ui.input_action_button("clear_selection", "Clear checked",
-                                               class_="btn-sm"),
-                        ui.div(f"{len(state.annotations.working):,} checked",
-                               class_="small text-muted pt-1"),
-                        style="display:flex;flex-direction:column;gap:4px;",
-                    ),
+                    ui.input_action_button("select_page", "Check page",
+                                           class_="btn-sm"),
+                    ui.input_action_button("select_all", "Check all",
+                                           class_="btn-sm"),
+                    ui.input_action_button("clear_selection", "Clear checked",
+                                           class_="btn-sm"),
+                    ui.tags.span(f"{len(state.annotations.working):,} checked",
+                                class_="small text-muted"),
                     *_annotation_controls("sp"),
-                    style="display:flex;align-items:end;gap:10px;flex-wrap:wrap;"
+                    style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;"
                           "margin-bottom:10px;padding:8px;background:#f8f9fa;"
                           "border:1px solid #dee2e6;border-radius:5px;",
                 ),

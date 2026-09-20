@@ -205,9 +205,42 @@ and a live `tools/drive_ui.py` run before moving to the next.
   test closes.
 
 **Curation tools on the Specimens and BAGS tables**
-- [ ] 6. The toolbar of dropdowns and buttons above these tables needs to be
+- [x] 6. The toolbar of dropdowns and buttons above these tables needs to be
   more compact, ideally a single line -- spacing looks uneven and there is
-  unused space to the right (per the curator's screenshots).
+  unused space to the right (per the curator's screenshots). Two separate
+  causes, both in `ui/app.py`:
+
+  1. **Uneven spacing**: `_annotation_controls` (Flag/Curator note/Corrected
+     identification/Apply, shared by both screens) had a `<label>` stacked
+     *above* each of the first three inputs -- three different label
+     lengths ("Flag" vs "Corrected identification") at three different
+     widths, which is what actually looked uneven, on top of costing a
+     second line of height it didn't need. Fixed: the two text inputs use
+     `placeholder=` instead of `label=` (same information, no label row);
+     the flag `<select>` (which can't take a placeholder the way a text
+     input can) gets a small inline `<span>Flag</span>` beside it instead
+     of a label above it.
+  2. **Not actually one line, and empty space to the right**: the
+     "Check page/Check all/Clear checked" button group sat in its own
+     `flex-direction:column` block (stacked, with the checked-count text
+     as a fourth stacked line) *beside* the (also somewhat tall)
+     annotation controls, in a row aligned `align-items:end` -- a column
+     of stacked items next to a row of items, bottom-aligned, is what left
+     empty space around the shorter items and made the whole thing taller
+     than its content needed. Flattened to one real row
+     (`align-items:center`, no more nested column), on both the Specimens
+     toolbar and each BAGS group's toolbar (`_grade_body`) -- the checked
+     count moved from its own stacked line to an inline `<span>` in the
+     same row as the buttons.
+
+  Also trimmed the annotation controls' own widths (select 150px→115px,
+  note 220px→170px, corrected-ID 200px→150px) so the *entire* row --
+  check-buttons/count/flag/note/ID/Apply -- fits on one line at a normal
+  window width instead of "Apply to checked" alone being left to wrap.
+
+  Verified live at 1400x900: both the Specimens tab's toolbar and a BAGS
+  group's toolbar render as a single row with every control visible and no
+  wrap. Full suite green; `tools/drive_ui.py` green.
 
 ## Open issues from curator feedback, round 5 -- all twelve resolved
 
