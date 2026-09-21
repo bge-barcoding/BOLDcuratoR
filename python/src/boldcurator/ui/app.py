@@ -244,6 +244,29 @@ def _grade_panel(grade: str) -> ui.Tag:
     )
 
 
+def _banner_text(warning: str) -> str:
+    """A search over a long taxon list can produce a "No records for:
+    <hundreds of names>" warning that, rendered in full in the banner --
+    above the nav, spanning the whole app width -- squashes everything below
+    it into a sliver. The Gap analysis tab already lists every typed taxon's
+    Found/Missing status once a search has run (which it has, by the time
+    the banner can render at all), so the specifics belong there, not
+    repeated as a wall of text here. Matched by prefix, not a blanket
+    rewrite: the ambiguous-name and missing-dataset/project-code warnings
+    the banner also renders have no Gap analysis equivalent to point to, so
+    they keep their own detail. The "Check size" pre-check box
+    (``estimate_box``) is a separate warnings list built before a search has
+    even run -- it keeps the full unmatched-names detail unchanged, since
+    there is no Gap analysis tab yet to point to instead.
+    """
+    if warning.startswith("No records for: "):
+        return (
+            "Some of the taxa you typed did not match any records in this "
+            "snapshot -- check the spelling, or see the Gap analysis tab "
+            "for exactly which ones.")
+    return warning
+
+
 def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                sessions_path: str | Path | None = None) -> App:
     store = SnapshotStore(snapshot)
@@ -1140,7 +1163,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             if search is None or not search.warnings:
                 return ui.div()
             return ui.div(
-                *[ui.div(w) for w in search.warnings],
+                *[ui.div(_banner_text(w)) for w in search.warnings],
                 class_="alert alert-warning py-2 px-3 small mb-3",
             )
 

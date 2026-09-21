@@ -64,6 +64,42 @@ capped every table's column width, and flattened the Specimens/BAGS
 curation toolbar to one row. Full details, as always, under each round's
 own "Open issues" section below.
 
+## The "no records for" banner squashing the app on a long taxa list
+
+Reported directly, with a screenshot: searching a long species list where
+several names don't match produced a "No records for: <names>..." warning
+banner tall enough to squash the nav and every screen below it into a
+sliver. That banner (`ui/app.py`'s `banner()`) sits above the nav, full app
+width, and simply rendered every one of `SearchState.warnings` verbatim --
+fine for a short warning, not for a list of unmatched names running to
+hundreds of characters.
+
+Fixed with a new `_banner_text()` (module-level in `ui/app.py`, so it's unit
+testable on its own): a warning starting with `"No records for: "` (the
+unmatched-*taxa* case specifically -- matched by prefix, so it doesn't touch
+the differently-worded missing-dataset/project-code warning or the
+ambiguous-name one) is replaced with a fixed, short line pointing at the Gap
+analysis tab, which already lists every typed taxon's Found/Missing status
+once a search has run -- exactly the "specifics" requested, already built,
+just not linked from here. Deliberately **not** touched: the "Check size"
+pre-check box (`estimate_box`), which builds its own warnings from the same
+`AppState._build()` before any search has run -- there is no Gap analysis
+tab yet to point to at that stage, so it keeps the full list of names, which
+is also what an existing test (`test_search_form.py`) already asserts on.
+
+3 new tests (`test_ui.py`): `_banner_text` shortens the unmatched-taxa case
+and leaves the other two warning shapes alone; an end-to-end check that the
+same long-taxa search produces the full list in `estimate()`'s pre-check
+warnings but the shortened line once it reaches the banner. 340 tests pass
+(was 337); parity gate unaffected (no scoring/grading touched). Verified
+live with `tools/drive_ui.py`-style Playwright against a fixture snapshot,
+reproducing the reported shape (Search tab, 80 unmatched names plus one real
+one): the banner renders as a single 39px-tall line ("Some of the taxa you
+typed did not match any records in this snapshot -- check the spelling, or
+see the Gap analysis tab for exactly which ones."), the nav and the Species
+screen beneath it render at their normal size, and the Gap analysis tab
+does list the specific unmatched names as "Missing".
+
 ## App version display, and a real Zenodo "check for update"
 
 Requested directly by the project owner, prompted by a question about how to
