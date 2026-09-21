@@ -30,6 +30,7 @@ from pathlib import Path
 import pandas as pd
 from shiny import App, reactive, render, ui
 
+from .. import __version__
 from ..config.constants import (
     CONTINENT_COUNTRIES,
     DEFAULT_SESSIONS_PATH,
@@ -243,6 +244,29 @@ def _grade_panel(grade: str) -> ui.Tag:
     )
 
 
+def _banner_text(warning: str) -> str:
+    """A search over a long taxon list can produce a "No records for:
+    <hundreds of names>" warning that, rendered in full in the banner --
+    above the nav, spanning the whole app width -- squashes everything below
+    it into a sliver. The Gap analysis tab already lists every typed taxon's
+    Found/Missing status once a search has run (which it has, by the time
+    the banner can render at all), so the specifics belong there, not
+    repeated as a wall of text here. Matched by prefix, not a blanket
+    rewrite: the ambiguous-name and missing-dataset/project-code warnings
+    the banner also renders have no Gap analysis equivalent to point to, so
+    they keep their own detail. The "Check size" pre-check box
+    (``estimate_box``) is a separate warnings list built before a search has
+    even run -- it keeps the full unmatched-names detail unchanged, since
+    there is no Gap analysis tab yet to point to instead.
+    """
+    if warning.startswith("No records for: "):
+        return (
+            "Some of the taxa you typed did not match any records in this "
+            "snapshot -- check the spelling, or see the Gap analysis tab "
+            "for exactly which ones.")
+    return warning
+
+
 def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                sessions_path: str | Path | None = None) -> App:
     store = SnapshotStore(snapshot)
@@ -454,9 +478,13 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         ui.div(
             ui.tags.h4("BOLDcurator", style="margin:0;"),
             ui.tags.span(
-                f"{info.snapshot_id} · {info.row_count:,} records · "
+                f"v{__version__} · {info.snapshot_id} · "
+                f"{info.row_count:,} records · "
                 f"{info.bin_count:,} BINs · offline, no BOLD API",
                 class_="text-muted small",
+                title="The app version, then the BOLD snapshot's own "
+                      "version -- see the Data tab to check the snapshot "
+                      "for an update.",
             ),
             ui.tags.a(BOLD_ATTRIBUTION_SHORT, href=CC_BY_SA_URL, target="_blank",
                      rel="noopener noreferrer", class_="small",
@@ -493,7 +521,11 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                             "snap_download_default",
                             "Download the latest public BOLD snapshot",
                             class_="btn-sm btn-primary"),
-                        style="margin:6px 0;",
+                        ui.input_action_button(
+                            "snap_check_update", "Check for update",
+                            class_="btn-sm btn-outline-secondary"),
+                        style="margin:6px 0;display:flex;gap:8px;"
+                              "align-items:center;flex-wrap:wrap;",
                     ),
                     ui.tags.details(
                         ui.tags.summary("Or provide your own source",
@@ -818,6 +850,37 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             _snap_start_download(
                 lambda fs: fs.resolve_zenodo_record(DEFAULT_SNAPSHOT_ZENODO_DOI))
 
+        def _snap_run_check() -> None:
+            from ..build import fetch_snapshot as fs
+
+            try:
+                result = fs.check_for_update(DEFAULT_SNAPSHOT_ZENODO_DOI, store.path)
+                if result.up_to_date:
+                    snap_dl_state["message"] = (
+                        f"Up to date -- {result.remote_snapshot_id} is the "
+                        "latest published snapshot.")
+                else:
+                    local = result.local_snapshot_id or "unknown"
+                    snap_dl_state["message"] = (
+                        f"A newer snapshot is available: "
+                        f"{result.remote_snapshot_id} (this session is "
+                        f"using {local}). Use \"Download the latest public "
+                        "BOLD snapshot\" above to get it.")
+            except fs.FetchError as exc:
+                snap_dl_state["message"] = f"Could not check for an update: {exc}"
+            finally:
+                # Plain dict only -- see _snap_run_download above.
+                snap_dl_state["running"] = False
+
+        @reactive.effect
+        @reactive.event(input.snap_check_update)
+        def _snap_check_update():
+            if snap_dl_state["running"]:
+                return
+            snap_dl_state.update(running=True, message="Checking for an update...")
+            threading.Thread(target=_snap_run_check, daemon=True).start()
+            snap_op_seq.set(snap_op_seq.get() + 1)
+
         @reactive.effect
         @reactive.event(input.snap_download)
         def _snap_download_custom():
@@ -1100,7 +1163,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             if search is None or not search.warnings:
                 return ui.div()
             return ui.div(
-                *[ui.div(w) for w in search.warnings],
+                *[ui.div(_banner_text(w)) for w in search.warnings],
                 class_="alert alert-warning py-2 px-3 small mb-3",
             )
 

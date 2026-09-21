@@ -34,6 +34,68 @@ def test_the_cc_by_sa_attribution_is_on_the_page(fixture_snapshot):
     assert CC_BY_SA_URL in html
 
 
+def test_the_app_version_is_on_the_page(fixture_snapshot):
+    """So a curator can tell which build they're running without opening a
+    terminal -- see PROGRESS.md's version-tracking request."""
+    from boldcurator import __version__
+    from boldcurator.ui.app import create_app
+
+    app = create_app(fixture_snapshot)
+    assert f"v{__version__}" in app.ui["html"]
+
+
+def test_the_check_for_update_button_is_on_the_data_tab(fixture_snapshot):
+    from boldcurator.ui.app import create_app
+
+    app = create_app(fixture_snapshot)
+    assert "Check for update" in app.ui["html"]
+
+
+def test_banner_text_shortens_the_unmatched_taxa_warning():
+    """A search over a long taxon list can produce a "No records for:
+    <hundreds of names>" warning that, rendered in full in the banner
+    (above the nav, full app width), squashes the rest of the app into a
+    sliver -- the specifics belong on the Gap analysis tab instead."""
+    from boldcurator.ui.app import _banner_text
+
+    long_list = ", ".join(f"Species {i}" for i in range(200))
+    warning = f"No records for: {long_list}. Check the spelling..."
+    shortened = _banner_text(warning)
+    assert "Species 199" not in shortened
+    assert "Gap analysis" in shortened
+
+
+def test_banner_text_leaves_other_warnings_alone():
+    from boldcurator.ui.app import _banner_text
+
+    ambiguous = "'Foo' is ambiguous: genus (10 records). All of them were searched."
+    missing_codes = "No records for these dataset/project codes: DS-XYZ."
+    assert _banner_text(ambiguous) == ambiguous
+    assert _banner_text(missing_codes) == missing_codes
+
+
+def test_a_long_unmatched_taxa_list_is_shortened_in_the_banner_not_the_estimate(store):
+    """The pre-check box (estimate_box) has no Gap analysis tab to point to
+    yet -- it keeps the full, actionable list of names. The banner, shown
+    only once a real search has run (so the Gap analysis tab is available),
+    does not."""
+    from boldcurator.ui.app import _banner_text
+    from boldcurator.ui.state import AppState
+
+    state = AppState(store, page_size=5)
+    names = "\n".join(f"Notarealspecies{i}" for i in range(50))
+    counts = state.estimate(taxa_text=f"Nymphalidae\n{names}")
+    estimate_warning = next(w for w in counts["warnings"]
+                            if w.startswith("No records for: "))
+    assert "Notarealspecies49" in estimate_warning  # unchanged, pre-search
+
+    state.run_search(taxa_text=f"Nymphalidae\n{names}")
+    search_warning = next(w for w in state.search.warnings
+                          if w.startswith("No records for: "))
+    assert search_warning == estimate_warning  # SearchState still carries it
+    assert "Notarealspecies49" not in _banner_text(search_warning)
+
+
 def test_all_columns_ordered_drops_nothing_and_leads_with_the_curated_ones(store):
     """Plan round 3, item 1: the specimen table shows every column, not a
 

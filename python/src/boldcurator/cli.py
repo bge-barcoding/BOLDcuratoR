@@ -11,6 +11,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from . import __version__
 from .build.fetch_snapshot import add_fetch_args
 from .core.pipeline import SizeLimitExceeded, parse_lines, run_search
 from .data.snapshot import SnapshotError, SnapshotStore
@@ -22,6 +23,7 @@ def _add_snapshot_arg(p: argparse.ArgumentParser) -> None:
 
 
 def cmd_info(args: argparse.Namespace) -> int:
+    print(f"boldcurator {__version__}")
     with SnapshotStore(args.snapshot) as store:
         info = store.info()
         print(info.describe())
@@ -358,6 +360,8 @@ def cmd_desktop(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="boldcurator", description=__doc__)
+    p.add_argument("--version", "-V", action="version",
+                   version=f"%(prog)s {__version__}")
     sub = p.add_subparsers(dest="command", required=True)
 
     info = sub.add_parser("info", help="describe a snapshot")

@@ -1,6 +1,6 @@
 # Progress and session handover
 
-Branch: `claude/wonderful-newton-qw7llz`. Plan:
+Branch: `claude/festive-ride-kl7j4l`. Plan:
 [`../docs/python-app-plan.md`](../docs/python-app-plan.md).
 
 **State: Phases 0–2 complete and fast. Phase 3 is entirely done** — all six
@@ -63,6 +63,118 @@ their own new "Data" tab (renamed the old "Data Input" tab to "Search"),
 capped every table's column width, and flattened the Specimens/BAGS
 curation toolbar to one row. Full details, as always, under each round's
 own "Open issues" section below.
+
+## The "no records for" banner squashing the app on a long taxa list
+
+Reported directly, with a screenshot: searching a long species list where
+several names don't match produced a "No records for: <names>..." warning
+banner tall enough to squash the nav and every screen below it into a
+sliver. That banner (`ui/app.py`'s `banner()`) sits above the nav, full app
+width, and simply rendered every one of `SearchState.warnings` verbatim --
+fine for a short warning, not for a list of unmatched names running to
+hundreds of characters.
+
+Fixed with a new `_banner_text()` (module-level in `ui/app.py`, so it's unit
+testable on its own): a warning starting with `"No records for: "` (the
+unmatched-*taxa* case specifically -- matched by prefix, so it doesn't touch
+the differently-worded missing-dataset/project-code warning or the
+ambiguous-name one) is replaced with a fixed, short line pointing at the Gap
+analysis tab, which already lists every typed taxon's Found/Missing status
+once a search has run -- exactly the "specifics" requested, already built,
+just not linked from here. Deliberately **not** touched: the "Check size"
+pre-check box (`estimate_box`), which builds its own warnings from the same
+`AppState._build()` before any search has run -- there is no Gap analysis
+tab yet to point to at that stage, so it keeps the full list of names, which
+is also what an existing test (`test_search_form.py`) already asserts on.
+
+3 new tests (`test_ui.py`): `_banner_text` shortens the unmatched-taxa case
+and leaves the other two warning shapes alone; an end-to-end check that the
+same long-taxa search produces the full list in `estimate()`'s pre-check
+warnings but the shortened line once it reaches the banner. 340 tests pass
+(was 337); parity gate unaffected (no scoring/grading touched). Verified
+live with `tools/drive_ui.py`-style Playwright against a fixture snapshot,
+reproducing the reported shape (Search tab, 80 unmatched names plus one real
+one): the banner renders as a single 39px-tall line ("Some of the taxa you
+typed did not match any records in this snapshot -- check the spelling, or
+see the Gap analysis tab for exactly which ones."), the nav and the Species
+screen beneath it render at their normal size, and the Gap analysis tab
+does list the specific unmatched names as "Missing".
+
+## App version display, and a real Zenodo "check for update"
+
+Requested directly by the project owner, prompted by a question about how to
+publish a new snapshot to Zenodo and whether the app can tell a curator
+theirs is stale -- investigating that surfaced two real gaps, both fixed here.
+
+**The Zenodo DOI constant was wrong.** `DEFAULT_SNAPSHOT_ZENODO_DOI`
+(`config/constants.py`) was set to `10.5281/zenodo.22849516` -- the first
+upload's own **version DOI**, not the record's fixed **concept DOI**
+(`22849515`, per the project owner). A version DOI pins to that one upload
+forever; only the concept DOI keeps redirecting to whichever version is
+newest. This was silent and untested because only one version has ever
+existed -- the day a second version is published under the concept record,
+every curator's "download the latest" button would have kept fetching the
+first one forever, with no error to notice it by. Fixed to the concept DOI.
+
+**The Zenodo download path's own "already have this" check was dead.**
+`fetch_snapshot.fetch()` already compares a local snapshot's `snapshot_id`
+(the date `snapshot_builder` stamps into the file, e.g. `2026-09-11`) against
+the source's `snapshot_id` before downloading -- but `resolve_zenodo_record`
+was setting `Source.snapshot_id` to **Zenodo's own record id** (a fresh
+number minted per version, e.g. `22849517`), which can never equal a build
+date. Only the `--manifest` path (which supplies `snapshot_id` directly)
+ever actually hit the comparison; every real download through Zenodo skipped
+it silently and just… never skipped. Fixed by recovering the date from the
+published filename instead (`bold_snapshot_2026-09-11.duckdb.gz`, the
+convention every republished snapshot already follows), falling back to the
+record id only for a file named some other way. This is what makes the new
+update check below actually comparable, not just new UI over a broken
+comparison.
+
+**A real "check for update" now exists, and doesn't download anything to
+answer the question.** `fetch_snapshot.check_for_update(record_id,
+local_path)` resolves the concept DOI (one small Zenodo API call), compares
+the result's date-based `snapshot_id` against the local file's own, and
+reports up-to-date or not without transferring the multi-GB file itself.
+Wired into `ui/app.py`'s Data tab as a "Check for update" button beside
+"Download the latest public BOLD snapshot", reusing the same
+background-thread-plus-poll plumbing the download/copy buttons already use
+(`snap_dl_state`) rather than inventing a second one. Reports one of: "Up to
+date -- `<date>` is the latest published snapshot", "A newer snapshot is
+available: `<date>` (this session is using `<date>`)...", or "Could not check
+for an update: ..." on a network failure -- verified live (this sandbox's own
+network policy blocks zenodo.org, which surfaced as exactly that last,
+graceful message rather than a crash, the same pattern every other
+Zenodo-talking control in this app already relies on).
+
+**The app itself had no version number anywhere.** `pyproject.toml` names one
+(`0.1.0.dev0`) but nothing read it. `boldcurator/__init__.py` (previously
+empty) now exposes `__version__` via `importlib.metadata`, so it can never
+drift from the one place that actually sets it. Surfaced in three places: the
+running app's header (`v0.1.0.dev0 · <snapshot id> · ...`, next to the
+snapshot info that was already there), the first-run setup screen, and the
+CLI (`boldcurator --version`/`-V`, plus a line at the top of `boldcurator
+info`'s output). Deliberately not touched: the desktop window's own title bar
+(`desktop.py`) and the installer/packaging version strings, which are a
+separate, already-working mechanism (`python-release.yml`'s tag-derived
+`AppVersion`) outside this request's scope.
+
+8 new tests (`test_fetch_snapshot.py`: the filename-recovered `snapshot_id`
+and its record-id fallback, `check_for_update`'s three outcomes;
+`test_ui.py`/`test_setup.py`: the version string and the new button are on
+the page). 337 tests pass (was 329); parity gate still green (nothing here
+touches scoring/grading). Verified live with `tools/drive_ui.py`-style
+Playwright against a fixture snapshot: the header renders
+`v0.1.0.dev0 · 2026-09-21 · ...`, the Data tab's new button sits cleanly
+beside the existing download button with no wrap or overflow
+(`scrollWidth - innerWidth == 0`), and clicking it hits the corrected
+`https://zenodo.org/api/records/22849515` URL and reports the network
+failure cleanly.
+
+**Still needed, not done here**: actually publishing a new snapshot version
+to Zenodo (a maintainer action -- build, verify, gzip, upload as a new
+version under the same concept record) is unaffected by any of this; this
+session only fixed the app's own ability to notice when that has happened.
 
 ## Open issues from curator feedback, round 7 -- all 5 items addressed
 

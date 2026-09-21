@@ -28,6 +28,14 @@ def test_the_setup_app_builds(tmp_path):
     assert app is not None
 
 
+def test_the_app_version_is_on_the_setup_page():
+    from boldcurator import __version__
+
+    resolved: "queue.Queue" = queue.Queue()
+    app = setup.create_setup_app(resolved)
+    assert f"v{__version__}" in app.ui["html"]
+
+
 def test_pick_snapshot_file_returns_none_when_the_helper_process_hangs(
     monkeypatch
 ):
