@@ -30,6 +30,7 @@ from pathlib import Path
 import pandas as pd
 from shiny import App, reactive, render, ui
 
+from .. import __version__
 from ..config.constants import (
     CONTINENT_COUNTRIES,
     DEFAULT_SESSIONS_PATH,
@@ -454,9 +455,13 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         ui.div(
             ui.tags.h4("BOLDcurator", style="margin:0;"),
             ui.tags.span(
-                f"{info.snapshot_id} · {info.row_count:,} records · "
+                f"v{__version__} · {info.snapshot_id} · "
+                f"{info.row_count:,} records · "
                 f"{info.bin_count:,} BINs · offline, no BOLD API",
                 class_="text-muted small",
+                title="The app version, then the BOLD snapshot's own "
+                      "version -- see the Data tab to check the snapshot "
+                      "for an update.",
             ),
             ui.tags.a(BOLD_ATTRIBUTION_SHORT, href=CC_BY_SA_URL, target="_blank",
                      rel="noopener noreferrer", class_="small",
@@ -493,7 +498,11 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                             "snap_download_default",
                             "Download the latest public BOLD snapshot",
                             class_="btn-sm btn-primary"),
-                        style="margin:6px 0;",
+                        ui.input_action_button(
+                            "snap_check_update", "Check for update",
+                            class_="btn-sm btn-outline-secondary"),
+                        style="margin:6px 0;display:flex;gap:8px;"
+                              "align-items:center;flex-wrap:wrap;",
                     ),
                     ui.tags.details(
                         ui.tags.summary("Or provide your own source",
@@ -817,6 +826,37 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         def _snap_download_default():
             _snap_start_download(
                 lambda fs: fs.resolve_zenodo_record(DEFAULT_SNAPSHOT_ZENODO_DOI))
+
+        def _snap_run_check() -> None:
+            from ..build import fetch_snapshot as fs
+
+            try:
+                result = fs.check_for_update(DEFAULT_SNAPSHOT_ZENODO_DOI, store.path)
+                if result.up_to_date:
+                    snap_dl_state["message"] = (
+                        f"Up to date -- {result.remote_snapshot_id} is the "
+                        "latest published snapshot.")
+                else:
+                    local = result.local_snapshot_id or "unknown"
+                    snap_dl_state["message"] = (
+                        f"A newer snapshot is available: "
+                        f"{result.remote_snapshot_id} (this session is "
+                        f"using {local}). Use \"Download the latest public "
+                        "BOLD snapshot\" above to get it.")
+            except fs.FetchError as exc:
+                snap_dl_state["message"] = f"Could not check for an update: {exc}"
+            finally:
+                # Plain dict only -- see _snap_run_download above.
+                snap_dl_state["running"] = False
+
+        @reactive.effect
+        @reactive.event(input.snap_check_update)
+        def _snap_check_update():
+            if snap_dl_state["running"]:
+                return
+            snap_dl_state.update(running=True, message="Checking for an update...")
+            threading.Thread(target=_snap_run_check, daemon=True).start()
+            snap_op_seq.set(snap_op_seq.get() + 1)
 
         @reactive.effect
         @reactive.event(input.snap_download)

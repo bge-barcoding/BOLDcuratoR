@@ -303,14 +303,22 @@ DEFAULT_SNAPSHOT_DIR = Path.home() / ".boldcurator"
 #: The Zenodo record this project's own rebuilt BOLD snapshots are published
 #: to, so the first-run setup screen can offer a single "download the latest
 #: public snapshot" button with nothing for a curator to type or look up.
-#: Given as a full DOI (round 4, item 2) so it reads the same as the citation
-#: a curator would see on the Zenodo page itself; ``fetch_snapshot`` accepts
-#: this form, a bare record id, or a doi.org/zenodo.org URL alike. Each
-#: republished snapshot (date-named, gzipped -- e.g.
-#: ``bold_snapshot_2026-09-11.duckdb.gz``) should land as a new version of
-#: *this same* record so this constant keeps resolving to the latest one;
-#: update it here if the maintainer ever publishes under a different DOI.
-DEFAULT_SNAPSHOT_ZENODO_DOI = "10.5281/zenodo.22849516"
+#:
+#: This is the **concept DOI** (``22849515``), not a specific version's own
+#: DOI (the first upload's version DOI was ``22849516``) -- Zenodo mints one
+#: fixed concept DOI per record that always redirects to whichever version
+#: is newest, and a version DOI pins to that one upload forever. Using the
+#: version DOI here was the original mistake: it looked right (it was the
+#: only DOI that existed yet) but would have quietly stopped resolving to
+#: new snapshots the moment a second version was published. Given as a full
+#: DOI (round 4, item 2) so it reads the same as the citation a curator would
+#: see on the Zenodo page itself; ``fetch_snapshot`` accepts this form, a
+#: bare record id, or a doi.org/zenodo.org URL alike. Each republished
+#: snapshot (date-named, gzipped -- e.g. ``bold_snapshot_2026-09-11.duckdb.gz``)
+#: should land as a new version *under this same concept record* so this
+#: constant keeps resolving to the latest one; update it here only if the
+#: maintainer ever publishes under a genuinely different record.
+DEFAULT_SNAPSHOT_ZENODO_DOI = "10.5281/zenodo.22849515"
 
 # --------------------------------------------------------------------------
 # Geography

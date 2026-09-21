@@ -276,6 +276,92 @@ def test_resolve_zenodo_record_picks_a_gzipped_duckdb_among_several_files(
     assert source.filename == "bold_snapshot_2026-09-11.duckdb.gz"
 
 
+def test_resolve_zenodo_record_recovers_snapshot_id_from_a_dated_filename(
+    monkeypatch,
+):
+    """A Zenodo record id (minted fresh per version) is not comparable to the
+    date ``snapshot_builder`` stamps into the file itself, so the date in the
+    published filename -- the same convention -- is preferred when present."""
+    payload = {
+        "id": 22849517,
+        "metadata": {},
+        "files": [{"key": "bold_snapshot_2026-09-18.duckdb.gz",
+                   "checksum": "md5:abc",
+                   "links": {"self": "https://x/snapshot"}}],
+    }
+    monkeypatch.setattr(fs, "_get_json", lambda url: payload)
+
+    source = fs.resolve_zenodo_record("22849517")
+    assert source.snapshot_id == "2026-09-18"
+
+
+def test_resolve_zenodo_record_falls_back_to_record_id_without_a_dated_name(
+    monkeypatch,
+):
+    payload = {
+        "id": 123456,
+        "metadata": {},
+        "files": [{"key": "bold_snapshot.duckdb", "checksum": "md5:abc",
+                   "links": {"self": "https://x/snapshot"}}],
+    }
+    monkeypatch.setattr(fs, "_get_json", lambda url: payload)
+
+    source = fs.resolve_zenodo_record("123456")
+    assert source.snapshot_id == "123456"
+
+
+def test_check_for_update_reports_up_to_date(monkeypatch, tmp_path):
+    payload = {
+        "id": 22849517,
+        "metadata": {},
+        "files": [{"key": "bold_snapshot_2026-09-11.duckdb.gz",
+                   "checksum": "md5:abc",
+                   "links": {"self": "https://x/snapshot"}}],
+    }
+    monkeypatch.setattr(fs, "_get_json", lambda url: payload)
+    monkeypatch.setattr(fs, "_local_snapshot_id", lambda path: "2026-09-11")
+
+    result = fs.check_for_update("22849515", tmp_path / "local.duckdb")
+    assert result.up_to_date is True
+    assert result.local_snapshot_id == "2026-09-11"
+    assert result.remote_snapshot_id == "2026-09-11"
+
+
+def test_check_for_update_reports_a_newer_snapshot(monkeypatch, tmp_path):
+    payload = {
+        "id": 22849517,
+        "metadata": {},
+        "files": [{"key": "bold_snapshot_2026-09-18.duckdb.gz",
+                   "checksum": "md5:abc",
+                   "links": {"self": "https://x/snapshot"}}],
+    }
+    monkeypatch.setattr(fs, "_get_json", lambda url: payload)
+    monkeypatch.setattr(fs, "_local_snapshot_id", lambda path: "2026-09-11")
+
+    result = fs.check_for_update("22849515", tmp_path / "local.duckdb")
+    assert result.up_to_date is False
+    assert result.local_snapshot_id == "2026-09-11"
+    assert result.remote_snapshot_id == "2026-09-18"
+
+
+def test_check_for_update_with_no_local_snapshot_is_not_up_to_date(
+    monkeypatch, tmp_path
+):
+    payload = {
+        "id": 22849517,
+        "metadata": {},
+        "files": [{"key": "bold_snapshot_2026-09-18.duckdb.gz",
+                   "checksum": "md5:abc",
+                   "links": {"self": "https://x/snapshot"}}],
+    }
+    monkeypatch.setattr(fs, "_get_json", lambda url: payload)
+    monkeypatch.setattr(fs, "_local_snapshot_id", lambda path: None)
+
+    result = fs.check_for_update("22849515", tmp_path / "does-not-exist.duckdb")
+    assert result.up_to_date is False
+    assert result.local_snapshot_id is None
+
+
 def test_fetch_downloads_when_the_snapshot_id_differs(
     http_server, tmp_path, monkeypatch
 ):

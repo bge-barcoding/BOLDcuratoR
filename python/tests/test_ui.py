@@ -34,6 +34,23 @@ def test_the_cc_by_sa_attribution_is_on_the_page(fixture_snapshot):
     assert CC_BY_SA_URL in html
 
 
+def test_the_app_version_is_on_the_page(fixture_snapshot):
+    """So a curator can tell which build they're running without opening a
+    terminal -- see PROGRESS.md's version-tracking request."""
+    from boldcurator import __version__
+    from boldcurator.ui.app import create_app
+
+    app = create_app(fixture_snapshot)
+    assert f"v{__version__}" in app.ui["html"]
+
+
+def test_the_check_for_update_button_is_on_the_data_tab(fixture_snapshot):
+    from boldcurator.ui.app import create_app
+
+    app = create_app(fixture_snapshot)
+    assert "Check for update" in app.ui["html"]
+
+
 def test_all_columns_ordered_drops_nothing_and_leads_with_the_curated_ones(store):
     """Plan round 3, item 1: the specimen table shows every column, not a
 

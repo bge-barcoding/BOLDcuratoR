@@ -31,6 +31,7 @@ from pathlib import Path
 
 from shiny import App, reactive, render, ui
 
+from .. import __version__
 from ..config.constants import (
     BOLD_ATTRIBUTION_TEXT,
     CC_BY_SA_URL,
@@ -123,6 +124,7 @@ def _looks_like_a_manifest(text: str) -> bool:
 def create_setup_app(resolved: "queue.Queue[Path | None]") -> App:
     app_ui = ui.page_fluid(
         ui.tags.h3("Set up BOLDcurator"),
+        ui.tags.span(f"v{__version__}", class_="text-muted small"),
         ui.p("This app works from a local snapshot of BOLD's public data "
              "package -- point it at one, or download one, to get started."),
         ui.navset_tab(

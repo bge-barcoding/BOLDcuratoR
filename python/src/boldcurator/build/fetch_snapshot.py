@@ -46,6 +46,14 @@ ZENODO_API = "https://zenodo.org/api/records/{record_id}"
 #: (no digits after the dot) never matches.
 _ZENODO_ID_IN_DOI = re.compile(r"zenodo\.(\d+)\b")
 
+#: The date this project's own published snapshots carry in their filename
+#: (``bold_snapshot_2026-09-11.duckdb.gz``) -- the same value
+#: ``snapshot_builder.build`` stamps into the file itself as ``snapshot_id``
+#: (``snapshot_id or date.today().isoformat()``). Used to recover a
+#: *comparable* ``Source.snapshot_id`` out of a Zenodo file listing -- see
+#: ``resolve_zenodo_record``.
+_SNAPSHOT_DATE_IN_FILENAME = re.compile(r"(\d{4}-\d{2}-\d{2})")
+
 #: Chunk size for the streamed download and the running sha256/md5.  A few
 #: hundred KB balances syscall overhead against progress-readout granularity
 #: for files in the hundreds-of-MB to low-GB range this exists to move.
@@ -173,12 +181,29 @@ def resolve_zenodo_record(record_id: str, *, filename: str | None = None) -> Sou
     entry = matches[0]
     checksum = entry.get("checksum", "")  # Zenodo's own form: "md5:<hex>"
     metadata = data.get("metadata", {})
+    filename = str(entry.get("key", ""))
+
+    # ``snapshot_id`` needs to be *comparable* to what's already on disk --
+    # ``_local_snapshot_id`` reads the date ``snapshot_builder`` stamped into
+    # the file at build time (e.g. "2026-09-11"). Zenodo's own record id
+    # (a new one is minted for every version) is never that date, so using
+    # it here made ``fetch()``'s "already have this one, skip" check (and
+    # this module's own ``check_for_update``) silently never match for a
+    # Zenodo-record source -- only a manifest, which supplies its own
+    # ``snapshot_id`` field directly, ever actually hit it. Recovered from
+    # the published filename instead, which carries the same date by
+    # convention (``bold_snapshot_2026-09-11.duckdb.gz``); the record id is
+    # kept as a fallback for a file named some other way, so this never
+    # raises, just stops being comparable.
+    date_match = _SNAPSHOT_DATE_IN_FILENAME.search(filename)
+    snapshot_id = date_match.group(1) if date_match else str(data.get("id", record_id))
+
     return Source(
         url=entry["links"]["self"],
         checksum=checksum or None,
-        snapshot_id=str(data.get("id", record_id)),
+        snapshot_id=snapshot_id,
         schema_version=str(metadata.get("version", "")),
-        filename=str(entry.get("key", "")),
+        filename=filename,
     )
 
 
@@ -198,6 +223,44 @@ def _local_snapshot_id(path: Path) -> str | None:
             return store.info().snapshot_id
     except Exception:
         return None
+
+
+@dataclass
+class UpdateCheck:
+    """The result of asking Zenodo what's latest, without downloading it."""
+
+    up_to_date: bool
+    local_snapshot_id: str | None
+    remote_snapshot_id: str
+    remote_filename: str
+
+
+def check_for_update(record_id: str, local_path: Path) -> UpdateCheck:
+    """Ask Zenodo what the latest snapshot is, and compare it to ``local_path``.
+
+    One small API call (``resolve_zenodo_record``), never a download -- for a
+    "is a newer snapshot available?" check the app can run any time, not only
+    when a curator is already committing to a multi-GB transfer.
+
+    ``record_id`` should be a **concept** id/DOI (``DEFAULT_SNAPSHOT_ZENODO_DOI``)
+    so this always compares against the newest published version, not one
+    pinned release. Raises :class:`FetchError` on a network failure, the same
+    as every other Zenodo-talking function here -- callers already have to
+    handle that for the download path, so there is nothing new to catch.
+
+    ``local_path`` not existing, or not being a readable snapshot, reads as
+    "no local version to compare" (``local_snapshot_id=None``,
+    ``up_to_date=False``) rather than an error -- a curator with no snapshot
+    yet still wants to know a snapshot is available, not a crash.
+    """
+    source = resolve_zenodo_record(record_id)
+    local_id = _local_snapshot_id(local_path)
+    return UpdateCheck(
+        up_to_date=local_id is not None and local_id == source.snapshot_id,
+        local_snapshot_id=local_id,
+        remote_snapshot_id=source.snapshot_id,
+        remote_filename=source.filename,
+    )
 
 
 def _verify(path: Path, checksum: str) -> None:
