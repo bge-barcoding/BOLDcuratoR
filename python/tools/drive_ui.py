@@ -360,6 +360,48 @@ def main(argv: list[str] | None = None) -> int:
         if page.locator("#group_C").count():
             check("a grade-C monophyly badge is shown",
                   "monophyletic" in tree_text.lower(), tree_text[:300])
+        check("the tree hit-areas are wider than the visible shapes",
+              page.evaluate("""
+                  () => {
+                      const hitLine = document.querySelector(
+                          "#phylo-tree-container line[stroke='transparent']");
+                      const visLine = document.querySelector(
+                          "#phylo-tree-container line[stroke='#888']");
+                      const hitCircleOk = Array.from(
+                          document.querySelectorAll('#phylo-tree-container circle'))
+                          .some(c => c.getAttribute('r') === '10');
+                      return hitLine && visLine
+                          && parseFloat(hitLine.getAttribute('stroke-width'))
+                             > parseFloat(visLine.getAttribute('stroke-width')) * 5
+                          && hitCircleOk;
+                  }
+              """))
+        check("the Newick download button is present",
+              page.locator("#dl_phylo_newick").count() > 0)
+
+        # -- reroot: right-click (dispatched directly -- see phylo-init.js's
+        # own contextmenu listener; a real synthetic right-click through
+        # Playwright is flaky at this pixel scale in practice, dispatching
+        # the event directly on the element still exercises the same
+        # listener and server round-trip) a tip and confirm the tree
+        # actually changes, not just re-renders identically.
+        before_reroot = page.locator("#phylogeny_body").inner_text()
+        page.evaluate("""
+            () => {
+                // Each tip draws two circles: a small visible one (no
+                // listeners) then a larger invisible "hit" one on top that
+                // actually carries the click/contextmenu listeners -- see
+                // phylo-init.js's own comment on why. Must target that one,
+                // not just the first <circle> in document order.
+                const c = document.querySelector(
+                    "#phylo-tree-container circle[fill='transparent']");
+                if (c) c.dispatchEvent(new MouseEvent('contextmenu', {bubbles: true}));
+            }
+        """)
+        time.sleep(SETTLE)
+        after_reroot = page.locator("#phylogeny_body").inner_text()
+        check("right-clicking a tip reroots the tree",
+              after_reroot != before_reroot)
         page.screenshot(path=str(args.out / "06-phylogeny.png"), full_page=True)
 
         check("no javascript errors", not js_errors, "; ".join(js_errors))

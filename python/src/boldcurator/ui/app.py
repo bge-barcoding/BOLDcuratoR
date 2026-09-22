@@ -1726,16 +1726,28 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 return ui.div(*rows)
 
             if result.monophyly:
+                # Same visual language the tree itself uses, not a second,
+                # conflicting palette: every grade-C tip is filled
+                # GRADE_COLOURS["C"] regardless of its own monophyly (see the
+                # `tips` list below), and a non-monophyletic species' tips
+                # additionally get a red *ring* (an SVG stroke sitting
+                # outside the fill). A badge is the same shape of thing, so
+                # it gets the same background always, plus a red ring
+                # (box-shadow, CSS's equivalent of an SVG stroke outside the
+                # fill) only when not monophyletic -- not a different fill
+                # colour, which is what made these look like two unrelated
+                # conventions before.
                 badges = []
                 for species in sorted(result.monophyly):
                     ok = result.monophyly[species]
-                    colour = "#28a745" if ok else GRADE_COLOURS["C"]
                     label = "Monophyletic" if ok else "Not monophyletic"
+                    ring = "" if ok else "box-shadow:0 0 0 2px #dc3545;"
                     badges.append(ui.tags.span(
                         f"{species}: {label}",
-                        style=f"background:{colour};color:#fff;padding:2px 10px;"
-                              "border-radius:10px;font-weight:600;font-size:12px;"
-                              "margin:2px 6px 2px 0;display:inline-block;",
+                        style=f"background:{GRADE_COLOURS['C']};color:#fff;"
+                              f"padding:2px 10px;border-radius:10px;"
+                              f"font-weight:600;font-size:12px;"
+                              f"margin:2px 8px 4px 0;display:inline-block;{ring}",
                     ))
                 rows.append(ui.div(
                     ui.tags.strong("BAGS grade C monophyly ", class_="small"),
@@ -1766,10 +1778,14 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     tip["monophyletic"] = result.monophyly[tip["species"]]
 
             container_id = "phylo-tree-container"
+            rows.append(ui.download_button(
+                "dl_phylo_newick", "Download tree (Newick)",
+                class_="btn-sm", style="margin-bottom:8px;"))
             rows.append(ui.div(
                 f"{result.tip_count:,} tips. Drag to pan, scroll to zoom, "
                 "click an internal branch to collapse it (click its tip to "
-                "expand again).",
+                "expand again). Right-click a tip or branch to reroot the "
+                "tree there.",
                 class_="bc-phylo-hint",
             ))
             rows.append(ui.div(id=container_id, class_="bc-phylo-container"))
@@ -1778,6 +1794,44 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 f"{json.dumps(result.newick)}, {json.dumps(tips)});"
             ))
             return ui.div(*rows)
+
+        @reactive.effect
+        @reactive.event(input.phylo_reroot_target)
+        def _phylo_reroot():
+            """A right-click on a tip or internal branch in the tree
+            (phylo-init.js's `requestReroot`) -- accepts either, not just a
+            tip, since rooting at a single tip of a multi-tip (BIN x
+            country) group would visually split that tip from its own
+            group's siblings for no topological reason (see
+            core.phylogeny.reroot_at's own docstring).
+
+            Mutates the stored tree in place and regenerates both the
+            Newick and the monophyly verdicts against the new root --
+            monophyly is a rooted-tree property, so it has to be
+            recomputed, not just redrawn.
+            """
+            from ..core import phylogeny as phylo
+
+            target = input.phylo_reroot_target()
+            result = phylo_state.get("result")
+            if result is None or result.tree is None or not target:
+                return
+            if not phylo.reroot_at(result.tree, target):
+                return
+            result.newick = phylo.to_newick(result.tree)
+            result.monophyly = phylo.check_monophyly(
+                result.tree, result.representatives, result.bags_grades)
+            phylo_tick.set(phylo_tick.get() + 1)
+
+        @output(id="dl_phylo_newick")
+        @render.download_button(
+            filename=lambda: f"phylogeny_{export_io.timestamp()}.nwk")
+        def _dl_phylo_newick():
+            result = phylo_state.get("result")
+            if result is None or not result.newick:
+                yield "Nothing to export: no tree has been built yet.\n"
+                return
+            yield result.newick
 
         @output
         @render.ui

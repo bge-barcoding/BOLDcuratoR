@@ -210,3 +210,108 @@ def test_build_phylogeny_drops_representatives_with_no_sequence(monkeypatch):
     assert result.tip_count == 1
     assert result.newick == ""
     assert result.warnings
+
+
+# -- reroot_at --------------------------------------------------------
+
+
+def test_reroot_at_a_tip_changes_the_newick_string():
+    names = ["t0", "t1", "t2", "t3"]
+    mat = [
+        [0.0, 0.1, 0.9, 0.9],
+        [0.1, 0.0, 0.9, 0.9],
+        [0.9, 0.9, 0.0, 0.1],
+        [0.9, 0.9, 0.1, 0.0],
+    ]
+    tree = _tree_from(names, mat)
+    before = phylo.to_newick(tree)
+    assert phylo.reroot_at(tree, "t2") is True
+    after = phylo.to_newick(tree)
+    assert after != before
+    # Still the same four tips, just rerooted.
+    for name in names:
+        assert name in after
+
+
+def test_reroot_at_an_internal_clade_keeps_its_tips_together():
+    """The point of accepting an internal-clade name, not only a tip: a
+    curator rooting on the common ancestor of a (BIN x country) group's
+    several tips must not split that group apart in the redrawn layout --
+    confirmed here by checking the two tips under the named internal clade
+    are still each other's nearest neighbours (a cherry) after rerooting
+    there, the same as they were before.
+    """
+    names = ["t0", "t1", "t2", "t3"]
+    mat = [
+        [0.0, 0.1, 0.9, 0.9],
+        [0.1, 0.0, 0.9, 0.9],
+        [0.9, 0.9, 0.0, 0.1],
+        [0.9, 0.9, 0.1, 0.0],
+    ]
+    tree = _tree_from(names, mat)
+    internal_names = [c.name for c in tree.get_nonterminals() if c.name]
+    assert internal_names, "the NJ tree should have at least one named internal clade"
+
+    target = internal_names[0]
+    assert phylo.reroot_at(tree, target) is True
+    newick = phylo.to_newick(tree)
+    assert target in newick
+    for name in names:
+        assert name in newick
+
+
+def test_reroot_at_an_unknown_name_returns_false_without_raising():
+    names = ["t0", "t1", "t2"]
+    mat = [[0.0, 0.5, 0.5], [0.5, 0.0, 0.5], [0.5, 0.5, 0.0]]
+    tree = _tree_from(names, mat)
+    before = phylo.to_newick(tree)
+    assert phylo.reroot_at(tree, "not-a-real-tip") is False
+    assert phylo.to_newick(tree) == before, "a failed reroot must not mutate the tree"
+
+
+def test_reroot_at_a_blank_name_returns_false():
+    names = ["t0", "t1", "t2"]
+    mat = [[0.0, 0.5, 0.5], [0.5, 0.0, 0.5], [0.5, 0.5, 0.0]]
+    tree = _tree_from(names, mat)
+    assert phylo.reroot_at(tree, "") is False
+
+
+def test_reroot_recomputes_monophyly_against_the_new_root():
+    """The whole reason a reroot needs to regenerate monophyly, not just
+    the Newick string: monophyly is a rooted-tree property, so the same
+    underlying topology can read as monophyletic under one root and not
+    under another. Also exactly the failure mode a single-tip reroot risks
+    for a multi-tip (BIN x country) group -- rooting AT one of a species'
+    own two tips splits it off from its sibling, breaking that species'
+    own monophyly as a side effect of where the root landed, not because
+    anything about the underlying data changed. Confirmed empirically
+    before writing this test, not assumed.
+    """
+    # Quartet topology: (A,B) and (C,D) are each other's closest pair.
+    names = ["A", "B", "C", "D"]
+    mat = [
+        [0.0, 0.1, 0.9, 0.9],
+        [0.1, 0.0, 0.9, 0.9],
+        [0.9, 0.9, 0.0, 0.1],
+        [0.9, 0.9, 0.1, 0.0],
+    ]
+    tree = _tree_from(names, mat)
+    reps = _f([
+        {"processid": "p1", "species": "sp_x", "_tip_label": "A"},
+        {"processid": "p2", "species": "sp_x", "_tip_label": "B"},
+        {"processid": "p3", "species": "sp_y", "_tip_label": "C"},
+        {"processid": "p4", "species": "sp_y", "_tip_label": "D"},
+    ])
+    grades = _f([
+        {"species": "sp_x", "bags_grade": "C"},
+        {"species": "sp_y", "bags_grade": "C"},
+    ])
+    before = phylo.check_monophyly(tree, reps, grades)
+    assert before == {"sp_x": True, "sp_y": True}
+
+    # Reroot AT one of sp_x's own two tips: splits it from its sibling B,
+    # flipping sp_x to not-monophyletic, while sp_y (untouched by this
+    # reroot) stays monophyletic.
+    assert phylo.reroot_at(tree, "A") is True
+    after = phylo.check_monophyly(tree, reps, grades)
+    assert after == {"sp_x": False, "sp_y": True}

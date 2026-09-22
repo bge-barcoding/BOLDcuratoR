@@ -205,6 +205,24 @@
       return 12 + y * rowHeight;
     }
 
+    // Re-root request, shared by both node kinds below (see requestReroot).
+    // A right-click, not left-click: left-click already means something
+    // different on every node kind (collapse on a connector, expand on a
+    // collapsed tip), so giving it a third, conflicting meaning depending
+    // on what was clicked would be worse than one consistent gesture that
+    // works the same way everywhere. Accepts an internal clade's own name
+    // too, not just a tip -- Biopython's reroot accepts either the same
+    // way, and rooting at a single tip of a multi-tip group would visually
+    // split that tip from its own group's siblings for no topological
+    // reason (see core/phylogeny.py:reroot_at's own docstring).
+    function requestReroot(evt, name) {
+      evt.preventDefault();
+      if (!name) return; // the tree's own root has no name -- nothing to do
+      if (global.Shiny && global.Shiny.setInputValue) {
+        global.Shiny.setInputValue("phylo_reroot_target", name, { priority: "event" });
+      }
+    }
+
     function drawNode(node) {
       if (node.parent) {
         viewport.appendChild(
@@ -219,18 +237,12 @@
         const meta = tipsByName[node.name];
         const collapsedHere = node.children.length > 0 && collapsed.has(node.id);
         const color = meta ? meta.color : (collapsedHere ? "#6c757d" : "#495057");
+        const canExpand = node.children.length > 0;
         const circle = svgEl("circle", {
           cx: px(node.x), cy: py(node.y), r: 4,
           fill: color, stroke: meta && meta.monophyletic === false ? "#dc3545" : "none",
           "stroke-width": 2,
         });
-        if (node.children.length > 0) {
-          circle.style.cursor = "pointer";
-          circle.addEventListener("click", () => {
-            collapsed.delete(node.id);
-            render(container, root, tipsByName, collapsed, state);
-          });
-        }
         viewport.appendChild(circle);
 
         const label = collectDisplayLabel(node, tipsByName);
@@ -241,26 +253,54 @@
         text.textContent = label;
         viewport.appendChild(text);
 
-        if (meta) {
-          circle.addEventListener("mouseenter", (evt) => showTooltip(state, evt, meta));
-          circle.addEventListener("mouseleave", () => hideTooltip(state));
+        // A 4px-radius circle is far smaller than a pointer -- this
+        // invisible, much larger circle at the same centre is the actual
+        // click/hover/right-click target; the small circle above stays
+        // purely decorative. Drawn after (on top of) the visible circle so
+        // it wins hit-testing.
+        const hit = svgEl("circle", {
+          cx: px(node.x), cy: py(node.y), r: 10, fill: "transparent",
+        });
+        // Every tip is right-click-to-reroot (below); only a *collapsed*
+        // node (standing in as a leaf) additionally left-click-expands.
+        hit.style.cursor = "pointer";
+        if (canExpand) {
+          hit.addEventListener("click", () => {
+            collapsed.delete(node.id);
+            render(container, root, tipsByName, collapsed, state);
+          });
         }
+        hit.addEventListener("contextmenu", (evt) => requestReroot(evt, node.name));
+        if (meta) {
+          hit.addEventListener("mouseenter", (evt) => showTooltip(state, evt, meta, !canExpand));
+          hit.addEventListener("mouseleave", () => hideTooltip(state));
+        }
+        viewport.appendChild(hit);
         return;
       }
 
       // Vertical connector across this node's (visible) children.
       const childYs = node.children.map((c) => c.y);
-      const line = svgEl("line", {
-        x1: px(node.x), y1: py(Math.min(...childYs)),
-        x2: px(node.x), y2: py(Math.max(...childYs)),
+      const minY = py(Math.min(...childYs));
+      const maxY = py(Math.max(...childYs));
+      viewport.appendChild(svgEl("line", {
+        x1: px(node.x), y1: minY, x2: px(node.x), y2: maxY,
         stroke: "#888", "stroke-width": 1.3,
+      }));
+      // Same "hit area" reasoning as a tip's circle above: a 1.3px-wide
+      // line needs pixel-perfect aim to click. This invisible, much wider
+      // line (drawn on top) is the actual click/right-click target.
+      const hitLine = svgEl("line", {
+        x1: px(node.x), y1: minY, x2: px(node.x), y2: maxY,
+        stroke: "transparent", "stroke-width": 14,
       });
-      line.style.cursor = "pointer";
-      line.addEventListener("click", () => {
+      hitLine.style.cursor = "pointer";
+      hitLine.addEventListener("click", () => {
         collapsed.add(node.id);
         render(container, root, tipsByName, collapsed, state);
       });
-      viewport.appendChild(line);
+      hitLine.addEventListener("contextmenu", (evt) => requestReroot(evt, node.name));
+      viewport.appendChild(hitLine);
 
       node.children.forEach((child) => {
         child.parent = node;
@@ -317,13 +357,14 @@
 
   // -- Tooltip --------------------------------------------------------------
 
-  function showTooltip(state, evt, meta) {
+  function showTooltip(state, evt, meta, canReroot) {
     if (!state.tooltip) return;
     const lines = [
       meta.species || "Unknown species",
       meta.bin_uri ? `BIN: ${meta.bin_uri}` : null,
       meta.bags_grade ? `BAGS grade: ${meta.bags_grade}` : null,
       meta.monophyletic === false ? "Not monophyletic on this tree" : null,
+      canReroot ? "Right-click to reroot here" : null,
     ].filter(Boolean);
     state.tooltip.innerHTML = lines.map((l) => `<div>${l}</div>`).join("");
     state.tooltip.style.display = "block";

@@ -221,6 +221,39 @@ def check_monophyly(tree, representatives: pd.DataFrame, bags_grades: pd.DataFra
     return out
 
 
+def reroot_at(tree, target_name: str) -> bool:
+    """Re-root ``tree`` in place using ``target_name`` as the new outgroup.
+    Returns ``True`` on success, ``False`` (never raises) if ``target_name``
+    isn't a real tip or internal clade on this tree.
+
+    Deliberately accepts *either* a tip or an internal clade's own name --
+    not just a tip. Biopython's ``root_with_outgroup`` already treats both
+    the same way (confirmed against a real NJ tree: internal clades come
+    out of ``DistanceTreeConstructor.nj()`` reliably named, e.g. ``Inner1``,
+    ``Inner2``, and the Newick writer/JS parser both already round-trip
+    those names like any other). Restricting this to tips only would be the
+    wrong default: rooting at a single tip of a (BIN x country) group that
+    contributed more than one representative (see module docstring) would
+    visually split that tip away from its own group's other tips in the
+    redrawn layout, even though nothing about the underlying topology
+    actually changed -- purely a rooting/display artefact. Letting a
+    curator root on the common ancestor of a whole clade instead avoids
+    that.
+
+    A blank ``target_name`` (the tree's own root has no name) or a name
+    from a different, stale tree both fail the same way Biopython's own
+    lookup fails on a name it can't find -- ``ValueError`` -- which is
+    exactly the "nothing to do" case this returns ``False`` for.
+    """
+    if not target_name:
+        return False
+    try:
+        tree.root_with_outgroup(target_name)
+        return True
+    except ValueError:
+        return False
+
+
 @dataclass
 class PhylogenyResult:
     representatives: pd.DataFrame
@@ -228,6 +261,16 @@ class PhylogenyResult:
     monophyly: dict[str, bool] = field(default_factory=dict)
     tip_count: int = 0
     warnings: list[str] = field(default_factory=list)
+    #: The live tree object, not just its Newick string -- kept so a
+    #: reroot (see reroot_at()) can mutate it in place and regenerate both
+    #: the Newick and the monophyly verdicts against the new root, rather
+    #: than needing to re-parse Newick back into a tree first. None until a
+    #: tree has actually been built (e.g. the empty/too-few-sequences cases
+    #: below, which return before one exists).
+    tree: object = None
+    #: Kept alongside the tree so a reroot can recompute monophyly without
+    #: re-fetching session state it has no access to from here.
+    bags_grades: pd.DataFrame = field(default_factory=pd.DataFrame)
 
 
 def build_phylogeny(
@@ -299,4 +342,5 @@ def build_phylogeny(
     monophyly = check_monophyly(tree, reps, bags_grades)
 
     return PhylogenyResult(representatives=reps, newick=newick, monophyly=monophyly,
-                           tip_count=len(reps), warnings=warnings)
+                           tip_count=len(reps), warnings=warnings,
+                           tree=tree, bags_grades=bags_grades)
