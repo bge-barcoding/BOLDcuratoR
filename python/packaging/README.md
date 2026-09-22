@@ -20,7 +20,7 @@ pyinstaller --onedir --name boldcurator --paths src \
     --collect-all pywebview \
     --collect-all pythonnet \
     --collect-all clr_loader \
-    --collect-all biopython \
+    --collect-all Bio \
     packaging/entrypoint.py
 ```
 
@@ -60,19 +60,29 @@ of thing that silently rots the next time a dependency updates.
   config/data files correctly (see "The Windows native-window failure"
   below) -- `--collect-all shiny` not covering `shinychat`'s data files was
   the same shape of problem, one layer down in a different dependency.
-- **biopython**: **the other one that actually broke a real build,** on a
-  real Windows machine, in the Phylogeny tab (`core/phylogeny.py`).
-  Importing `Bio.Phylo.TreeConstruction` (for `DistanceMatrix`/
-  `DistanceTreeConstructor`) transitively imports `Bio.Align`, whose
-  `DistanceCalculator` class body -- executed the instant the module is
-  imported, whether or not that class is ever used -- calls
-  `substitution_matrices.load()`, which does `os.listdir()` on a `data/`
-  directory shipped as non-`.py` package data. Exact same failure shape as
-  `shinychat` above: the code that references the directory bundles fine,
-  the directory itself doesn't, and the traceback (`[WinError 3] The
-  system cannot find the path specified:
-  ...\Bio\Align\substitution_matrices\data`) gives no hint the fix lives
-  in the PyInstaller command rather than in `core/phylogeny.py`. Run
+- **Bio**: **the other one that actually broke a real build,** on a real
+  Windows machine, in the Phylogeny tab (`core/phylogeny.py`) -- and it took
+  two tries. The first attempt used `--collect-all biopython`, which builds
+  clean and still breaks identically: `pip install biopython` installs a
+  distribution *named* `biopython`, but the only importable top-level
+  packages it provides are `Bio` and `BioSQL`
+  (`python -c "import importlib.metadata as md;
+  print(md.distribution('biopython').read_text('top_level.txt'))"` prints
+  exactly that). `--collect-all` takes an *import* name, not a PyPI
+  distribution name, so `--collect-all biopython` doesn't error -- it
+  silently collects nothing at all. `biopython`/`Bio` is one of the classic
+  examples of this mismatch, alongside `beautifulsoup4`/`bs4` and
+  `pyyaml`/`yaml`. `--collect-all Bio` is the actual fix. Importing
+  `Bio.Phylo.TreeConstruction` (for `DistanceMatrix`/`DistanceTreeConstructor`)
+  transitively imports `Bio.Align`, whose `DistanceCalculator` class body --
+  executed the instant the module is imported, whether or not that class is
+  ever used -- calls `substitution_matrices.load()`, which does
+  `os.listdir()` on a `data/` directory shipped as non-`.py` package data.
+  Exact same failure shape as `shinychat` above: the code that references
+  the directory bundles fine, the directory itself doesn't, and the
+  traceback (`[WinError 3] The system cannot find the path specified:
+  ...\Bio\Align\substitution_matrices\data`) gives no hint the fix lives in
+  the PyInstaller command rather than in `core/phylogeny.py`. Run
   `boldcurator selftest` (see `cli.py`) against a build to check this
   without going through the GUI.
 

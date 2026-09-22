@@ -53,16 +53,19 @@ jobs:
           --collect-all duckdb --collect-all shiny --collect-all htmltools
           --collect-all shinychat --collect-all pywebview
           --collect-all pythonnet --collect-all clr_loader
-          --collect-all biopython
+          --collect-all Bio
           packaging/entrypoint.py
 
       - name: Smoke test -- selftest (no snapshot needed)
         # Catches a missing package data file before a curator does, same as
-        # the shinychat/pywebview fixes below -- this is what caught biopython
-        # needing its own --collect-all: DistanceCalculator's class body
-        # (Bio.Phylo.TreeConstruction) reads a data directory PyInstaller's
-        # import analysis doesn't bundle unless told to. Runs first, and
-        # without a snapshot, because it's the fastest of these three checks.
+        # the shinychat/pywebview fixes above -- this is what caught the Bio
+        # data directory (DistanceCalculator's class body,
+        # Bio.Phylo.TreeConstruction) not being bundled, twice: once for
+        # needing --collect-all at all, and once more when --collect-all
+        # biopython (the PyPI name, not the "Bio" import name) turned out to
+        # silently collect nothing -- see packaging/README.md. Runs first,
+        # and without a snapshot, because it's the fastest of these three
+        # checks.
         shell: bash
         run: |
           BIN=dist/boldcurator/boldcurator
