@@ -332,6 +332,78 @@ def main(argv: list[str] | None = None) -> int:
               before_rep > 0 and before_rep == after_rep,
               f"{before_rep} -> {after_rep}")
 
+        # -- the Phylogeny tab: built from the already-selected representative
+        # specimens (core.phylogeny), not every specimen -- see that module's
+        # own docstring. This is exactly the class of bug this whole script
+        # exists to catch: the tree is only ever drawn by a per-render
+        # <script> tag Shiny's own HTML swap has to actually execute, which
+        # no unit test can see.
+        show("Phylogeny", settle=1.5)
+        before_build = page.locator("#phylogeny_body").inner_text()
+        check("the phylogeny tab reports a representative-specimen count",
+              "representative specimens" in before_build, before_build[:120])
+        page.click("#build_tree")
+        tree_text = ""
+        for _ in range(20):
+            time.sleep(1)
+            tree_text = page.locator("#phylogeny_body").inner_text()
+            if "tips." in tree_text or "Could not build" in tree_text:
+                break
+        check("the tree finishes building", "tips." in tree_text, tree_text[:200])
+        svg_count = page.locator("#phylo-tree-container svg").count()
+        check("the tree renders as SVG", svg_count > 0)
+        tip_count = page.locator("#phylo-tree-container circle").count()
+        check("the tree has at least one tip", tip_count > 0, f"{tip_count} tips")
+        # The fixture's own default taxon covers grade C (see
+        # test_the_fixture_exercises_every_grade_the_screens_show) -- when the
+        # searched taxon does too, the monophyly badge must appear.
+        if page.locator("#group_C").count():
+            check("a grade-C monophyly badge is shown",
+                  "monophyletic" in tree_text.lower(), tree_text[:300])
+        check("the tree hit-areas are wider than the visible shapes",
+              page.evaluate("""
+                  () => {
+                      const hitLine = document.querySelector(
+                          "#phylo-tree-container line[stroke='transparent']");
+                      const visLine = document.querySelector(
+                          "#phylo-tree-container line[stroke='#888']");
+                      const hitCircleOk = Array.from(
+                          document.querySelectorAll('#phylo-tree-container circle'))
+                          .some(c => c.getAttribute('r') === '10');
+                      return hitLine && visLine
+                          && parseFloat(hitLine.getAttribute('stroke-width'))
+                             > parseFloat(visLine.getAttribute('stroke-width')) * 5
+                          && hitCircleOk;
+                  }
+              """))
+        check("the Newick download button is present",
+              page.locator("#dl_phylo_newick").count() > 0)
+
+        # -- reroot: right-click (dispatched directly -- see phylo-init.js's
+        # own contextmenu listener; a real synthetic right-click through
+        # Playwright is flaky at this pixel scale in practice, dispatching
+        # the event directly on the element still exercises the same
+        # listener and server round-trip) a tip and confirm the tree
+        # actually changes, not just re-renders identically.
+        before_reroot = page.locator("#phylogeny_body").inner_text()
+        page.evaluate("""
+            () => {
+                // Each tip draws two circles: a small visible one (no
+                // listeners) then a larger invisible "hit" one on top that
+                // actually carries the click/contextmenu listeners -- see
+                // phylo-init.js's own comment on why. Must target that one,
+                // not just the first <circle> in document order.
+                const c = document.querySelector(
+                    "#phylo-tree-container circle[fill='transparent']");
+                if (c) c.dispatchEvent(new MouseEvent('contextmenu', {bubbles: true}));
+            }
+        """)
+        time.sleep(SETTLE)
+        after_reroot = page.locator("#phylogeny_body").inner_text()
+        check("right-clicking a tip reroots the tree",
+              after_reroot != before_reroot)
+        page.screenshot(path=str(args.out / "06-phylogeny.png"), full_page=True)
+
         check("no javascript errors", not js_errors, "; ".join(js_errors))
         browser.close()
 

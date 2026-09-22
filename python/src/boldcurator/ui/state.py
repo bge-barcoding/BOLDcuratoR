@@ -110,6 +110,20 @@ class SearchState:
         actually holds the scored, whole-result frame the selection needs --
         the search itself only plans, and the paged table never materialises
         more than one page.
+
+        ``existing`` is filtered to this search's own processids before being
+        passed in, not the session's whole ``annotations.selected``: the
+        latter accumulates across every search run in a session (``Annotations``
+        is one object for the session's life, never reset between searches --
+        see ``io.annotations``'s module docstring), so a *second* search in the
+        same session would otherwise see a non-empty ``existing`` left over
+        from the first and never get its own auto-selection at all --
+        ``auto_select_best_specimens`` would (correctly, by its own contract)
+        refuse to touch it, believing a curator had already chosen. Restricting
+        to this search's own processids keeps that refusal doing its real job
+        (never overwrite a curator's manual pick, including one restored from
+        a saved session covering this same search) without it accidentally
+        starving every search after the first.
         """
         if self._analysis is None:
             if not self.can_analyse:
@@ -120,9 +134,14 @@ class SearchState:
             self._analysis = analyse_plan(store, self.plan, auto_select=False,
                                           taxonomy_groups=self.taxonomy_groups)
             if self.annotations is not None:
+                own_processids = set(self._analysis.specimens.get("processid", []))
+                existing = {
+                    pid: value for pid, value in self.annotations.selected.items()
+                    if pid in own_processids
+                }
                 chosen = selection.auto_select_best_specimens(
-                    self._analysis.specimens, existing=self.annotations.selected)
-                if chosen is not self.annotations.selected:
+                    self._analysis.specimens, existing=existing)
+                if chosen is not existing:
                     self.annotations.selected.update(chosen)
         return self._analysis
 

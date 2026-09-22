@@ -38,6 +38,7 @@ from ..config.constants import (
     DEFAULT_SNAPSHOT_ZENODO_DOI,
     DOWNLOAD_LIMITS,
     FLAG_OPTIONS,
+    PHYLOGENY_LIMITS,
 )
 from ..core.grouping import (
     GRADE_DESCRIPTIONS,
@@ -90,9 +91,19 @@ def _provenance_path(snapshot_path: Path) -> Path:
     return snapshot_path.with_suffix(snapshot_path.suffix + ".meta.json")
 
 
-def _write_provenance(snapshot_path: Path, *, source: str) -> None:
+def _write_provenance(snapshot_path: Path, *, source: str,
+                      snapshot_id: str = "", filename: str = "") -> None:
+    """``snapshot_id``/``filename`` are optional extras (round found while
+    diagnosing a naming report): the sidecar is then self-describing --
+    which BOLD data package this file actually is -- without opening the
+    ``.duckdb`` file itself, which is what made that report slower to
+    diagnose than it needed to be."""
     meta = {"downloaded_at": _dt.datetime.now().isoformat(timespec="seconds"),
             "source": source}
+    if snapshot_id:
+        meta["snapshot_id"] = snapshot_id
+    if filename:
+        meta["filename"] = filename
     _provenance_path(snapshot_path).write_text(json.dumps(meta), encoding="utf-8")
 
 
@@ -116,6 +127,51 @@ def _obtained_date(snapshot_path: Path) -> str:
         return "unknown"
     return (_dt.datetime.fromtimestamp(mtime).isoformat(timespec="seconds")
             + " (file's own modified date -- not downloaded through this app)")
+
+
+def _snapshot_filename_for(*, filename: str = "", snapshot_id: str = "") -> str:
+    """The name a downloaded or copied snapshot file should get.
+
+    Found while diagnosing a report: a download landed as
+    ``snapshot-20260922_1114.duckdb`` -- when it was clicked, not which BOLD
+    data package it actually is (``2026-09-11``, per its own filename on
+    Zenodo and the ``snapshot_id`` embedded in the file itself,
+    ``data/snapshot.py``). Prefers the published Zenodo filename itself
+    (``.gz`` stripped -- the same file, decompressed, so the name should
+    match what a curator would see on Zenodo); falls back to a name built
+    from ``snapshot_id`` alone when there is no published filename (a
+    manifest source, or a locally-copied file with no filename of its own
+    from Zenodo); falls back to the old download-timestamp scheme only when
+    neither is known, so a source this app cannot identify still gets a
+    file, just not a self-describing one.
+    """
+    if filename:
+        name = filename[:-3] if filename.endswith(".gz") else filename
+        if name:
+            return name
+    if snapshot_id and snapshot_id != "unknown":
+        return f"bold_snapshot_{snapshot_id}.duckdb"
+    return f"snapshot-{export_io.timestamp()}.duckdb"
+
+
+def _unique_snapshot_path(name: str, *, directory: Path = DEFAULT_SNAPSHOT_DIR) -> Path:
+    """``directory / name``, disambiguated if that name is already taken.
+
+    A second download or copy of the *same* published version, landing on a
+    name that's already there, must never silently overwrite a file that
+    might not actually be identical (a partial/corrupt leftover, or -- since
+    ``snapshot_id`` is trusted, not re-verified byte for byte -- simply two
+    different files that happen to claim the same id).
+    """
+    candidate = directory / name
+    if not candidate.exists():
+        return candidate
+    n = 2
+    while True:
+        candidate = directory / f"{Path(name).stem} ({n}){Path(name).suffix}"
+        if not candidate.exists():
+            return candidate
+        n += 1
 
 
 def _all_columns_ordered(frame: pd.DataFrame) -> list[str]:
@@ -474,6 +530,15 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 setTimeout(function() {{ observer.disconnect(); }}, 3000);
             }});
         """),
+        # The Phylogeny tab's tree viewer (core.phylogeny + phylo-init.js):
+        # loaded once here, globally, like every other script/style block on
+        # this page -- not per-render -- because it defines one function
+        # (window.bcRenderPhylotree) the tab's own small per-render script
+        # then calls. See ui/static/phylo/phylo-init.js's own docstring for
+        # why this is a small hand-written renderer rather than a vendored
+        # library.
+        ui.tags.link(rel="stylesheet", href="/phylo-assets/phylo.css"),
+        ui.tags.script(src="/phylo-assets/phylo-init.js"),
         ui.div(
         ui.div(
             ui.tags.h4("BOLDcurator", style="margin:0;"),
@@ -658,6 +723,9 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                         ui.div(ui.output_ui("bins_body"), class_="bc-fill-output"),
                         value="bins"),
             *[_grade_panel(g) for g in GRADES],
+            ui.nav_panel("Phylogeny",
+                        ui.div(ui.output_ui("phylogeny_body"), class_="bc-fill-output"),
+                        value="phylogeny"),
             ui.nav_panel("Specimens",
                         ui.div(ui.output_ui("specimens_body"), class_="bc-fill-output"),
                         value="specimens"),
@@ -812,18 +880,26 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 snap_msg.set(f"Could not delete {target}: {exc}")
             snap_tick.set(snap_tick.get() + 1)
 
-        def _snap_run_download(resolve_source, out_path: Path) -> None:
+        def _snap_run_download(resolve_source) -> None:
             from ..build import fetch_snapshot as fs
 
             try:
+                # Resolved here, not before the thread starts, precisely so
+                # the file can be named after what it actually is
+                # (source.filename/snapshot_id) rather than only when the
+                # download was clicked -- see _snapshot_filename_for.
                 source = resolve_source(fs)
+                out_path = _unique_snapshot_path(_snapshot_filename_for(
+                    filename=source.filename, snapshot_id=source.snapshot_id))
 
                 def progress(text, end="\n"):
                     snap_dl_state["message"] = text.strip("\r")
 
                 out_path.parent.mkdir(parents=True, exist_ok=True)
                 fs.download(source, out_path, progress=progress)
-                _write_provenance(out_path, source=source.url)
+                _write_provenance(out_path, source=source.url,
+                                  snapshot_id=source.snapshot_id,
+                                  filename=source.filename)
                 snap_dl_state["message"] = (
                     f"Downloaded to {out_path}. Restart BOLDcurator to use it.")
             except fs.FetchError as exc:
@@ -837,11 +913,9 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         def _snap_start_download(resolve_source) -> None:
             if snap_dl_state["running"]:
                 return
-            out_path = (DEFAULT_SNAPSHOT_DIR
-                       / f"snapshot-{export_io.timestamp()}.duckdb")
             snap_dl_state.update(running=True, message="Starting...")
             threading.Thread(target=_snap_run_download,
-                             args=(resolve_source, out_path), daemon=True).start()
+                             args=(resolve_source,), daemon=True).start()
             snap_op_seq.set(snap_op_seq.get() + 1)
 
         @reactive.effect
@@ -855,17 +929,35 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
 
             try:
                 result = fs.check_for_update(DEFAULT_SNAPSHOT_ZENODO_DOI, store.path)
-                if result.up_to_date:
+                local = result.local_snapshot_id or "unknown"
+                comparison = result.comparison
+                if comparison == "up_to_date":
                     snap_dl_state["message"] = (
                         f"Up to date -- {result.remote_snapshot_id} is the "
                         "latest published snapshot.")
-                else:
-                    local = result.local_snapshot_id or "unknown"
+                elif comparison == "remote_newer":
                     snap_dl_state["message"] = (
                         f"A newer snapshot is available: "
                         f"{result.remote_snapshot_id} (this session is "
                         f"using {local}). Use \"Download the latest public "
                         "BOLD snapshot\" above to get it.")
+                elif comparison == "remote_older":
+                    # Found testing the Phylogeny tab on a real machine: a
+                    # local snapshot built after the latest Zenodo publish
+                    # (a dev/QA build) was reported as having a "newer" one
+                    # available, going backwards in time. Say what is
+                    # actually true instead of assuming "different" always
+                    # means "remote is ahead".
+                    snap_dl_state["message"] = (
+                        f"This session's snapshot ({local}) is newer than "
+                        f"the latest one published on Zenodo "
+                        f"({result.remote_snapshot_id}). Nothing to "
+                        "download.")
+                else:
+                    snap_dl_state["message"] = (
+                        f"A different snapshot is published: "
+                        f"{result.remote_snapshot_id} (this session is "
+                        f"using {local}).")
             except fs.FetchError as exc:
                 snap_dl_state["message"] = f"Could not check for an update: {exc}"
             finally:
@@ -910,7 +1002,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 snap_msg.set("No file chosen -- type the path above instead "
                              "if Browse… didn't work.")
 
-        def _snap_run_copy(src: Path, out_path: Path) -> None:
+        def _snap_run_copy(src: Path, out_path: Path, *, snapshot_id: str) -> None:
             try:
                 out_path.parent.mkdir(parents=True, exist_ok=True)
                 tmp = out_path.with_suffix(out_path.suffix + ".part")
@@ -925,7 +1017,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                             f"Copying... {pct:.0%} "
                             f"({written / 1e6:.0f} / {total / 1e6:.0f} MB)")
                 tmp.replace(out_path)
-                _write_provenance(out_path, source=str(src))
+                _write_provenance(out_path, source=str(src), snapshot_id=snapshot_id)
                 snap_dl_state["message"] = (
                     f"Copied to {out_path}. Restart BOLDcurator to use it.")
             except OSError as exc:
@@ -949,15 +1041,19 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 return
             try:
                 with SnapshotStore(candidate) as candidate_store:
-                    candidate_store.info()
+                    snapshot_id = candidate_store.info().snapshot_id
             except SnapshotError as exc:
                 snap_msg.set(f"Not a valid snapshot: {exc}")
                 return
-            out_path = (DEFAULT_SNAPSHOT_DIR
-                       / f"snapshot-{export_io.timestamp()}.duckdb")
+            # Named after the snapshot's own id (what it is), not when it was
+            # copied -- see _snapshot_filename_for.
+            out_path = _unique_snapshot_path(
+                _snapshot_filename_for(snapshot_id=snapshot_id))
             snap_dl_state.update(running=True, message="Starting...")
             threading.Thread(target=_snap_run_copy,
-                             args=(candidate, out_path), daemon=True).start()
+                             args=(candidate, out_path),
+                             kwargs={"snapshot_id": snapshot_id},
+                             daemon=True).start()
             snap_op_seq.set(snap_op_seq.get() + 1)
 
         @output
@@ -1029,6 +1125,15 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             offset.set(0)
             for value in group_index.values():
                 value.set(0)
+            # A tree already built is a fact about the *previous* search's
+            # specimens -- carrying it over would show an unrelated result
+            # (or, worse, an unrelated grade-C monophyly verdict) under a
+            # brand new search's tab. A build already running in the
+            # background is not cancelled (nothing else in this app cancels
+            # a running background operation either -- see snap_dl_state),
+            # so it may still land after this reset; the curator can always
+            # click "Build tree" again.
+            phylo_state.update(running=False, message="", result=None, error="")
             if state.search is not None:
                 ui.update_navset("nav", selected="species")
             touch()
@@ -1543,6 +1648,250 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         for _grade in GRADES:
             _register_grade(_grade)
 
+        # -- phylogeny -------------------------------------------------------
+        #
+        # Built from the specimens the app has *already* selected as each
+        # (BIN x country) group's best representative
+        # (core.selection.auto_select_best_specimens, surfaced here through
+        # the same export_io.selected_rows every "Download Selected" button
+        # uses) -- not from every specimen in the result. See
+        # core/phylogeny.py's module docstring for why, and why the tree is
+        # NJ from K2P distances over a reference-anchored alignment
+        # (core/refalign.py) rather than a likelihood tree from a multiple
+        # alignment: no external binary, so nothing new to bundle per OS.
+        #
+        # Building is behind an explicit button, not automatic on tab open,
+        # and runs on a background thread -- the same plain-dict-state +
+        # reactive.Value-tick pattern as _snap_run_download/_snap_poll above,
+        # the app's one existing idiom for a long-running operation.
+        phylo_state: dict = {"running": False, "message": "", "result": None,
+                             "error": ""}
+        phylo_tick = reactive.Value(0)
+        phylo_op_seq = reactive.Value(0)
+
+        @reactive.effect
+        def _phylo_poll():
+            phylo_op_seq.get()
+            if phylo_state["running"]:
+                reactive.invalidate_later(0.4)
+            with reactive.isolate():
+                phylo_tick.set(phylo_tick.get() + 1)
+
+        def _phylo_run_build(representatives, bags_grades) -> None:
+            from ..core import phylogeny as phylo
+
+            try:
+                def progress(text):
+                    phylo_state["message"] = text
+
+                phylo_state["result"] = phylo.build_phylogeny(
+                    representatives, bags_grades, store,
+                    max_tips=PHYLOGENY_LIMITS["MAX_TIPS"], progress=progress)
+                phylo_state["error"] = ""
+            except phylo.PhylogenyTooLargeToBuild as exc:
+                phylo_state["error"] = str(exc)
+            except Exception as exc:  # noqa: BLE001 -- surfaced to the curator, not swallowed
+                phylo_state["error"] = f"Could not build the tree: {exc}"
+            finally:
+                # Only the plain dict, from this background thread -- see
+                # _snap_run_download above for why no reactive.Value is
+                # touched here.
+                phylo_state["running"] = False
+
+        @reactive.effect
+        @reactive.event(input.build_tree)
+        def _phylo_build():
+            if phylo_state["running"]:
+                return
+            search = state.search
+            if search is None:
+                return
+            from ..io import exports as export_io
+
+            result = search.analysis(store)
+            representatives = export_io.selected_rows(result.specimens,
+                                                       state.annotations)
+            phylo_state.update(running=True, message="Starting...",
+                               result=None, error="")
+            threading.Thread(target=_phylo_run_build,
+                             args=(representatives, result.bags_grades),
+                             daemon=True).start()
+            phylo_op_seq.set(phylo_op_seq.get() + 1)
+
+        def _phylo_tree_panel(result) -> ui.Tag:
+            rows = []
+            for warning in result.warnings:
+                rows.append(ui.div(warning, class_="alert alert-warning py-2 px-3 small"))
+            if not result.newick:
+                rows.append(ui.div("Nothing to show.", class_="text-muted"))
+                return ui.div(*rows)
+
+            if result.monophyly:
+                # Same visual language the tree itself uses, not a second,
+                # conflicting palette: every grade-C tip is filled
+                # GRADE_COLOURS["C"] regardless of its own monophyly (see the
+                # `tips` list below), and a non-monophyletic species' tips
+                # additionally get a red *ring* (an SVG stroke sitting
+                # outside the fill). A badge is the same shape of thing, so
+                # it gets the same background always, plus a red ring
+                # (box-shadow, CSS's equivalent of an SVG stroke outside the
+                # fill) only when not monophyletic -- not a different fill
+                # colour, which is what made these look like two unrelated
+                # conventions before.
+                badges = []
+                for species in sorted(result.monophyly):
+                    ok = result.monophyly[species]
+                    label = "Monophyletic" if ok else "Not monophyletic"
+                    ring = "" if ok else "box-shadow:0 0 0 2px #dc3545;"
+                    badges.append(ui.tags.span(
+                        f"{species}: {label}",
+                        style=f"background:{GRADE_COLOURS['C']};color:#fff;"
+                              f"padding:2px 10px;border-radius:10px;"
+                              f"font-weight:600;font-size:12px;"
+                              f"margin:2px 8px 4px 0;display:inline-block;{ring}",
+                    ))
+                rows.append(ui.div(
+                    ui.tags.strong("BAGS grade C monophyly ", class_="small"),
+                    ui.div(*badges, style="margin-top:4px;"),
+                    style="margin-bottom:10px;",
+                ))
+
+            tips = [
+                {
+                    "tip": row["_tip_label"],
+                    "species": str(row.get("species") or row.get("identification") or ""),
+                    "bin_uri": str(row.get("bin_uri") or ""),
+                    "bags_grade": "",
+                    "monophyletic": None,
+                    "color": "#495057",
+                    "flags": result.flags.get(row["_tip_label"], []),
+                }
+                for _, row in result.representatives.iterrows()
+            ]
+            grade_by_species = None
+            search = state.search
+            if search is not None:
+                grade_by_species = search.grade_lookup()
+            for tip in tips:
+                grade = (grade_by_species or {}).get(tip["species"], "")
+                tip["bags_grade"] = grade
+                tip["color"] = GRADE_COLOURS.get(grade, "#495057")
+                if tip["species"] in result.monophyly:
+                    tip["monophyletic"] = result.monophyly[tip["species"]]
+
+            container_id = "phylo-tree-container"
+            rows.append(ui.download_button(
+                "dl_phylo_newick", "Download tree (Newick)",
+                class_="btn-sm", style="margin-bottom:8px;"))
+            if result.reference:
+                rows.append(ui.div(
+                    f"Neighbor-joining on K2P distances over the sites each "
+                    f"pair shares, every sequence aligned to "
+                    f"{result.reference} ({result.reference_length:,} bp).",
+                    class_="small text-muted",
+                ))
+            rows.append(ui.div(
+                f"{result.tip_count:,} tips. Drag to pan, scroll to zoom, "
+                "click an internal branch to collapse it (click its tip to "
+                "expand again). Right-click a tip or branch to reroot the "
+                "tree there. \u26a0 marks a tip whose alignment needs a "
+                "second look (hover it for why).",
+                class_="bc-phylo-hint",
+            ))
+            rows.append(ui.div(id=container_id, class_="bc-phylo-container"))
+            rows.append(ui.tags.script(
+                f"window.bcRenderPhylotree({json.dumps(container_id)}, "
+                f"{json.dumps(result.newick)}, {json.dumps(tips)});"
+            ))
+            return ui.div(*rows)
+
+        @reactive.effect
+        @reactive.event(input.phylo_reroot_target)
+        def _phylo_reroot():
+            """A right-click on a tip or internal branch in the tree
+            (phylo-init.js's `requestReroot`) -- accepts either, not just a
+            tip, since rooting at a single tip of a multi-tip (BIN x
+            country) group would visually split that tip from its own
+            group's siblings for no topological reason (see
+            core.phylogeny.reroot_at's own docstring).
+
+            Mutates the stored tree in place and regenerates both the
+            Newick and the monophyly verdicts against the new root --
+            monophyly is a rooted-tree property, so it has to be
+            recomputed, not just redrawn.
+            """
+            from ..core import phylogeny as phylo
+
+            target = input.phylo_reroot_target()
+            result = phylo_state.get("result")
+            if result is None or result.tree is None or not target:
+                return
+            if not phylo.reroot_at(result.tree, target):
+                return
+            result.newick = phylo.to_newick(result.tree)
+            result.monophyly = phylo.check_monophyly(
+                result.tree, result.representatives, result.bags_grades)
+            phylo_tick.set(phylo_tick.get() + 1)
+
+        @output(id="dl_phylo_newick")
+        @render.download_button(
+            filename=lambda: f"phylogeny_{export_io.timestamp()}.nwk")
+        def _dl_phylo_newick():
+            result = phylo_state.get("result")
+            if result is None or not result.newick:
+                yield "Nothing to export: no tree has been built yet.\n"
+                return
+            yield result.newick
+
+        @output
+        @render.ui
+        def phylogeny_body():
+            from ..io import exports as export_io
+
+            def body(search):
+                phylo_tick.get()
+                result = search.analysis(store)
+                pool = export_io.selected_rows(result.specimens, state.annotations)
+                pool_count = len(pool)
+                over_limit = pool_count > PHYLOGENY_LIMITS["MAX_TIPS"]
+                rows = [
+                    ui.div(
+                        f"{pool_count:,} representative specimens in this "
+                        "result (one per selected BIN x country) -- this is "
+                        "what the tree is built from, not the full result.",
+                        class_="small",
+                    ),
+                ]
+                if pool_count > PHYLOGENY_LIMITS["WARN_TIPS"] and not over_limit:
+                    rows.append(ui.div(
+                        "This may take a while to build.",
+                        class_="small text-muted",
+                    ))
+                if over_limit:
+                    rows.append(ui.div(
+                        f"{pool_count:,} representatives is over the "
+                        f"{PHYLOGENY_LIMITS['MAX_TIPS']:,} this tab's "
+                        "pure-Python tree builder can handle quickly. Narrow "
+                        "the search, or curate down the selected "
+                        "representatives (Species/BAGS tabs), then try again.",
+                        class_="alert alert-warning py-2 px-3 small",
+                    ))
+                else:
+                    rows.append(ui.input_action_button(
+                        "build_tree", "Build tree", class_="btn-primary btn-sm",
+                        style="margin:8px 0;"))
+                if phylo_state["running"]:
+                    rows.append(ui.div(phylo_state["message"],
+                                       class_="small text-muted"))
+                elif phylo_state["error"]:
+                    rows.append(ui.div(phylo_state["error"],
+                                       class_="alert alert-warning py-2 px-3 small"))
+                elif phylo_state["result"] is not None:
+                    rows.append(_phylo_tree_panel(phylo_state["result"]))
+                return ui.div(*rows, class_="bc-tab-body")
+
+            return _needs_analysis(body)
+
         # -- annotation, shared by every screen ----------------------------
 
         def _apply(prefix: str, scope: set[str] | None = None) -> None:
@@ -1953,7 +2302,8 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         _register_species_analysis_download("dl_species_analysis")
         _register_species_analysis_download("dl_gap_analysis")
 
-    return App(app_ui, server)
+    return App(app_ui, server,
+              static_assets={"/phylo-assets": Path(__file__).parent / "static" / "phylo"})
 
 
 # --------------------------------------------------------------------------

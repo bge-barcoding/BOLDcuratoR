@@ -255,6 +255,48 @@ DOWNLOAD_LIMITS: dict[str, int] = {
 }
 
 # --------------------------------------------------------------------------
+# Phylogeny tab limits
+# --------------------------------------------------------------------------
+
+#: The Phylogeny tab's tree builder (``core.phylogeny``) is pure Python, by
+#: design -- no external ML/alignment binary, so nothing new to bundle per
+#: OS. That trades away the speed a compiled tool would give: Biopython's
+#: ``DistanceTreeConstructor.nj()`` is a plain-Python, unvectorised O(n^3)
+#: loop, and it -- not the alignment to a reference (~5 ms per sequence, O(n))
+#: nor the K2P distances (a few vectorised NumPy multiplies) -- is what
+#: actually caps how many tips can be built
+#: "very quickly". Measured directly on this project's own hardware (not
+#: guessed): ~0.4s at 100 tips, ~6s at 250, ~54s at 500 -- a clean cubic
+#: fit (``t = k * n**3``, ``k ~= 4.3e-7``). WARN_TIPS (~1.5s) and MAX_TIPS
+#: (~25-30s worst case) are picked from that fit, with headroom for slower
+#: machines than the one this was measured on.
+PHYLOGENY_LIMITS: dict[str, int] = {
+    "WARN_TIPS": 150,
+    "MAX_TIPS": 400,
+}
+
+#: How ``core.refalign`` anchors representatives to a reference before
+#: ``core.phylogeny`` computes K2P distances over their shared sites.
+#:
+#: - TARGET_LENGTH: the reference is the representative closest to this
+#:   length (the Folmer COI-5P region is 658 bp), preferring clean ACGT.
+#: - MIN_IDENTITY: matching bases / reference span covered. Below this a
+#:   sequence is flagged (after a reverse-complement retry): unrelated
+#:   sequence still "aligns" at ~25-40% by chance, while real COI between
+#:   distant animal orders stays well above 60%.
+#: - MIN_COVERAGE: fraction of the reference a sequence must span before it
+#:   is flagged as short. Short sequences are still compared, over what
+#:   they share -- the flag only tells a curator why one may sit oddly.
+#: - MIN_SHARED_SITES: a pair sharing fewer comparable sites than this gets
+#:   an estimated distance instead of a direct one (and both tips a flag).
+PHYLOGENY_ALIGNMENT: dict[str, float] = {
+    "TARGET_LENGTH": 658,
+    "MIN_IDENTITY": 0.6,
+    "MIN_COVERAGE": 0.5,
+    "MIN_SHARED_SITES": 100,
+}
+
+# --------------------------------------------------------------------------
 # Data licence -- plan item 0.3
 # --------------------------------------------------------------------------
 

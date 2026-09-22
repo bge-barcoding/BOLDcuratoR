@@ -20,6 +20,8 @@ pyinstaller --onedir --name boldcurator --paths src \
     --collect-all pywebview \
     --collect-all pythonnet \
     --collect-all clr_loader \
+    --collect-all Bio \
+    --collect-all boldcurator \
     packaging/entrypoint.py
 ```
 
@@ -59,6 +61,47 @@ of thing that silently rots the next time a dependency updates.
   config/data files correctly (see "The Windows native-window failure"
   below) -- `--collect-all shiny` not covering `shinychat`'s data files was
   the same shape of problem, one layer down in a different dependency.
+- **Bio**: **the other one that actually broke a real build,** on a real
+  Windows machine, in the Phylogeny tab (`core/phylogeny.py`) -- and it took
+  two tries. The first attempt used `--collect-all biopython`, which builds
+  clean and still breaks identically: `pip install biopython` installs a
+  distribution *named* `biopython`, but the only importable top-level
+  packages it provides are `Bio` and `BioSQL`
+  (`python -c "import importlib.metadata as md;
+  print(md.distribution('biopython').read_text('top_level.txt'))"` prints
+  exactly that). `--collect-all` takes an *import* name, not a PyPI
+  distribution name, so `--collect-all biopython` doesn't error -- it
+  silently collects nothing at all. `biopython`/`Bio` is one of the classic
+  examples of this mismatch, alongside `beautifulsoup4`/`bs4` and
+  `pyyaml`/`yaml`. `--collect-all Bio` is the actual fix. Importing
+  `Bio.Phylo.TreeConstruction` (for `DistanceMatrix`/`DistanceTreeConstructor`)
+  transitively imports `Bio.Align`, whose `DistanceCalculator` class body --
+  executed the instant the module is imported, whether or not that class is
+  ever used -- calls `substitution_matrices.load()`, which does
+  `os.listdir()` on a `data/` directory shipped as non-`.py` package data.
+  Exact same failure shape as `shinychat` above: the code that references
+  the directory bundles fine, the directory itself doesn't, and the
+  traceback (`[WinError 3] The system cannot find the path specified:
+  ...\Bio\Align\substitution_matrices\data`) gives no hint the fix lives in
+  the PyInstaller command rather than in `core/phylogeny.py`. Run
+  `boldcurator selftest` (see `cli.py`) against a build to check this
+  without going through the GUI.
+- **boldcurator**: the app's own package, not a third-party dependency --
+  everything above bundles a *dependency's* data files; this one bundles
+  this project's own, specifically `ui/static/phylo/` (the Phylogeny tab's
+  JS/CSS, served at runtime via Shiny's `static_assets` from a `Path()`
+  string in `ui/app.py`, never through an `import` PyInstaller's own
+  analysis could trace). Diagnosed on a real build's exact symptom: the tab's
+  server-rendered HTML (representative count, monophyly badges) showed up
+  fine -- the Python side ran end to end -- but the tree canvas itself was
+  blank, because `phylo-init.js` 404'd and `window.bcRenderPhylotree` was
+  never defined. A `<script>` calling an undefined function fails silently
+  in the console; nothing in the app itself would have told a curator why.
+  `--collect-all boldcurator` works the same way it does for every
+  dependency above -- `boldcurator` is already importable via `--paths src`
+  (the same thing that lets `packaging/entrypoint.py` find it at all), so
+  this walks its own package tree for data files exactly like any other
+  entry in this list.
 
 ## The Windows native-window failure -- real, hit on a real machine
 

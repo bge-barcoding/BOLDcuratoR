@@ -379,6 +379,46 @@ def test_group_tables_default_to_sorting_by_rep_and_check_too():
     assert header.count(f"class='{SORT_HEADER_CLASS}'") == 4
 
 
+def test_a_second_search_gets_its_own_auto_selected_representatives(store):
+    """Regression test, found while building the Phylogeny tab.
+
+    ``Annotations`` is one object for the whole session (never reset between
+    searches -- see ``io.annotations``'s module docstring), so
+    ``SearchState.analysis`` used to pass the session's *entire*
+    ``annotations.selected`` to ``auto_select_best_specimens`` as ``existing``.
+    That function correctly refuses to touch a non-empty ``existing`` (never
+    overwrite a curator's pick) -- but once the *first* search in a session
+    had auto-selected anything at all, every later search's own, unrelated
+    specimens found that check already non-empty and got no auto-selection of
+    their own: every "representative" screen (Specimens' Rep. column,
+    Download Selected, and this project's new Phylogeny tab) would show zero
+    representatives for any search after the first one in a session.
+    """
+    from boldcurator.ui.state import AppState
+
+    state = AppState(store)
+    state.run_search("Pieris")
+    first = state.search.analysis(store)
+    first_selected = set(state.annotations.selected_processids())
+    assert first_selected, "the first search must auto-select something"
+    first_pids = set(first.specimens["processid"].astype(str))
+    assert first_selected <= first_pids
+
+    state.run_search("Danaus")
+    second = state.search.analysis(store)
+    second_pids = set(second.specimens["processid"].astype(str))
+    second_selected = set(state.annotations.selected_processids()) - first_selected
+
+    assert second_selected, (
+        "the second search must get its own auto-selected representatives, "
+        "not be starved by the first search's leftover selection")
+    assert second_selected <= second_pids, (
+        "the second search's new selections must be its own specimens, not "
+        "the first search's")
+    # The first search's own picks must survive untouched.
+    assert first_selected <= set(state.annotations.selected_processids())
+
+
 def test_the_fixture_exercises_every_grade_the_screens_show(store):
     """A fixture with no grade-C data leaves the busiest screen untested."""
     from boldcurator.core.grouping import GRADES, group_specimens
@@ -517,3 +557,43 @@ def test_checking_a_group_replaces_the_checked_set_rather_than_adding(store):
     assert second and not (first & second), "the two groups must not overlap"
     assert set(state.annotations.working) == second, \
         "checking a group must not leave the previous group checked"
+
+
+def test_snapshot_filename_prefers_the_published_zenodo_name():
+    """Regression test, found testing on a real machine: a download used to
+    land as ``snapshot-20260922_1114.duckdb`` -- when it was clicked, not
+    which BOLD data package it is."""
+    from boldcurator.ui.app import _snapshot_filename_for
+
+    assert _snapshot_filename_for(
+        filename="bold_snapshot_2026-09-11.duckdb.gz",
+        snapshot_id="2026-09-11",
+    ) == "bold_snapshot_2026-09-11.duckdb"
+
+
+def test_snapshot_filename_falls_back_to_snapshot_id_then_a_timestamp():
+    from boldcurator.ui.app import _snapshot_filename_for
+
+    assert _snapshot_filename_for(snapshot_id="2026-09-11") == \
+        "bold_snapshot_2026-09-11.duckdb"
+    assert _snapshot_filename_for(snapshot_id="unknown") \
+        .startswith("snapshot-")
+    assert _snapshot_filename_for().startswith("snapshot-")
+
+
+def test_unique_snapshot_path_never_silently_overwrites(tmp_path):
+    from boldcurator.ui.app import _unique_snapshot_path
+
+    first = _unique_snapshot_path("bold_snapshot_2026-09-11.duckdb",
+                                  directory=tmp_path)
+    assert first == tmp_path / "bold_snapshot_2026-09-11.duckdb"
+    first.write_text("x")
+
+    second = _unique_snapshot_path("bold_snapshot_2026-09-11.duckdb",
+                                   directory=tmp_path)
+    assert second == tmp_path / "bold_snapshot_2026-09-11 (2).duckdb"
+    second.write_text("x")
+
+    third = _unique_snapshot_path("bold_snapshot_2026-09-11.duckdb",
+                                  directory=tmp_path)
+    assert third == tmp_path / "bold_snapshot_2026-09-11 (3).duckdb"
