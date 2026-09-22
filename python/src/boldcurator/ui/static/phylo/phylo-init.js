@@ -246,11 +246,17 @@
         viewport.appendChild(circle);
 
         const label = collectDisplayLabel(node, tipsByName);
+        // Flagged by core.refalign / core.phylogeny (poor or flipped
+        // alignment, short coverage, estimated distances): the tip stays on
+        // the tree, its label gets a warning sign and amber text. Kept off
+        // the circle so it never competes with the grade fill or the
+        // monophyly ring.
+        const flagged = meta && meta.flags && meta.flags.length > 0;
         const text = svgEl("text", {
           x: px(node.x) + 8, y: py(node.y) + 4,
-          "font-size": 11, fill: "#212529",
+          "font-size": 11, fill: flagged ? "#b8860b" : "#212529",
         });
-        text.textContent = label;
+        text.textContent = flagged ? `${label} \u26a0` : label;
         viewport.appendChild(text);
 
         // A 4px-radius circle is far smaller than a pointer -- this
@@ -364,6 +370,7 @@
       meta.bin_uri ? `BIN: ${meta.bin_uri}` : null,
       meta.bags_grade ? `BAGS grade: ${meta.bags_grade}` : null,
       meta.monophyletic === false ? "Not monophyletic on this tree" : null,
+      ...(meta.flags || []).map((f) => `\u26a0 ${f}`),
       canReroot ? "Right-click to reroot here" : null,
     ].filter(Boolean);
     state.tooltip.innerHTML = lines.map((l) => `<div>${l}</div>`).join("");

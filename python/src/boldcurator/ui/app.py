@@ -1656,7 +1656,8 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         # the same export_io.selected_rows every "Download Selected" button
         # uses) -- not from every specimen in the result. See
         # core/phylogeny.py's module docstring for why, and why the tree is
-        # NJ from a k-mer distance rather than a likelihood tree from an
+        # NJ from K2P distances over a reference-anchored alignment
+        # (core/refalign.py) rather than a likelihood tree from a multiple
         # alignment: no external binary, so nothing new to bundle per OS.
         #
         # Building is behind an explicit button, not automatic on tab open,
@@ -1763,6 +1764,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     "bags_grade": "",
                     "monophyletic": None,
                     "color": "#495057",
+                    "flags": result.flags.get(row["_tip_label"], []),
                 }
                 for _, row in result.representatives.iterrows()
             ]
@@ -1781,11 +1783,19 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             rows.append(ui.download_button(
                 "dl_phylo_newick", "Download tree (Newick)",
                 class_="btn-sm", style="margin-bottom:8px;"))
+            if result.reference:
+                rows.append(ui.div(
+                    f"Neighbor-joining on K2P distances over the sites each "
+                    f"pair shares, every sequence aligned to "
+                    f"{result.reference} ({result.reference_length:,} bp).",
+                    class_="small text-muted",
+                ))
             rows.append(ui.div(
                 f"{result.tip_count:,} tips. Drag to pan, scroll to zoom, "
                 "click an internal branch to collapse it (click its tip to "
                 "expand again). Right-click a tip or branch to reroot the "
-                "tree there.",
+                "tree there. \u26a0 marks a tip whose alignment needs a "
+                "second look (hover it for why).",
                 class_="bc-phylo-hint",
             ))
             rows.append(ui.div(id=container_id, class_="bc-phylo-container"))

@@ -1,4 +1,4 @@
-"""A quick, alignment-free overview tree for the Phylogeny tab.
+"""A quick overview tree for the Phylogeny tab.
 
 The tree is deliberately **not** built from every specimen in a search
 result -- it is built from the specimens the app has *already* selected as
@@ -10,19 +10,31 @@ it is handed into a tree. That keeps a curator's manual reselection
 (:mod:`io.annotations`) in charge of what appears on the tree, exactly as it
 is already in charge of "Download Selected".
 
-No external binary (no aligner, no ML tree tool) is used, so nothing new
-needs bundling per OS. Two consequences of that:
+No external binary (no ML tree tool, no multiple aligner) is used, so
+nothing new needs bundling per OS. Two consequences of that:
 
-1. The tree is neighbor-joining, not maximum-likelihood. NJ from a
-   k-mer-based distance is what "estimated very quickly" buys once likelihood
-   and cross-platform binaries are both off the table.
-2. Distances come from tetranucleotide frequency vectors (cosine distance),
-   not a multiple sequence alignment -- COI-5P barcodes are never aligned
-   anywhere else in this app, and full pairwise alignment is far too slow at
-   any tip count worth showing.
+1. The tree is neighbor-joining, not maximum-likelihood. NJ is what
+   "estimated very quickly" buys once likelihood and cross-platform
+   binaries are both off the table.
+2. Distances are Kimura 2-parameter (K2P, the distance BOLD's own trees
+   use) over a **reference-anchored** alignment, not a true multiple
+   alignment: :mod:`core.refalign` aligns every representative once to a
+   single in-data reference (O(n) pairwise alignments, ~2s at the tip cap)
+   and lays its bases out in reference coordinates. Each pair's distance is
+   then computed only over the sites *both* cover (pairwise deletion).
 
-The real speed ceiling is not this module's own arithmetic (a single
-vectorised distance-matrix computation) but Biopython's
+   This replaced an alignment-free tetranucleotide (k-mer) cosine distance,
+   which was fast but wrong in a way that mattered here: a k-mer profile
+   depends on which part of COI a sequence covers, so long reads with
+   overhangs and short partial reads were placed by length and region
+   rather than by divergence. Comparing shared sites removes that bias.
+
+   Sequences that align poorly, cover little of the reference, or share too
+   few sites with some other tip are kept on the tree and flagged (see
+   :attr:`PhylogenyResult.flags`), not silently dropped.
+
+The real speed ceiling is not this module's own arithmetic (a handful of
+vectorised matrix multiplies) nor the alignment step, but Biopython's
 ``DistanceTreeConstructor.nj()``, a plain-Python, unvectorised O(n^3) loop.
 Measured on this project's own hardware: ~0.4s at 100 tips, ~6s at 250,
 ~54s at 500 -- a clean cubic (`t = k * n**3`, `k ~= 4.3e-7`). PHYLOGENY_LIMITS
@@ -37,14 +49,10 @@ from typing import Callable, Iterable
 import numpy as np
 import pandas as pd
 
+from ..config.constants import PHYLOGENY_ALIGNMENT
+from . import refalign
 from .selection import UNKNOWN_COUNTRY
 from .species import column_or_missing, to_text
-
-#: ACGT-only k-mers are counted; anything containing an ambiguity code (N, R,
-#: Y, ...) or a gap is skipped rather than expanded, since COI-5P barcodes are
-#: >99% clean ACGT and expanding ambiguity codes would cost far more than the
-#: handful of skipped windows are worth.
-_BASE_CODE = {"A": 0, "C": 1, "G": 2, "T": 3}
 
 
 class PhylogenyTooLargeToBuild(RuntimeError):
@@ -104,60 +112,61 @@ def fetch_representative_sequences(store, representatives: pd.DataFrame
     return dict(iter_sequences(store, processids))
 
 
-def kmer_frequency_matrix(sequences: dict[str, str], k: int = 4
-                          ) -> tuple[list[str], np.ndarray]:
-    """Tip names (insertion order of ``sequences``) and an ``(M, 4**k)``
-    row-normalised k-mer frequency matrix.
+def k2p_distance_matrix(rows: np.ndarray, *, min_shared_sites: int
+                        ) -> tuple[np.ndarray, np.ndarray]:
+    """Kimura 2-parameter distances between the reference-anchored rows of
+    :func:`core.refalign.anchor_all`, each pair over only the sites both
+    have a base at (pairwise deletion).
 
-    A window containing anything other than A/C/G/T (an ambiguity code, a
-    gap, lowercase is upper-cased first) is simply skipped, not expanded --
-    see the module docstring.
+    Returns ``(distances, imputed)``: a symmetric ``(M, M)`` matrix and a
+    boolean mask of the pairs whose distance could not be computed directly
+    -- fewer than ``min_shared_sites`` shared sites, or so divergent that
+    K2P's logs are undefined (saturation) -- and were estimated instead as
+    the shortest two-step path ``min_k d(i,k) + d(k,j)`` through a third tip
+    with both distances defined (an upper bound, and additive on a tree), or
+    failing that the largest defined distance. NJ needs a full matrix, and
+    this keeps such a tip on the tree near the tips it does overlap.
+
+    All counts come from one-hot matrix multiplies, so this is vectorised
+    across every pair at once.
     """
-    names = list(sequences.keys())
-    n_bins = 4 ** k
-    freqs = np.zeros((len(names), n_bins), dtype=np.float64)
+    rows = np.asarray(rows, dtype=np.uint8)
+    n = rows.shape[0]
+    valid = (rows != refalign.MISSING).astype(np.float32)
+    shared = valid @ valid.T
+    same = np.zeros((n, n), dtype=np.float32)
+    for base in range(4):
+        onehot = (rows == base).astype(np.float32)
+        same += onehot @ onehot.T
+    purine = ((rows == 0) | (rows == 2)).astype(np.float32)      # A, G
+    pyrimidine = ((rows == 1) | (rows == 3)).astype(np.float32)  # C, T
+    transversions = purine @ pyrimidine.T + pyrimidine @ purine.T
+    transitions = shared - same - transversions
 
-    for row, name in enumerate(names):
-        seq = (sequences[name] or "").upper()
-        counts = np.zeros(n_bins, dtype=np.float64)
-        total = 0
-        run: list[int] = []  # the current unbroken stretch of valid bases
-        for base in seq:
-            code = _BASE_CODE.get(base, -1)
-            if code < 0:
-                run.clear()
-                continue
-            run.append(code)
-            if len(run) > k:
-                run.pop(0)
-            if len(run) == k:
-                index = 0
-                for c in run:
-                    index = index * 4 + c
-                counts[index] += 1
-                total += 1
-        if total:
-            freqs[row] = counts / total
+    shared = shared.astype(np.float64)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        p = transitions / shared
+        q = transversions / shared
+        a = 1.0 - 2.0 * p - q
+        b = 1.0 - 2.0 * q
+        defined = (shared >= min_shared_sites) & (a > 0) & (b > 0)
+        dist = np.where(defined, -0.5 * np.log(np.where(defined, a, 1.0))
+                        - 0.25 * np.log(np.where(defined, b, 1.0)), np.nan)
+    np.fill_diagonal(dist, 0.0)
+    np.fill_diagonal(defined, True)
+    dist = np.clip(dist, 0.0, None)  # -0.0 / float noise on identical pairs
 
-    return names, freqs
-
-
-def cosine_distance_matrix(freqs: np.ndarray) -> np.ndarray:
-    """Symmetric ``(M, M)`` distance matrix, ``1 - cosine similarity``.
-
-    A single vectorised matrix multiply -- the one part of tree-building
-    that scales well; see the module docstring for what does not.
-    """
-    norms = np.linalg.norm(freqs, axis=1, keepdims=True)
-    safe_norms = np.where(norms == 0, 1.0, norms)
-    normalised = freqs / safe_norms
-    similarity = normalised @ normalised.T
-    distance = 1.0 - similarity
-    np.fill_diagonal(distance, 0.0)
-    # Floating-point noise can push a same-sequence pair fractionally below
-    # zero or a zero-vector row (an unreadable sequence) to a stray negative.
-    distance = np.clip(distance, 0.0, None)
-    return (distance + distance.T) / 2.0
+    imputed = ~defined
+    if imputed.any():
+        known = np.where(defined, dist, np.inf)
+        fallback = dist[defined & ~np.eye(n, dtype=bool)]
+        fallback = float(fallback.max()) if fallback.size else 1.0
+        for i in np.flatnonzero(imputed.any(axis=1)):
+            via = (known[i][:, None] + known).min(axis=0)
+            cols = imputed[i]
+            dist[i, cols] = np.where(np.isfinite(via[cols]), via[cols], fallback)
+        dist = (dist + dist.T) / 2.0
+    return dist, imputed
 
 
 def build_tree(names: list[str], distances: np.ndarray):
@@ -166,7 +175,7 @@ def build_tree(names: list[str], distances: np.ndarray):
     ``Bio.Phylo.TreeConstruction.DistanceCalculator`` is not used -- it
     computes distances from an aligned ``MultipleSeqAlignment``, which this
     module deliberately never builds (see module docstring). The NumPy
-    matrix from :func:`cosine_distance_matrix` is converted directly to
+    matrix from :func:`k2p_distance_matrix` is converted directly to
     Biopython's own lower-triangular container instead.
     """
     from Bio.Phylo.TreeConstruction import DistanceMatrix, DistanceTreeConstructor
@@ -271,6 +280,15 @@ class PhylogenyResult:
     #: Kept alongside the tree so a reroot can recompute monophyly without
     #: re-fetching session state it has no access to from here.
     bags_grades: pd.DataFrame = field(default_factory=pd.DataFrame)
+    #: ``tip label -> reasons`` for every tip whose placement deserves a
+    #: second look (poor or reverse-complemented alignment to the reference,
+    #: short coverage, estimated distances). Flagged tips stay on the tree;
+    #: the tab marks them. Tips with nothing to report are absent.
+    flags: dict[str, list[str]] = field(default_factory=dict)
+    #: Tip label of the representative every sequence was aligned to, and
+    #: its length in bp (see core.refalign).
+    reference: str = ""
+    reference_length: int = 0
 
 
 def build_phylogeny(
@@ -278,11 +296,15 @@ def build_phylogeny(
     bags_grades: pd.DataFrame,
     store,
     *,
-    k: int = 4,
     max_tips: int,
+    target_length: int = PHYLOGENY_ALIGNMENT["TARGET_LENGTH"],
+    min_identity: float = PHYLOGENY_ALIGNMENT["MIN_IDENTITY"],
+    min_coverage: float = PHYLOGENY_ALIGNMENT["MIN_COVERAGE"],
+    min_shared_sites: int = PHYLOGENY_ALIGNMENT["MIN_SHARED_SITES"],
     progress: "Callable[[str], None] | None" = None,
 ) -> PhylogenyResult:
-    """Orchestrates label -> fetch -> distance -> tree -> monophyly.
+    """Orchestrates label -> fetch -> align to reference -> K2P distance ->
+    tree -> monophyly.
 
     ``representatives`` is already ``io.exports.selected_rows(result.specimens,
     annotations)`` -- the app's existing curated (BIN x country) selection.
@@ -314,7 +336,7 @@ def build_phylogeny(
     sequences = {
         label_by_pid[pid]: seq
         for pid, seq in sequences_by_pid.items()
-        if pid in label_by_pid and seq
+        if pid in label_by_pid and refalign.clean_sequence(seq)
     }
     warnings = []
     missing = tip_count - len(sequences)
@@ -330,9 +352,30 @@ def build_phylogeny(
                                    "Fewer than two representatives had usable "
                                    "sequences; a tree needs at least two."])
 
+    report("Aligning to reference...")
+    reference, anchored = refalign.anchor_all(
+        sequences, target_length=target_length, min_identity=min_identity,
+        min_coverage=min_coverage, progress=progress)
+    names = [a.name for a in anchored]
+
     report("Computing distances...")
-    names, freqs = kmer_frequency_matrix(sequences, k=k)
-    distances = cosine_distance_matrix(freqs)
+    distances, imputed = k2p_distance_matrix(
+        np.vstack([a.row for a in anchored]), min_shared_sites=min_shared_sites)
+
+    flags: dict[str, list[str]] = {}
+    for i, a in enumerate(anchored):
+        reasons = list(a.flags)
+        n_imputed = int(imputed[i].sum())
+        if n_imputed:
+            reasons.append(
+                f"shares under {min_shared_sites} comparable sites with "
+                f"{n_imputed:,} other tip(s); those distances are estimated")
+        if reasons:
+            flags[a.name] = reasons
+    if flags:
+        warnings.append(
+            f"{len(flags):,} tip(s) marked \u26a0 may be misplaced; hover a "
+            "marked tip to see why.")
 
     report("Building tree...")
     tree = build_tree(names, distances)
@@ -343,4 +386,6 @@ def build_phylogeny(
 
     return PhylogenyResult(representatives=reps, newick=newick, monophyly=monophyly,
                            tip_count=len(reps), warnings=warnings,
-                           tree=tree, bags_grades=bags_grades)
+                           tree=tree, bags_grades=bags_grades, flags=flags,
+                           reference=reference,
+                           reference_length=len(anchored[names.index(reference)].row))

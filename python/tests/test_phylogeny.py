@@ -1,11 +1,24 @@
+import math
+import random
+
+import numpy as np
 import pandas as pd
 import pytest
 
 from boldcurator.core import phylogeny as phylo
+from boldcurator.core import refalign
 
 
 def _f(rows):
     return pd.DataFrame(rows)
+
+
+def _random_seq(rng, n):
+    return "".join(rng.choice("ACGT") for _ in range(n))
+
+
+def _mutate(rng, seq, rate):
+    return "".join(rng.choice("ACGT") if rng.random() < rate else b for b in seq)
 
 
 # -- tip_label ---------------------------------------------------------
@@ -28,45 +41,84 @@ def test_tip_label_falls_back_to_identification_then_unknown():
     assert phylo.tip_label(row2) == "XYZ999-Unknown-Unknown"
 
 
-# -- kmer_frequency_matrix / cosine_distance_matrix ---------------------
+# -- k2p_distance_matrix ------------------------------------------------
+
+_TRANSITION = {0: 2, 2: 0, 1: 3, 3: 1}      # A<->G, C<->T
+_TRANSVERSION = {0: 1, 1: 0, 2: 3, 3: 2}    # A<->C, G<->T
 
 
-def test_identical_sequences_have_zero_distance():
-    seqs = {"a": "ACGTACGTACGT", "b": "ACGTACGTACGT"}
-    names, freqs = phylo.kmer_frequency_matrix(seqs, k=4)
-    dist = phylo.cosine_distance_matrix(freqs)
+def _random_row(n, seed=0):
+    return np.random.default_rng(seed).integers(0, 4, n).astype(np.uint8)
+
+
+def _k2p(p, q):
+    return -0.5 * math.log(1 - 2 * p - q) - 0.25 * math.log(1 - 2 * q)
+
+
+def test_identical_rows_have_zero_distance():
+    row = _random_row(300)
+    dist, imputed = phylo.k2p_distance_matrix(np.vstack([row, row]),
+                                              min_shared_sites=100)
     assert dist.shape == (2, 2)
-    assert dist[0, 1] == pytest.approx(0.0, abs=1e-9)
-    assert dist[0, 0] == 0.0 and dist[1, 1] == 0.0
+    assert dist[0, 1] == pytest.approx(0.0, abs=1e-12)
+    assert not imputed.any()
 
 
-def test_divergent_sequences_have_positive_symmetric_distance():
-    seqs = {"a": "ACGTACGTACGTACGT", "b": "TTTTAAAACCCCGGGG"}
-    names, freqs = phylo.kmer_frequency_matrix(seqs, k=4)
-    dist = phylo.cosine_distance_matrix(freqs)
-    assert dist[0, 1] > 0
+def test_k2p_matches_the_formula_for_known_transitions_and_transversions():
+    a = _random_row(200)
+    b = a.copy()
+    for i in range(10):
+        b[i] = _TRANSITION[int(a[i])]
+    for i in range(10, 15):
+        b[i] = _TRANSVERSION[int(a[i])]
+    dist, _ = phylo.k2p_distance_matrix(np.vstack([a, b]), min_shared_sites=100)
+    assert dist[0, 1] == pytest.approx(_k2p(10 / 200, 5 / 200))
     assert dist[0, 1] == pytest.approx(dist[1, 0])
 
 
-def test_ambiguity_codes_are_skipped_not_expanded():
-    # A single N should not crash and should simply drop the windows that
-    # touch it, not enumerate every ACGT expansion.
-    seqs = {"a": "ACGTNACGTACGT"}
-    names, freqs = phylo.kmer_frequency_matrix(seqs, k=4)
-    assert freqs.shape == (1, 256)
-    assert freqs[0].sum() == pytest.approx(1.0)
+def test_missing_sites_are_left_out_of_the_denominator():
+    """The point of pairwise deletion: a short read is compared over only
+    what it shares, so 10 transitions in 150 shared sites reads as 10/150,
+    not 10/200."""
+    a = _random_row(200)
+    b = a.copy()
+    b[:50] = refalign.MISSING
+    for i in range(50, 60):
+        b[i] = _TRANSITION[int(a[i])]
+    dist, imputed = phylo.k2p_distance_matrix(np.vstack([a, b]),
+                                              min_shared_sites=100)
+    assert dist[0, 1] == pytest.approx(_k2p(10 / 150, 0.0))
+    assert not imputed.any()
 
 
-def test_short_or_empty_sequence_gives_all_zero_row():
-    seqs = {"a": "AC", "b": ""}
-    names, freqs = phylo.kmer_frequency_matrix(seqs, k=4)
-    assert (freqs == 0).all()
-    dist = phylo.cosine_distance_matrix(freqs)
-    # Cosine similarity is undefined between two all-zero (unreadable)
-    # vectors; treated as maximally dissimilar rather than identical, so an
-    # unreadable sequence never masquerades as evidence of a match.
-    assert dist[0, 1] == 1.0
-    assert dist[0, 0] == 0.0 and dist[1, 1] == 0.0
+def test_pairs_with_too_few_shared_sites_are_estimated_via_a_third_tip():
+    full = _random_row(400)
+    left = full.copy()
+    left[200:] = refalign.MISSING
+    right = full.copy()
+    right[:200] = refalign.MISSING
+    for i in (10, 20):
+        left[i] = _TRANSITION[int(full[i])]
+    for i in (300, 310, 320):
+        right[i] = _TRANSITION[int(full[i])]
+    dist, imputed = phylo.k2p_distance_matrix(np.vstack([full, left, right]),
+                                              min_shared_sites=100)
+    assert imputed[1, 2] and imputed[2, 1]
+    assert not imputed[0, 1] and not imputed[0, 2]
+    assert dist[1, 2] == pytest.approx(dist[1, 0] + dist[0, 2])
+    assert dist[1, 2] == pytest.approx(dist[2, 1])
+
+
+def test_pairs_with_no_route_fall_back_to_the_largest_defined_distance():
+    full = _random_row(400)
+    near = full.copy()
+    near[0] = _TRANSITION[int(full[0])]
+    empty = np.full(400, refalign.MISSING, dtype=np.uint8)
+    dist, imputed = phylo.k2p_distance_matrix(np.vstack([full, near, empty]),
+                                              min_shared_sites=100)
+    assert imputed[2, 0] and imputed[2, 1] and not imputed[0, 1]
+    assert dist[2, 0] == pytest.approx(dist[0, 1])
+    assert dist[2, 2] == 0.0
 
 
 # -- build_tree / to_newick ----------------------------------------------
@@ -182,10 +234,12 @@ def test_build_phylogeny_end_to_end_with_fake_sequences(monkeypatch):
         {"species": "sp_c", "bags_grade": "C"},
         {"species": "sp_d", "bags_grade": "A"},
     ])
+    rng = random.Random(0)
+    core = _random_seq(rng, 658)
     fake_sequences = {
-        "p1": "ACGTACGTACGTACGTACGT",
-        "p2": "ACGTACGTACGTACGTACGA",
-        "p3": "TTTTAAAACCCCGGGGTTTT",
+        "p1": core,
+        "p2": _mutate(rng, core, 0.02),
+        "p3": _mutate(rng, core, 0.2),
     }
     monkeypatch.setattr(phylo, "fetch_representative_sequences",
                         lambda store, r: fake_sequences)
@@ -194,7 +248,75 @@ def test_build_phylogeny_end_to_end_with_fake_sequences(monkeypatch):
     assert result.tip_count == 3
     assert result.newick.endswith(";")
     assert not result.warnings
-    assert "sp_c" in result.monophyly
+    assert not result.flags
+    assert result.monophyly == {"sp_c": True}
+    assert result.reference == "p1-sp_c-Kenya"
+    assert result.reference_length == 658
+
+
+def test_build_phylogeny_keeps_and_flags_problem_sequences(monkeypatch):
+    rng = random.Random(0)
+    core = _random_seq(rng, 658)
+    reps = _f([
+        {"processid": pid, "species": "sp", "identification": "sp",
+         "bin_uri": "B", "country.ocean": "X"}
+        for pid in ("full", "near", "short", "junk", "flipped")
+    ])
+    fake_sequences = {
+        "full": core,
+        "near": _mutate(rng, core, 0.02),
+        "short": core[:250],
+        "junk": _random_seq(random.Random(7), 600),
+        "flipped": refalign.reverse_complement(_mutate(rng, core, 0.02)),
+    }
+    monkeypatch.setattr(phylo, "fetch_representative_sequences",
+                        lambda store, r: fake_sequences)
+
+    result = phylo.build_phylogeny(reps, _f([]), store=None, max_tips=100)
+    assert result.tip_count == 5, "flagged sequences stay on the tree"
+    flags = result.flags
+    assert set(flags) == {"short-sp-X", "junk-sp-X", "flipped-sp-X"}
+    assert any(f.startswith("short:") for f in flags["short-sp-X"])
+    assert any("low identity" in f for f in flags["junk-sp-X"])
+    assert any("reverse-complemented" in f for f in flags["flipped-sp-X"])
+    assert any("3 tip(s) marked" in w for w in result.warnings)
+
+
+def test_long_and_short_reads_group_by_species_not_by_length(monkeypatch):
+    """The bug this module's reference-anchored K2P replaced k-mer cosine
+    distance for. COI's base composition varies along the gene; here the
+    first half is AT-rich. Two species ~15% apart each contribute a
+    full-length read, a read with long overhangs, and a short read of the
+    AT-rich half. On k-mer profiles the two short reads looked like each
+    other rather than their own species (confirmed against the previous
+    implementation: neither species came out monophyletic); comparing
+    shared sites must group every read with its own species.
+    """
+    rng = random.Random(1)
+    ancestor = ("".join(rng.choices("ACGT", weights=[4, 1, 1, 4], k=330))
+                + _random_seq(rng, 328))
+    species = {"A": _mutate(rng, ancestor, 0.08), "B": _mutate(rng, ancestor, 0.08)}
+
+    rows, fake_sequences = [], {}
+    for sp, genome in species.items():
+        for kind in ("full", "over", "short"):
+            seq = _mutate(rng, genome, 0.01)
+            if kind == "over":
+                seq = _random_seq(rng, 80) + seq + _random_seq(rng, 90)
+            elif kind == "short":
+                seq = seq[:300]
+            pid = f"{sp}_{kind}"
+            fake_sequences[pid] = seq
+            rows.append({"processid": pid, "species": f"sp_{sp}",
+                         "identification": f"sp_{sp}", "bin_uri": sp,
+                         "country.ocean": "X"})
+    monkeypatch.setattr(phylo, "fetch_representative_sequences",
+                        lambda store, r: fake_sequences)
+    grades = _f([{"species": "sp_A", "bags_grade": "C"},
+                 {"species": "sp_B", "bags_grade": "C"}])
+
+    result = phylo.build_phylogeny(_f(rows), grades, store=None, max_tips=100)
+    assert result.monophyly == {"sp_A": True, "sp_B": True}
 
 
 def test_build_phylogeny_drops_representatives_with_no_sequence(monkeypatch):
@@ -205,7 +327,7 @@ def test_build_phylogeny_drops_representatives_with_no_sequence(monkeypatch):
          "bin_uri": "B2", "country.ocean": "France"},
     ])
     monkeypatch.setattr(phylo, "fetch_representative_sequences",
-                        lambda store, r: {"p1": "ACGTACGTACGTACGT"})
+                        lambda store, r: {"p1": "ACGTACGTACGTACGT", "p2": "---"})
     result = phylo.build_phylogeny(reps, _f([]), store=None, max_tips=100)
     assert result.tip_count == 1
     assert result.newick == ""

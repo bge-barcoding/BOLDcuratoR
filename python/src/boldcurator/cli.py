@@ -357,15 +357,24 @@ def cmd_selftest(args: argparse.Namespace) -> int:
         assert row == (1,)
 
     def check_phylogeny() -> None:
-        from .core import phylogeny as phylo
+        import random
 
-        sequences = {
-            "a": "ACGTACGTACGTACGTACGTACGT",
-            "b": "ACGTACGTACGTACGTACGTACGA",
-            "c": "TTTTAAAACCCCGGGGTTTTAAAA",
-        }
-        names, freqs = phylo.kmer_frequency_matrix(sequences)
-        distances = phylo.cosine_distance_matrix(freqs)
+        from .core import phylogeny as phylo
+        from .core import refalign
+
+        # Realistic enough to take every real code path: the aligner (and
+        # its NUC.4.4 matrix load), an overhang, a short fragment, K2P.
+        rng = random.Random(0)
+        core = "".join(rng.choice("ACGT") for _ in range(200))
+        mutated = "".join(rng.choice("ACGT") if rng.random() < 0.1 else b
+                          for b in core)
+        sequences = {"a": core, "b": "TTGACCA" + core[:190], "c": mutated[20:]}
+        _, anchored = refalign.anchor_all(
+            sequences, target_length=200, min_identity=0.6, min_coverage=0.5)
+        names = [a.name for a in anchored]
+        distances, _ = phylo.k2p_distance_matrix(
+            [a.row for a in anchored], min_shared_sites=100)
+        assert distances[0, 1] < distances[0, 2], "aligner gave implausible distances"
         tree = phylo.build_tree(names, distances)
         newick = phylo.to_newick(tree)
         assert newick.endswith(";"), f"unexpected Newick output: {newick!r}"
