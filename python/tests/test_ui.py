@@ -557,3 +557,43 @@ def test_checking_a_group_replaces_the_checked_set_rather_than_adding(store):
     assert second and not (first & second), "the two groups must not overlap"
     assert set(state.annotations.working) == second, \
         "checking a group must not leave the previous group checked"
+
+
+def test_snapshot_filename_prefers_the_published_zenodo_name():
+    """Regression test, found testing on a real machine: a download used to
+    land as ``snapshot-20260922_1114.duckdb`` -- when it was clicked, not
+    which BOLD data package it is."""
+    from boldcurator.ui.app import _snapshot_filename_for
+
+    assert _snapshot_filename_for(
+        filename="bold_snapshot_2026-09-11.duckdb.gz",
+        snapshot_id="2026-09-11",
+    ) == "bold_snapshot_2026-09-11.duckdb"
+
+
+def test_snapshot_filename_falls_back_to_snapshot_id_then_a_timestamp():
+    from boldcurator.ui.app import _snapshot_filename_for
+
+    assert _snapshot_filename_for(snapshot_id="2026-09-11") == \
+        "bold_snapshot_2026-09-11.duckdb"
+    assert _snapshot_filename_for(snapshot_id="unknown") \
+        .startswith("snapshot-")
+    assert _snapshot_filename_for().startswith("snapshot-")
+
+
+def test_unique_snapshot_path_never_silently_overwrites(tmp_path):
+    from boldcurator.ui.app import _unique_snapshot_path
+
+    first = _unique_snapshot_path("bold_snapshot_2026-09-11.duckdb",
+                                  directory=tmp_path)
+    assert first == tmp_path / "bold_snapshot_2026-09-11.duckdb"
+    first.write_text("x")
+
+    second = _unique_snapshot_path("bold_snapshot_2026-09-11.duckdb",
+                                   directory=tmp_path)
+    assert second == tmp_path / "bold_snapshot_2026-09-11 (2).duckdb"
+    second.write_text("x")
+
+    third = _unique_snapshot_path("bold_snapshot_2026-09-11.duckdb",
+                                  directory=tmp_path)
+    assert third == tmp_path / "bold_snapshot_2026-09-11 (3).duckdb"

@@ -53,7 +53,21 @@ jobs:
           --collect-all duckdb --collect-all shiny --collect-all htmltools
           --collect-all shinychat --collect-all pywebview
           --collect-all pythonnet --collect-all clr_loader
+          --collect-all biopython
           packaging/entrypoint.py
+
+      - name: Smoke test -- selftest (no snapshot needed)
+        # Catches a missing package data file before a curator does, same as
+        # the shinychat/pywebview fixes below -- this is what caught biopython
+        # needing its own --collect-all: DistanceCalculator's class body
+        # (Bio.Phylo.TreeConstruction) reads a data directory PyInstaller's
+        # import analysis doesn't bundle unless told to. Runs first, and
+        # without a snapshot, because it's the fastest of these three checks.
+        shell: bash
+        run: |
+          BIN=dist/boldcurator/boldcurator
+          [ "${{ runner.os }}" = "Windows" ] && BIN="$BIN.exe"
+          "$BIN" selftest
 
       - name: Build a tiny fixture snapshot to smoke-test against
         shell: bash

@@ -141,3 +141,33 @@ def test_desktop_rejects_an_unknown_window_mode(capsys):
     with pytest.raises(SystemExit):
         main(["desktop", "--window", "smoke-signal"])
     assert "invalid choice" in capsys.readouterr().err
+
+
+def test_selftest_needs_no_snapshot_and_passes(capsys):
+    """No --snapshot given at all -- this is the point of the command."""
+    assert main(["selftest"]) == 0
+    out = capsys.readouterr().out
+    assert "[ok]" in out and "FAIL" not in out
+    assert "selftest passed" in out
+
+
+def test_selftest_reports_a_broken_check_without_crashing(monkeypatch, capsys):
+    """Added after core.phylogeny broke on a real frozen Windows build
+
+    (Bio.Phylo.TreeConstruction's class-body substitution_matrices.load()
+    needs a data directory PyInstaller's import analysis doesn't bundle
+    unless told to -- packaging/README.md). This doesn't reproduce the real
+    packaging failure (that needs an actual frozen build), but proves
+    selftest's own error handling: a broken check is reported and fails the
+    command, not left to crash it or pass silently.
+    """
+    import boldcurator.core.phylogeny as phylo
+
+    def broken(*args, **kwargs):
+        raise FileNotFoundError("substitution_matrices data directory missing")
+
+    monkeypatch.setattr(phylo, "build_tree", broken)
+    assert main(["selftest"]) == 1
+    out = capsys.readouterr().out
+    assert "[FAIL]" in out and "substitution_matrices" in out
+    assert "selftest FAILED" in out

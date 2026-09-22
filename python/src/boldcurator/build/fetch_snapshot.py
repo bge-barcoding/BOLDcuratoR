@@ -34,6 +34,7 @@ import re
 import sys
 import urllib.request
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 
@@ -225,6 +226,24 @@ def _local_snapshot_id(path: Path) -> str | None:
         return None
 
 
+def _parse_snapshot_date(snapshot_id: str | None) -> date | None:
+    """``snapshot_id`` as a real date, or ``None`` when it isn't one.
+
+    Not every ``snapshot_id`` is a date -- ``resolve_zenodo_record`` falls
+    back to Zenodo's own record id when a file's name carries no
+    ``YYYY-MM-DD`` (its own docstring explains why). Comparing two
+    non-dates, or a date against a non-date, has no meaningful direction,
+    so callers should treat ``None`` here as "not comparable", not "equal"
+    or "different" in either direction.
+    """
+    if not snapshot_id:
+        return None
+    try:
+        return date.fromisoformat(snapshot_id)
+    except ValueError:
+        return None
+
+
 @dataclass
 class UpdateCheck:
     """The result of asking Zenodo what's latest, without downloading it."""
@@ -233,6 +252,28 @@ class UpdateCheck:
     local_snapshot_id: str | None
     remote_snapshot_id: str
     remote_filename: str
+
+    @property
+    def comparison(self) -> str:
+        """One of ``"up_to_date"``, ``"remote_newer"``, ``"remote_older"``,
+        or ``"different"`` (not equal, but not comparable as dates either --
+        e.g. one side is a bare Zenodo record id, not a date-named file).
+
+        ``up_to_date`` (equality) is decided once, in :func:`check_for_update`
+        itself -- this only has to work out *which direction* the difference
+        goes, for a curator-facing message that shouldn't claim "newer" when
+        the local snapshot is actually the more recent one (round found
+        during Phylogeny-tab field testing: a local build dated after the
+        latest Zenodo publish was reported as having a "newer" one
+        available, going backwards in time).
+        """
+        if self.up_to_date:
+            return "up_to_date"
+        local_date = _parse_snapshot_date(self.local_snapshot_id)
+        remote_date = _parse_snapshot_date(self.remote_snapshot_id)
+        if local_date is None or remote_date is None:
+            return "different"
+        return "remote_newer" if remote_date > local_date else "remote_older"
 
 
 def check_for_update(record_id: str, local_path: Path) -> UpdateCheck:

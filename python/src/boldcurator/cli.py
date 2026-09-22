@@ -329,6 +329,65 @@ def cmd_verify(args: argparse.Namespace) -> int:
     return verify_main(["--snapshot", str(args.snapshot)])
 
 
+def cmd_selftest(args: argparse.Namespace) -> int:
+    """Exercise the modules most likely to work unfrozen and break only once
+    packaged (PyInstaller) -- no snapshot, no network, no browser needed.
+
+    Added after ``core.phylogeny`` broke on a real Windows build:
+    ``import Bio.Phylo.TreeConstruction`` (needed for
+    ``DistanceMatrix``/``DistanceTreeConstructor``) works fine unfrozen but
+    transitively imports ``Bio.Align``, whose ``DistanceCalculator`` class
+    body runs ``substitution_matrices.load()`` -- an ``os.listdir()`` on a
+    data directory PyInstaller's import analysis doesn't bundle unless told
+    to (``--collect-all biopython``, see ``packaging/README.md``). This
+    check builds a real tiny tree, not just an import, so it fails the same
+    way a curator's "Build tree" click did rather than passing on the
+    import alone and missing the actual failure point.
+
+    Run this against a frozen build directly (``boldcurator.exe selftest``)
+    to check a packaging fix without going through Search -> Phylogeny ->
+    Build tree in the GUI first.
+    """
+    print(f"boldcurator {__version__} selftest")
+
+    def check_duckdb() -> None:
+        import duckdb
+
+        row = duckdb.connect(":memory:").execute("select 1").fetchone()
+        assert row == (1,)
+
+    def check_phylogeny() -> None:
+        from .core import phylogeny as phylo
+
+        sequences = {
+            "a": "ACGTACGTACGTACGTACGTACGT",
+            "b": "ACGTACGTACGTACGTACGTACGA",
+            "c": "TTTTAAAACCCCGGGGTTTTAAAA",
+        }
+        names, freqs = phylo.kmer_frequency_matrix(sequences)
+        distances = phylo.cosine_distance_matrix(freqs)
+        tree = phylo.build_tree(names, distances)
+        newick = phylo.to_newick(tree)
+        assert newick.endswith(";"), f"unexpected Newick output: {newick!r}"
+
+    checks = [
+        ("duckdb", check_duckdb),
+        ("biopython (Phylogeny tab tree building)", check_phylogeny),
+    ]
+
+    failed = False
+    for name, check in checks:
+        try:
+            check()
+            print(f"  [ok]   {name}")
+        except Exception as exc:  # noqa: BLE001 -- reported, not swallowed
+            failed = True
+            print(f"  [FAIL] {name}: {exc}")
+
+    print("selftest FAILED" if failed else "selftest passed")
+    return 1 if failed else 0
+
+
 def cmd_fetch_snapshot(args: argparse.Namespace) -> int:
     from .build.fetch_snapshot import fetch
 
@@ -381,6 +440,12 @@ def build_parser() -> argparse.ArgumentParser:
     verify = sub.add_parser("verify", help="verify a snapshot read-only")
     _add_snapshot_arg(verify)
     verify.set_defaults(func=cmd_verify)
+
+    selftest = sub.add_parser(
+        "selftest",
+        help="exercise modules that break only once frozen -- no snapshot, "
+             "no network, no browser")
+    selftest.set_defaults(func=cmd_selftest)
 
     fetch_snapshot = sub.add_parser(
         "fetch-snapshot", help="download a pre-built snapshot (plan 5.1)")

@@ -325,6 +325,7 @@ def test_check_for_update_reports_up_to_date(monkeypatch, tmp_path):
     assert result.up_to_date is True
     assert result.local_snapshot_id == "2026-09-11"
     assert result.remote_snapshot_id == "2026-09-11"
+    assert result.comparison == "up_to_date"
 
 
 def test_check_for_update_reports_a_newer_snapshot(monkeypatch, tmp_path):
@@ -342,6 +343,50 @@ def test_check_for_update_reports_a_newer_snapshot(monkeypatch, tmp_path):
     assert result.up_to_date is False
     assert result.local_snapshot_id == "2026-09-11"
     assert result.remote_snapshot_id == "2026-09-18"
+    assert result.comparison == "remote_newer"
+
+
+def test_check_for_update_does_not_call_an_older_remote_newer(monkeypatch, tmp_path):
+    """Regression test, found testing the Phylogeny tab on a real machine:
+
+    a local snapshot built *after* the latest Zenodo publish (a dev/QA
+    build, dated later than anything actually released) was reported as
+    having a "newer" one available -- backwards in time. ``up_to_date`` is
+    correctly False here (the ids differ), but ``comparison`` must say
+    which direction the difference actually goes.
+    """
+    payload = {
+        "id": 22849517,
+        "metadata": {},
+        "files": [{"key": "bold_snapshot_2026-09-11.duckdb.gz",
+                   "checksum": "md5:abc",
+                   "links": {"self": "https://x/snapshot"}}],
+    }
+    monkeypatch.setattr(fs, "_get_json", lambda url: payload)
+    monkeypatch.setattr(fs, "_local_snapshot_id", lambda path: "2026-09-18")
+
+    result = fs.check_for_update("22849515", tmp_path / "local.duckdb")
+    assert result.up_to_date is False
+    assert result.comparison == "remote_older"
+
+
+def test_check_for_update_a_non_date_snapshot_id_is_not_claimed_newer(
+    monkeypatch, tmp_path
+):
+    """``resolve_zenodo_record`` falls back to a bare Zenodo record id when a
+    file's name carries no date -- not comparable as a date either way."""
+    payload = {
+        "id": 987654,
+        "metadata": {},
+        "files": [{"key": "bold_snapshot.duckdb", "checksum": "md5:abc",
+                   "links": {"self": "https://x/snapshot"}}],
+    }
+    monkeypatch.setattr(fs, "_get_json", lambda url: payload)
+    monkeypatch.setattr(fs, "_local_snapshot_id", lambda path: "2026-09-11")
+
+    result = fs.check_for_update("22849515", tmp_path / "local.duckdb")
+    assert result.up_to_date is False
+    assert result.comparison == "different"
 
 
 def test_check_for_update_with_no_local_snapshot_is_not_up_to_date(
@@ -360,6 +405,7 @@ def test_check_for_update_with_no_local_snapshot_is_not_up_to_date(
     result = fs.check_for_update("22849515", tmp_path / "does-not-exist.duckdb")
     assert result.up_to_date is False
     assert result.local_snapshot_id is None
+    assert result.comparison == "different"
 
 
 def test_fetch_downloads_when_the_snapshot_id_differs(

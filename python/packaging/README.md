@@ -20,6 +20,7 @@ pyinstaller --onedir --name boldcurator --paths src \
     --collect-all pywebview \
     --collect-all pythonnet \
     --collect-all clr_loader \
+    --collect-all biopython \
     packaging/entrypoint.py
 ```
 
@@ -59,6 +60,21 @@ of thing that silently rots the next time a dependency updates.
   config/data files correctly (see "The Windows native-window failure"
   below) -- `--collect-all shiny` not covering `shinychat`'s data files was
   the same shape of problem, one layer down in a different dependency.
+- **biopython**: **the other one that actually broke a real build,** on a
+  real Windows machine, in the Phylogeny tab (`core/phylogeny.py`).
+  Importing `Bio.Phylo.TreeConstruction` (for `DistanceMatrix`/
+  `DistanceTreeConstructor`) transitively imports `Bio.Align`, whose
+  `DistanceCalculator` class body -- executed the instant the module is
+  imported, whether or not that class is ever used -- calls
+  `substitution_matrices.load()`, which does `os.listdir()` on a `data/`
+  directory shipped as non-`.py` package data. Exact same failure shape as
+  `shinychat` above: the code that references the directory bundles fine,
+  the directory itself doesn't, and the traceback (`[WinError 3] The
+  system cannot find the path specified:
+  ...\Bio\Align\substitution_matrices\data`) gives no hint the fix lives
+  in the PyInstaller command rather than in `core/phylogeny.py`. Run
+  `boldcurator selftest` (see `cli.py`) against a build to check this
+  without going through the GUI.
 
 ## The Windows native-window failure -- real, hit on a real machine
 

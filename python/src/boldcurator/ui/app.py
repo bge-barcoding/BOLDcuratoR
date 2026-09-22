@@ -91,9 +91,19 @@ def _provenance_path(snapshot_path: Path) -> Path:
     return snapshot_path.with_suffix(snapshot_path.suffix + ".meta.json")
 
 
-def _write_provenance(snapshot_path: Path, *, source: str) -> None:
+def _write_provenance(snapshot_path: Path, *, source: str,
+                      snapshot_id: str = "", filename: str = "") -> None:
+    """``snapshot_id``/``filename`` are optional extras (round found while
+    diagnosing a naming report): the sidecar is then self-describing --
+    which BOLD data package this file actually is -- without opening the
+    ``.duckdb`` file itself, which is what made that report slower to
+    diagnose than it needed to be."""
     meta = {"downloaded_at": _dt.datetime.now().isoformat(timespec="seconds"),
             "source": source}
+    if snapshot_id:
+        meta["snapshot_id"] = snapshot_id
+    if filename:
+        meta["filename"] = filename
     _provenance_path(snapshot_path).write_text(json.dumps(meta), encoding="utf-8")
 
 
@@ -117,6 +127,51 @@ def _obtained_date(snapshot_path: Path) -> str:
         return "unknown"
     return (_dt.datetime.fromtimestamp(mtime).isoformat(timespec="seconds")
             + " (file's own modified date -- not downloaded through this app)")
+
+
+def _snapshot_filename_for(*, filename: str = "", snapshot_id: str = "") -> str:
+    """The name a downloaded or copied snapshot file should get.
+
+    Found while diagnosing a report: a download landed as
+    ``snapshot-20260922_1114.duckdb`` -- when it was clicked, not which BOLD
+    data package it actually is (``2026-09-11``, per its own filename on
+    Zenodo and the ``snapshot_id`` embedded in the file itself,
+    ``data/snapshot.py``). Prefers the published Zenodo filename itself
+    (``.gz`` stripped -- the same file, decompressed, so the name should
+    match what a curator would see on Zenodo); falls back to a name built
+    from ``snapshot_id`` alone when there is no published filename (a
+    manifest source, or a locally-copied file with no filename of its own
+    from Zenodo); falls back to the old download-timestamp scheme only when
+    neither is known, so a source this app cannot identify still gets a
+    file, just not a self-describing one.
+    """
+    if filename:
+        name = filename[:-3] if filename.endswith(".gz") else filename
+        if name:
+            return name
+    if snapshot_id and snapshot_id != "unknown":
+        return f"bold_snapshot_{snapshot_id}.duckdb"
+    return f"snapshot-{export_io.timestamp()}.duckdb"
+
+
+def _unique_snapshot_path(name: str, *, directory: Path = DEFAULT_SNAPSHOT_DIR) -> Path:
+    """``directory / name``, disambiguated if that name is already taken.
+
+    A second download or copy of the *same* published version, landing on a
+    name that's already there, must never silently overwrite a file that
+    might not actually be identical (a partial/corrupt leftover, or -- since
+    ``snapshot_id`` is trusted, not re-verified byte for byte -- simply two
+    different files that happen to claim the same id).
+    """
+    candidate = directory / name
+    if not candidate.exists():
+        return candidate
+    n = 2
+    while True:
+        candidate = directory / f"{Path(name).stem} ({n}){Path(name).suffix}"
+        if not candidate.exists():
+            return candidate
+        n += 1
 
 
 def _all_columns_ordered(frame: pd.DataFrame) -> list[str]:
@@ -825,18 +880,26 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 snap_msg.set(f"Could not delete {target}: {exc}")
             snap_tick.set(snap_tick.get() + 1)
 
-        def _snap_run_download(resolve_source, out_path: Path) -> None:
+        def _snap_run_download(resolve_source) -> None:
             from ..build import fetch_snapshot as fs
 
             try:
+                # Resolved here, not before the thread starts, precisely so
+                # the file can be named after what it actually is
+                # (source.filename/snapshot_id) rather than only when the
+                # download was clicked -- see _snapshot_filename_for.
                 source = resolve_source(fs)
+                out_path = _unique_snapshot_path(_snapshot_filename_for(
+                    filename=source.filename, snapshot_id=source.snapshot_id))
 
                 def progress(text, end="\n"):
                     snap_dl_state["message"] = text.strip("\r")
 
                 out_path.parent.mkdir(parents=True, exist_ok=True)
                 fs.download(source, out_path, progress=progress)
-                _write_provenance(out_path, source=source.url)
+                _write_provenance(out_path, source=source.url,
+                                  snapshot_id=source.snapshot_id,
+                                  filename=source.filename)
                 snap_dl_state["message"] = (
                     f"Downloaded to {out_path}. Restart BOLDcurator to use it.")
             except fs.FetchError as exc:
@@ -850,11 +913,9 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         def _snap_start_download(resolve_source) -> None:
             if snap_dl_state["running"]:
                 return
-            out_path = (DEFAULT_SNAPSHOT_DIR
-                       / f"snapshot-{export_io.timestamp()}.duckdb")
             snap_dl_state.update(running=True, message="Starting...")
             threading.Thread(target=_snap_run_download,
-                             args=(resolve_source, out_path), daemon=True).start()
+                             args=(resolve_source,), daemon=True).start()
             snap_op_seq.set(snap_op_seq.get() + 1)
 
         @reactive.effect
@@ -868,17 +929,35 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
 
             try:
                 result = fs.check_for_update(DEFAULT_SNAPSHOT_ZENODO_DOI, store.path)
-                if result.up_to_date:
+                local = result.local_snapshot_id or "unknown"
+                comparison = result.comparison
+                if comparison == "up_to_date":
                     snap_dl_state["message"] = (
                         f"Up to date -- {result.remote_snapshot_id} is the "
                         "latest published snapshot.")
-                else:
-                    local = result.local_snapshot_id or "unknown"
+                elif comparison == "remote_newer":
                     snap_dl_state["message"] = (
                         f"A newer snapshot is available: "
                         f"{result.remote_snapshot_id} (this session is "
                         f"using {local}). Use \"Download the latest public "
                         "BOLD snapshot\" above to get it.")
+                elif comparison == "remote_older":
+                    # Found testing the Phylogeny tab on a real machine: a
+                    # local snapshot built after the latest Zenodo publish
+                    # (a dev/QA build) was reported as having a "newer" one
+                    # available, going backwards in time. Say what is
+                    # actually true instead of assuming "different" always
+                    # means "remote is ahead".
+                    snap_dl_state["message"] = (
+                        f"This session's snapshot ({local}) is newer than "
+                        f"the latest one published on Zenodo "
+                        f"({result.remote_snapshot_id}). Nothing to "
+                        "download.")
+                else:
+                    snap_dl_state["message"] = (
+                        f"A different snapshot is published: "
+                        f"{result.remote_snapshot_id} (this session is "
+                        f"using {local}).")
             except fs.FetchError as exc:
                 snap_dl_state["message"] = f"Could not check for an update: {exc}"
             finally:
@@ -923,7 +1002,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 snap_msg.set("No file chosen -- type the path above instead "
                              "if Browse… didn't work.")
 
-        def _snap_run_copy(src: Path, out_path: Path) -> None:
+        def _snap_run_copy(src: Path, out_path: Path, *, snapshot_id: str) -> None:
             try:
                 out_path.parent.mkdir(parents=True, exist_ok=True)
                 tmp = out_path.with_suffix(out_path.suffix + ".part")
@@ -938,7 +1017,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                             f"Copying... {pct:.0%} "
                             f"({written / 1e6:.0f} / {total / 1e6:.0f} MB)")
                 tmp.replace(out_path)
-                _write_provenance(out_path, source=str(src))
+                _write_provenance(out_path, source=str(src), snapshot_id=snapshot_id)
                 snap_dl_state["message"] = (
                     f"Copied to {out_path}. Restart BOLDcurator to use it.")
             except OSError as exc:
@@ -962,15 +1041,19 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 return
             try:
                 with SnapshotStore(candidate) as candidate_store:
-                    candidate_store.info()
+                    snapshot_id = candidate_store.info().snapshot_id
             except SnapshotError as exc:
                 snap_msg.set(f"Not a valid snapshot: {exc}")
                 return
-            out_path = (DEFAULT_SNAPSHOT_DIR
-                       / f"snapshot-{export_io.timestamp()}.duckdb")
+            # Named after the snapshot's own id (what it is), not when it was
+            # copied -- see _snapshot_filename_for.
+            out_path = _unique_snapshot_path(
+                _snapshot_filename_for(snapshot_id=snapshot_id))
             snap_dl_state.update(running=True, message="Starting...")
             threading.Thread(target=_snap_run_copy,
-                             args=(candidate, out_path), daemon=True).start()
+                             args=(candidate, out_path),
+                             kwargs={"snapshot_id": snapshot_id},
+                             daemon=True).start()
             snap_op_seq.set(snap_op_seq.get() + 1)
 
         @output
