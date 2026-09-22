@@ -53,7 +53,7 @@ jobs:
           --collect-all duckdb --collect-all shiny --collect-all htmltools
           --collect-all shinychat --collect-all pywebview
           --collect-all pythonnet --collect-all clr_loader
-          --collect-all Bio
+          --collect-all Bio --collect-all boldcurator
           packaging/entrypoint.py
 
       - name: Smoke test -- selftest (no snapshot needed)
@@ -90,6 +90,14 @@ jobs:
         # Catches a missing package data file before a curator does -- this
         # exact check is what caught shinychat needing its own
         # --collect-all during development (python/packaging/README.md).
+        #
+        # The second curl (the Phylogeny tab's own static JS) catches a
+        # different, silent flavour of the same class of bug: the root URL
+        # coming up proves the Shiny server started, but ui/static/phylo/ is
+        # boldcurator's *own* data, never reached by any --collect-all for a
+        # third-party dependency -- it 404s with no exception anywhere, so a
+        # curator just sees a blank tree canvas with nothing in the app to
+        # explain why. Found exactly this way on a real Windows build.
         shell: bash
         run: |
           BIN=dist/boldcurator/boldcurator
@@ -101,11 +109,17 @@ jobs:
             if curl -sf http://127.0.0.1:8901/ >/dev/null 2>&1; then up=1; break; fi
             sleep 1
           done
-          kill "$pid" 2>/dev/null || true
           if [ "$up" != "1" ]; then
+            kill "$pid" 2>/dev/null || true
             echo "The frozen GUI server never came up"
             exit 1
           fi
+          if ! curl -sf http://127.0.0.1:8901/phylo-assets/phylo-init.js >/dev/null 2>&1; then
+            kill "$pid" 2>/dev/null || true
+            echo "Phylogeny tab's static JS was not bundled (/phylo-assets/phylo-init.js 404s)"
+            exit 1
+          fi
+          kill "$pid" 2>/dev/null || true
 
       - uses: actions/upload-artifact@v4
         with:

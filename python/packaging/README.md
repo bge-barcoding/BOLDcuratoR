@@ -21,6 +21,7 @@ pyinstaller --onedir --name boldcurator --paths src \
     --collect-all pythonnet \
     --collect-all clr_loader \
     --collect-all Bio \
+    --collect-all boldcurator \
     packaging/entrypoint.py
 ```
 
@@ -85,6 +86,22 @@ of thing that silently rots the next time a dependency updates.
   the PyInstaller command rather than in `core/phylogeny.py`. Run
   `boldcurator selftest` (see `cli.py`) against a build to check this
   without going through the GUI.
+- **boldcurator**: the app's own package, not a third-party dependency --
+  everything above bundles a *dependency's* data files; this one bundles
+  this project's own, specifically `ui/static/phylo/` (the Phylogeny tab's
+  JS/CSS, served at runtime via Shiny's `static_assets` from a `Path()`
+  string in `ui/app.py`, never through an `import` PyInstaller's own
+  analysis could trace). Diagnosed on a real build's exact symptom: the tab's
+  server-rendered HTML (representative count, monophyly badges) showed up
+  fine -- the Python side ran end to end -- but the tree canvas itself was
+  blank, because `phylo-init.js` 404'd and `window.bcRenderPhylotree` was
+  never defined. A `<script>` calling an undefined function fails silently
+  in the console; nothing in the app itself would have told a curator why.
+  `--collect-all boldcurator` works the same way it does for every
+  dependency above -- `boldcurator` is already importable via `--paths src`
+  (the same thing that lets `packaging/entrypoint.py` find it at all), so
+  this walks its own package tree for data files exactly like any other
+  entry in this list.
 
 ## The Windows native-window failure -- real, hit on a real machine
 
