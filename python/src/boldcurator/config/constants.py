@@ -255,6 +255,26 @@ DOWNLOAD_LIMITS: dict[str, int] = {
 }
 
 # --------------------------------------------------------------------------
+# Phylogeny tab limits
+# --------------------------------------------------------------------------
+
+#: The Phylogeny tab's tree builder (``core.phylogeny``) is pure Python, by
+#: design -- no external ML/alignment binary, so nothing new to bundle per
+#: OS. That trades away the speed a compiled tool would give: Biopython's
+#: ``DistanceTreeConstructor.nj()`` is a plain-Python, unvectorised O(n^3)
+#: loop, and it -- not the k-mer distance computation, which is one
+#: vectorised NumPy call -- is what actually caps how many tips can be built
+#: "very quickly". Measured directly on this project's own hardware (not
+#: guessed): ~0.4s at 100 tips, ~6s at 250, ~54s at 500 -- a clean cubic
+#: fit (``t = k * n**3``, ``k ~= 4.3e-7``). WARN_TIPS (~1.5s) and MAX_TIPS
+#: (~25-30s worst case) are picked from that fit, with headroom for slower
+#: machines than the one this was measured on.
+PHYLOGENY_LIMITS: dict[str, int] = {
+    "WARN_TIPS": 150,
+    "MAX_TIPS": 400,
+}
+
+# --------------------------------------------------------------------------
 # Data licence -- plan item 0.3
 # --------------------------------------------------------------------------
 

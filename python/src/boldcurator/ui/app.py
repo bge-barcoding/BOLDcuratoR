@@ -38,6 +38,7 @@ from ..config.constants import (
     DEFAULT_SNAPSHOT_ZENODO_DOI,
     DOWNLOAD_LIMITS,
     FLAG_OPTIONS,
+    PHYLOGENY_LIMITS,
 )
 from ..core.grouping import (
     GRADE_DESCRIPTIONS,
@@ -474,6 +475,15 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 setTimeout(function() {{ observer.disconnect(); }}, 3000);
             }});
         """),
+        # The Phylogeny tab's tree viewer (core.phylogeny + phylo-init.js):
+        # loaded once here, globally, like every other script/style block on
+        # this page -- not per-render -- because it defines one function
+        # (window.bcRenderPhylotree) the tab's own small per-render script
+        # then calls. See ui/static/phylo/phylo-init.js's own docstring for
+        # why this is a small hand-written renderer rather than a vendored
+        # library.
+        ui.tags.link(rel="stylesheet", href="/phylo-assets/phylo.css"),
+        ui.tags.script(src="/phylo-assets/phylo-init.js"),
         ui.div(
         ui.div(
             ui.tags.h4("BOLDcurator", style="margin:0;"),
@@ -658,6 +668,9 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                         ui.div(ui.output_ui("bins_body"), class_="bc-fill-output"),
                         value="bins"),
             *[_grade_panel(g) for g in GRADES],
+            ui.nav_panel("Phylogeny",
+                        ui.div(ui.output_ui("phylogeny_body"), class_="bc-fill-output"),
+                        value="phylogeny"),
             ui.nav_panel("Specimens",
                         ui.div(ui.output_ui("specimens_body"), class_="bc-fill-output"),
                         value="specimens"),
@@ -1029,6 +1042,15 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             offset.set(0)
             for value in group_index.values():
                 value.set(0)
+            # A tree already built is a fact about the *previous* search's
+            # specimens -- carrying it over would show an unrelated result
+            # (or, worse, an unrelated grade-C monophyly verdict) under a
+            # brand new search's tab. A build already running in the
+            # background is not cancelled (nothing else in this app cancels
+            # a running background operation either -- see snap_dl_state),
+            # so it may still land after this reset; the curator can always
+            # click "Build tree" again.
+            phylo_state.update(running=False, message="", result=None, error="")
             if state.search is not None:
                 ui.update_navset("nav", selected="species")
             touch()
@@ -1543,6 +1565,186 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         for _grade in GRADES:
             _register_grade(_grade)
 
+        # -- phylogeny -------------------------------------------------------
+        #
+        # Built from the specimens the app has *already* selected as each
+        # (BIN x country) group's best representative
+        # (core.selection.auto_select_best_specimens, surfaced here through
+        # the same export_io.selected_rows every "Download Selected" button
+        # uses) -- not from every specimen in the result. See
+        # core/phylogeny.py's module docstring for why, and why the tree is
+        # NJ from a k-mer distance rather than a likelihood tree from an
+        # alignment: no external binary, so nothing new to bundle per OS.
+        #
+        # Building is behind an explicit button, not automatic on tab open,
+        # and runs on a background thread -- the same plain-dict-state +
+        # reactive.Value-tick pattern as _snap_run_download/_snap_poll above,
+        # the app's one existing idiom for a long-running operation.
+        phylo_state: dict = {"running": False, "message": "", "result": None,
+                             "error": ""}
+        phylo_tick = reactive.Value(0)
+        phylo_op_seq = reactive.Value(0)
+
+        @reactive.effect
+        def _phylo_poll():
+            phylo_op_seq.get()
+            if phylo_state["running"]:
+                reactive.invalidate_later(0.4)
+            with reactive.isolate():
+                phylo_tick.set(phylo_tick.get() + 1)
+
+        def _phylo_run_build(representatives, bags_grades) -> None:
+            from ..core import phylogeny as phylo
+
+            try:
+                def progress(text):
+                    phylo_state["message"] = text
+
+                phylo_state["result"] = phylo.build_phylogeny(
+                    representatives, bags_grades, store,
+                    max_tips=PHYLOGENY_LIMITS["MAX_TIPS"], progress=progress)
+                phylo_state["error"] = ""
+            except phylo.PhylogenyTooLargeToBuild as exc:
+                phylo_state["error"] = str(exc)
+            except Exception as exc:  # noqa: BLE001 -- surfaced to the curator, not swallowed
+                phylo_state["error"] = f"Could not build the tree: {exc}"
+            finally:
+                # Only the plain dict, from this background thread -- see
+                # _snap_run_download above for why no reactive.Value is
+                # touched here.
+                phylo_state["running"] = False
+
+        @reactive.effect
+        @reactive.event(input.build_tree)
+        def _phylo_build():
+            if phylo_state["running"]:
+                return
+            search = state.search
+            if search is None:
+                return
+            from ..io import exports as export_io
+
+            result = search.analysis(store)
+            representatives = export_io.selected_rows(result.specimens,
+                                                       state.annotations)
+            phylo_state.update(running=True, message="Starting...",
+                               result=None, error="")
+            threading.Thread(target=_phylo_run_build,
+                             args=(representatives, result.bags_grades),
+                             daemon=True).start()
+            phylo_op_seq.set(phylo_op_seq.get() + 1)
+
+        def _phylo_tree_panel(result) -> ui.Tag:
+            rows = []
+            for warning in result.warnings:
+                rows.append(ui.div(warning, class_="alert alert-warning py-2 px-3 small"))
+            if not result.newick:
+                rows.append(ui.div("Nothing to show.", class_="text-muted"))
+                return ui.div(*rows)
+
+            if result.monophyly:
+                badges = []
+                for species in sorted(result.monophyly):
+                    ok = result.monophyly[species]
+                    colour = "#28a745" if ok else GRADE_COLOURS["C"]
+                    label = "Monophyletic" if ok else "Not monophyletic"
+                    badges.append(ui.tags.span(
+                        f"{species}: {label}",
+                        style=f"background:{colour};color:#fff;padding:2px 10px;"
+                              "border-radius:10px;font-weight:600;font-size:12px;"
+                              "margin:2px 6px 2px 0;display:inline-block;",
+                    ))
+                rows.append(ui.div(
+                    ui.tags.strong("BAGS grade C monophyly ", class_="small"),
+                    ui.div(*badges, style="margin-top:4px;"),
+                    style="margin-bottom:10px;",
+                ))
+
+            tips = [
+                {
+                    "tip": row["_tip_label"],
+                    "species": str(row.get("species") or row.get("identification") or ""),
+                    "bin_uri": str(row.get("bin_uri") or ""),
+                    "bags_grade": "",
+                    "monophyletic": None,
+                    "color": "#495057",
+                }
+                for _, row in result.representatives.iterrows()
+            ]
+            grade_by_species = None
+            search = state.search
+            if search is not None:
+                grade_by_species = search.grade_lookup()
+            for tip in tips:
+                grade = (grade_by_species or {}).get(tip["species"], "")
+                tip["bags_grade"] = grade
+                tip["color"] = GRADE_COLOURS.get(grade, "#495057")
+                if tip["species"] in result.monophyly:
+                    tip["monophyletic"] = result.monophyly[tip["species"]]
+
+            container_id = "phylo-tree-container"
+            rows.append(ui.div(
+                f"{result.tip_count:,} tips. Drag to pan, scroll to zoom, "
+                "click an internal branch to collapse it (click its tip to "
+                "expand again).",
+                class_="bc-phylo-hint",
+            ))
+            rows.append(ui.div(id=container_id, class_="bc-phylo-container"))
+            rows.append(ui.tags.script(
+                f"window.bcRenderPhylotree({json.dumps(container_id)}, "
+                f"{json.dumps(result.newick)}, {json.dumps(tips)});"
+            ))
+            return ui.div(*rows)
+
+        @output
+        @render.ui
+        def phylogeny_body():
+            from ..io import exports as export_io
+
+            def body(search):
+                phylo_tick.get()
+                result = search.analysis(store)
+                pool = export_io.selected_rows(result.specimens, state.annotations)
+                pool_count = len(pool)
+                over_limit = pool_count > PHYLOGENY_LIMITS["MAX_TIPS"]
+                rows = [
+                    ui.div(
+                        f"{pool_count:,} representative specimens in this "
+                        "result (one per selected BIN x country) -- this is "
+                        "what the tree is built from, not the full result.",
+                        class_="small",
+                    ),
+                ]
+                if pool_count > PHYLOGENY_LIMITS["WARN_TIPS"] and not over_limit:
+                    rows.append(ui.div(
+                        "This may take a while to build.",
+                        class_="small text-muted",
+                    ))
+                if over_limit:
+                    rows.append(ui.div(
+                        f"{pool_count:,} representatives is over the "
+                        f"{PHYLOGENY_LIMITS['MAX_TIPS']:,} this tab's "
+                        "pure-Python tree builder can handle quickly. Narrow "
+                        "the search, or curate down the selected "
+                        "representatives (Species/BAGS tabs), then try again.",
+                        class_="alert alert-warning py-2 px-3 small",
+                    ))
+                else:
+                    rows.append(ui.input_action_button(
+                        "build_tree", "Build tree", class_="btn-primary btn-sm",
+                        style="margin:8px 0;"))
+                if phylo_state["running"]:
+                    rows.append(ui.div(phylo_state["message"],
+                                       class_="small text-muted"))
+                elif phylo_state["error"]:
+                    rows.append(ui.div(phylo_state["error"],
+                                       class_="alert alert-warning py-2 px-3 small"))
+                elif phylo_state["result"] is not None:
+                    rows.append(_phylo_tree_panel(phylo_state["result"]))
+                return ui.div(*rows, class_="bc-tab-body")
+
+            return _needs_analysis(body)
+
         # -- annotation, shared by every screen ----------------------------
 
         def _apply(prefix: str, scope: set[str] | None = None) -> None:
@@ -1953,7 +2155,8 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         _register_species_analysis_download("dl_species_analysis")
         _register_species_analysis_download("dl_gap_analysis")
 
-    return App(app_ui, server)
+    return App(app_ui, server,
+              static_assets={"/phylo-assets": Path(__file__).parent / "static" / "phylo"})
 
 
 # --------------------------------------------------------------------------

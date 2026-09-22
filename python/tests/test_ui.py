@@ -379,6 +379,46 @@ def test_group_tables_default_to_sorting_by_rep_and_check_too():
     assert header.count(f"class='{SORT_HEADER_CLASS}'") == 4
 
 
+def test_a_second_search_gets_its_own_auto_selected_representatives(store):
+    """Regression test, found while building the Phylogeny tab.
+
+    ``Annotations`` is one object for the whole session (never reset between
+    searches -- see ``io.annotations``'s module docstring), so
+    ``SearchState.analysis`` used to pass the session's *entire*
+    ``annotations.selected`` to ``auto_select_best_specimens`` as ``existing``.
+    That function correctly refuses to touch a non-empty ``existing`` (never
+    overwrite a curator's pick) -- but once the *first* search in a session
+    had auto-selected anything at all, every later search's own, unrelated
+    specimens found that check already non-empty and got no auto-selection of
+    their own: every "representative" screen (Specimens' Rep. column,
+    Download Selected, and this project's new Phylogeny tab) would show zero
+    representatives for any search after the first one in a session.
+    """
+    from boldcurator.ui.state import AppState
+
+    state = AppState(store)
+    state.run_search("Pieris")
+    first = state.search.analysis(store)
+    first_selected = set(state.annotations.selected_processids())
+    assert first_selected, "the first search must auto-select something"
+    first_pids = set(first.specimens["processid"].astype(str))
+    assert first_selected <= first_pids
+
+    state.run_search("Danaus")
+    second = state.search.analysis(store)
+    second_pids = set(second.specimens["processid"].astype(str))
+    second_selected = set(state.annotations.selected_processids()) - first_selected
+
+    assert second_selected, (
+        "the second search must get its own auto-selected representatives, "
+        "not be starved by the first search's leftover selection")
+    assert second_selected <= second_pids, (
+        "the second search's new selections must be its own specimens, not "
+        "the first search's")
+    # The first search's own picks must survive untouched.
+    assert first_selected <= set(state.annotations.selected_processids())
+
+
 def test_the_fixture_exercises_every_grade_the_screens_show(store):
     """A fixture with no grade-C data leaves the busiest screen untested."""
     from boldcurator.core.grouping import GRADES, group_specimens

@@ -332,6 +332,36 @@ def main(argv: list[str] | None = None) -> int:
               before_rep > 0 and before_rep == after_rep,
               f"{before_rep} -> {after_rep}")
 
+        # -- the Phylogeny tab: built from the already-selected representative
+        # specimens (core.phylogeny), not every specimen -- see that module's
+        # own docstring. This is exactly the class of bug this whole script
+        # exists to catch: the tree is only ever drawn by a per-render
+        # <script> tag Shiny's own HTML swap has to actually execute, which
+        # no unit test can see.
+        show("Phylogeny", settle=1.5)
+        before_build = page.locator("#phylogeny_body").inner_text()
+        check("the phylogeny tab reports a representative-specimen count",
+              "representative specimens" in before_build, before_build[:120])
+        page.click("#build_tree")
+        tree_text = ""
+        for _ in range(20):
+            time.sleep(1)
+            tree_text = page.locator("#phylogeny_body").inner_text()
+            if "tips." in tree_text or "Could not build" in tree_text:
+                break
+        check("the tree finishes building", "tips." in tree_text, tree_text[:200])
+        svg_count = page.locator("#phylo-tree-container svg").count()
+        check("the tree renders as SVG", svg_count > 0)
+        tip_count = page.locator("#phylo-tree-container circle").count()
+        check("the tree has at least one tip", tip_count > 0, f"{tip_count} tips")
+        # The fixture's own default taxon covers grade C (see
+        # test_the_fixture_exercises_every_grade_the_screens_show) -- when the
+        # searched taxon does too, the monophyly badge must appear.
+        if page.locator("#group_C").count():
+            check("a grade-C monophyly badge is shown",
+                  "monophyletic" in tree_text.lower(), tree_text[:300])
+        page.screenshot(path=str(args.out / "06-phylogeny.png"), full_page=True)
+
         check("no javascript errors", not js_errors, "; ".join(js_errors))
         browser.close()
 
