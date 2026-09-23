@@ -21,10 +21,15 @@ jobs:
             name: linux-x86_64
           - os: windows-latest
             name: windows-x86_64
+          # macos_target: the oldest macOS the build must still run on --
+          # see packaging/macos_deployment_target.py for why this has to be
+          # enforced rather than assumed (v3.2 silently needed macOS 15).
           - os: macos-15-intel # Intel; macos-13 was retired 2025-12-04
             name: macos-x86_64
+            macos_target: '11.0'
           - os: macos-latest   # Apple Silicon
             name: macos-arm64
+            macos_target: '11.0'
     runs-on: ${{ matrix.os }}
     # A runner label that stops resolving to any actual runner (macos-13's
     # retirement on 2025-12-04 did exactly this) queues forever rather than
@@ -34,6 +39,10 @@ jobs:
     defaults:
       run:
         working-directory: python
+    env:
+      # Anything compiled from source on the macOS runners targets the same
+      # minimum as the wheels (empty, and ignored, on Windows/Linux).
+      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos_target }}
 
     steps:
       - uses: actions/checkout@v4
@@ -47,14 +56,49 @@ jobs:
           pip install -e ".[desktop]"
           pip install pyinstaller
 
+      - name: macOS -- swap in wheels that run on older macOS
+        # pip on a macOS 15 runner picks macOS-14/15-only wheels when a
+        # package ships one (numpy, orjson did in v3.2); reinstall those
+        # packages' macosx_<target> wheels before PyInstaller bundles them.
+        if: runner.os == 'macOS'
+        run: python packaging/macos_deployment_target.py repin --target ${{ matrix.macos_target }}
+
       - name: Build
-        run: >-
-          pyinstaller --onedir --name boldcurator --paths src
-          --collect-all duckdb --collect-all shiny --collect-all htmltools
-          --collect-all shinychat --collect-all pywebview
-          --collect-all pythonnet --collect-all clr_loader
-          --collect-all Bio --collect-all boldcurator
-          packaging/entrypoint.py
+        # macOS gets a real .app bundle (--windowed): Gatekeeper assesses a
+        # bundle once, as a unit. The bare --onedir folder shipped up to
+        # v3.2 made it assess every one of ~150 quarantined .so/.dylib
+        # files separately -- an "Open Anyway" plus admin password for
+        # each (packaging/README.md, "macOS: why a .app bundle").
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            platform_flags=(--windowed --name BOLDcurator
+              --icon packaging/icon.icns
+              --osx-bundle-identifier io.github.bge-barcoding.boldcurator)
+          else
+            platform_flags=(--name boldcurator)
+          fi
+          pyinstaller --onedir --paths src "${platform_flags[@]}" \
+            --collect-all duckdb --collect-all shiny --collect-all htmltools \
+            --collect-all shinychat --collect-all pywebview \
+            --collect-all pythonnet --collect-all clr_loader \
+            --collect-all Bio --collect-all boldcurator \
+            packaging/entrypoint.py
+
+      - name: Locate the built executable
+        shell: bash
+        run: |
+          case "${{ runner.os }}" in
+            macOS)   echo "BIN=dist/BOLDcurator.app/Contents/MacOS/BOLDcurator" ;;
+            Windows) echo "BIN=dist/boldcurator/boldcurator.exe" ;;
+            *)       echo "BIN=dist/boldcurator/boldcurator" ;;
+          esac >> "$GITHUB_ENV"
+
+      - name: macOS -- every binary runs on the target macOS, and the bundle's signature is intact
+        if: runner.os == 'macOS'
+        run: |
+          python packaging/macos_deployment_target.py check --target ${{ matrix.macos_target }} dist/BOLDcurator.app
+          codesign --verify --deep --strict --verbose=2 dist/BOLDcurator.app
 
       - name: Smoke test -- selftest (no snapshot needed)
         # Catches a missing package data file before a curator does, same as
@@ -68,8 +112,6 @@ jobs:
         # checks.
         shell: bash
         run: |
-          BIN=dist/boldcurator/boldcurator
-          [ "${{ runner.os }}" = "Windows" ] && BIN="$BIN.exe"
           "$BIN" selftest
 
       - name: Build a tiny fixture snapshot to smoke-test against
@@ -82,8 +124,6 @@ jobs:
       - name: Smoke test -- the frozen CLI actually queries the snapshot
         shell: bash
         run: |
-          BIN=dist/boldcurator/boldcurator
-          [ "${{ runner.os }}" = "Windows" ] && BIN="$BIN.exe"
           "$BIN" info --snapshot fixture.duckdb
 
       - name: Smoke test -- the frozen GUI server actually starts
@@ -100,8 +140,6 @@ jobs:
         # explain why. Found exactly this way on a real Windows build.
         shell: bash
         run: |
-          BIN=dist/boldcurator/boldcurator
-          [ "${{ runner.os }}" = "Windows" ] && BIN="$BIN.exe"
           "$BIN" gui --snapshot fixture.duckdb --port 8901 &
           pid=$!
           up=0
@@ -121,10 +159,32 @@ jobs:
           fi
           kill "$pid" 2>/dev/null || true
 
+      - name: macOS -- zip the .app on the Mac, then check the zip itself
+        # ditto, on the Mac, is the only step that may zip the .app:
+        # upload-artifact plus a Linux `zip` (the release job's route for
+        # the other platforms) drops every symlink -- v3.2 shipped
+        # Python.framework four times over with its bundle structure, and
+        # so its signature, broken. The check unzips it the way Finder
+        # does and re-verifies what a curator actually gets.
+        if: runner.os == 'macOS'
+        run: |
+          ditto -c -k --keepParent dist/BOLDcurator.app "boldcurator-${{ matrix.name }}.zip"
+          rm -rf ziptest && mkdir ziptest
+          ditto -x -k "boldcurator-${{ matrix.name }}.zip" ziptest
+          codesign --verify --deep --strict --verbose=2 ziptest/BOLDcurator.app
+          ziptest/BOLDcurator.app/Contents/MacOS/BOLDcurator selftest
+
       - uses: actions/upload-artifact@v4
+        if: runner.os != 'macOS'
         with:
           name: boldcurator-${{ matrix.name }}
           path: python/dist/boldcurator
+
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'macOS'
+        with:
+          name: boldcurator-${{ matrix.name }}
+          path: python/boldcurator-${{ matrix.name }}.zip
 
       # A second, independent way to deliver the Windows build: a real
       # setup.exe (Start Menu entry, optional desktop shortcut, an
@@ -168,17 +228,25 @@ jobs:
         with:
           path: artifacts
 
-      - name: Zip each platform's onedir build; stage the Windows installer as-is
+      - name: Zip each Windows/Linux onedir build; stage the Windows installer and macOS zips as-is
         run: |
           mkdir -p release
           for d in artifacts/*/; do
             name=$(basename "$d")
-            if [ "$name" = "boldcurator-windows-installer" ]; then
-              cp "$d"*.exe release/ 2>/dev/null || true
-              continue
-            fi
-            chmod +x "$d"boldcurator* 2>/dev/null || true
-            (cd "$d" && zip -rq "$OLDPWD/release/${name}.zip" .)
+            case "$name" in
+              boldcurator-windows-installer)
+                cp "$d"*.exe release/ 2>/dev/null || true
+                ;;
+              boldcurator-macos-*)
+                # Already zipped with ditto on the Mac -- never re-zip here
+                # (see "zip the .app on the Mac" above).
+                cp "$d$name.zip" release/
+                ;;
+              *)
+                chmod +x "$d"boldcurator* 2>/dev/null || true
+                (cd "$d" && zip -rq "$OLDPWD/release/${name}.zip" .)
+                ;;
+            esac
           done
 
       - name: List what's about to be released

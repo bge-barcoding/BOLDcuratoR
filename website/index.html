@@ -71,7 +71,7 @@
 
         <div class="dl-card" data-os="mac-arm">
           <div class="os-name">🍎 macOS (Apple Silicon) <span class="badge" hidden>Recommended for you</span></div>
-          <p>M1/M2/M3/M4 Macs. Unzip and move BOLDcurator to Applications.</p>
+          <p>M1/M2/M3/M4 Macs, macOS 11 (Big Sur) or newer. Unzip and move BOLDcurator to Applications.</p>
           <a class="btn btn-primary" href="https://github.com/bge-barcoding/BOLDcuratoR/releases/latest/download/boldcurator-macos-arm64.zip">
             Download .zip
           </a>
@@ -79,7 +79,7 @@
 
         <div class="dl-card" data-os="mac-intel">
           <div class="os-name">🍎 macOS (Intel) <span class="badge" hidden>Recommended for you</span></div>
-          <p>Older, Intel-based Macs (pre-2020). Unzip and move to Applications.</p>
+          <p>Older, Intel-based Macs (pre-2020), macOS 11 (Big Sur) or newer. Unzip and move BOLDcurator to Applications.</p>
           <a class="btn btn-primary" href="https://github.com/bge-barcoding/BOLDcuratoR/releases/latest/download/boldcurator-macos-x86_64.zip">
             Download .zip
           </a>
@@ -217,10 +217,16 @@
             code-signed (a paid step the project hasn't taken on yet), so
             both operating systems show their standard warning for any
             unsigned app, not something specific to BOLDcurator. On
-            Windows, click "More info" then "Run anyway". On macOS,
-            right-click (or Control-click) the app and choose "Open", or
-            allow it under System Settings → Privacy &amp; Security. You
-            only need to do this once per machine.
+            Windows, click "More info" then "Run anyway". On macOS, open
+            BOLDcurator once and dismiss the warning, then go to System
+            Settings → Privacy &amp; Security, scroll down, click "Open
+            Anyway" next to the message about BOLDcurator, and enter your
+            password (on macOS 14 or earlier, right-clicking the app and
+            choosing "Open" also works). You only need to do this once per
+            machine. If macOS instead asks about lots of individual files
+            (names ending in <code>.so</code> or <code>.dylib</code>), you
+            have an older download &mdash; get the latest version above,
+            which asks just once.
           </div>
         </details>
 

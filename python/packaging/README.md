@@ -32,6 +32,22 @@ snapshot file itself is **never bundled** -- the first-run setup screen
 (`ui/setup.py`) gets it separately, which is what keeps this small
 regardless of snapshot size.
 
+**macOS is built differently** -- as a `.app` bundle, with its minimum
+macOS enforced, zipped with `ditto` on the Mac itself. See "macOS: why a
+`.app` bundle" below for why every one of those matters:
+
+```sh
+python packaging/macos_deployment_target.py repin --target 11.0
+pyinstaller --onedir --paths src --windowed --name BOLDcurator \
+    --icon packaging/icon.icns \
+    --osx-bundle-identifier io.github.bge-barcoding.boldcurator \
+    --collect-all ...   # the same --collect-all list as above
+    packaging/entrypoint.py
+python packaging/macos_deployment_target.py check --target 11.0 dist/BOLDcurator.app
+codesign --verify --deep --strict dist/BOLDcurator.app
+ditto -c -k --keepParent dist/BOLDcurator.app boldcurator-macos-arm64.zip
+```
+
 ## What `--collect-all` is doing, and why each one is there
 
 PyInstaller's static import analysis finds Python code fine; it does **not**
@@ -153,6 +169,67 @@ features, but it would keep the window embedded rather than a subprocess.
 Not attempted here; launching a real browser was the more robust fix for
 less effort.
 
+## macOS: why a `.app` bundle -- the per-file password prompts
+
+Up to v3.2 the macOS release was the same bare `--onedir` folder as Linux:
+a Unix executable next to `_internal/`, holding ~150 separate Mach-O
+binaries (every `.so` extension module in numpy, pandas, duckdb, Bio,
+pyobjc..., plus Tcl/Tk and OpenSSL dylibs), all only ad-hoc signed.
+Apple Silicon curators reported an admin password prompt for "each script
+within the app". What was actually happening:
+
+1. A browser-downloaded zip is quarantined, and Archive Utility copies the
+   quarantine flag onto **every** extracted file.
+2. A bare folder isn't a bundle, so Gatekeeper had no single app to
+   approve -- it assessed each quarantined binary on its own, the moment
+   the app `dlopen`ed it.
+3. Each one failed ("“_multiarray_umath.cpython-311-darwin.so” Not
+   Opened"), and the only way past it on current macOS is System
+   Settings → Privacy & Security → **Open Anyway**, which asks for an
+   admin password. Once per binary. (macOS 15 also removed the old
+   right-click → Open bypass the website FAQ used to suggest.)
+
+Windows never showed this because SmartScreen only checks the `.exe` you
+launch, never the DLLs it loads afterwards.
+
+The fix has four parts, all in `python-release.yml`:
+
+- **`--windowed`** makes PyInstaller emit `dist/BOLDcurator.app`.
+  Gatekeeper assesses a bundle as one unit, so an unsigned build should
+  need a single "Open Anyway" instead of one per binary -- and it's
+  double-clickable, where the bare executable opened in Terminal.
+  (Only a Developer ID signature plus notarisation removes that one
+  remaining prompt; see "Code signing" below.)
+- **Zipped with `ditto` on the Mac, and the release job never re-zips
+  it.** The other platforms go through `upload-artifact` → a Linux
+  runner → `zip`, which drops every symlink. v3.2's zip had zero
+  symlinks and `Python.framework` stored four times over -- harmless for
+  a bare folder, but a `.app` depends on symlinks for its structure and
+  its signature. CI unzips the `ditto` zip the way Finder does and runs
+  `codesign --verify --deep --strict` plus `selftest` on *that*.
+- **The minimum macOS is enforced** (`macos_deployment_target.py`). pip
+  on a macOS 15 runner picks macOS-14/15-only wheels whenever a package
+  publishes one: v3.2's arm64 build needed macOS **15** (orjson) and its
+  Intel build macOS 14 (numpy), so even a curator who got past
+  Gatekeeper on an older Mac would have hit "built for macOS 15.0 which
+  is newer than running OS". `repin` reinstalls those packages'
+  `macosx_11_0` wheels before PyInstaller runs; `check` fails the build if
+  any binary in the `.app` still needs anything newer. If a future
+  dependency has no old-enough wheel at all, `check` is where you'll find
+  out -- pin an older version of it.
+- **A log file for Finder launches.** A `.app` double-clicked from Finder
+  has no terminal, which is exactly why `--windowed` was originally left
+  off (an early exception would vanish). `entrypoint.py` now sends output
+  to `~/.boldcurator/boldcurator.log` for that one kind of launch --
+  frozen, no arguments, no terminal -- so a failure always leaves
+  something to ask a curator for. Running
+  `BOLDcurator.app/Contents/MacOS/BOLDcurator` from Terminal (with or
+  without arguments) prints normally, as before.
+
+For a curator stuck on an old build, clearing the quarantine flag in one
+go skips all the per-file prompts (on a new-enough macOS -- see above):
+`xattr -dr com.apple.quarantine <the unzipped folder>`.
+
 ## What has actually been verified, and what hasn't
 
 **Verified, on Linux, in the sandbox this was built in:**
@@ -202,24 +279,26 @@ less effort.
   exactly that -- a placeholder, swapped in purely so the installer and
   the browser-app window have *some* icon rather than a missing one.
   Replace it with real branding before this ships to curators generally.
-- `--windowed`/`--noconsole` (PyInstaller's flag for hiding the console
-  window and, on macOS, producing a proper double-clickable `.app` bundle
-  instead of a bare Unix executable). Left off `python-release.yml`'s build
-  deliberately: an exception before a window opens would be silently
-  swallowed with no console to show it on, and a build that looks broken
-  to a curator double-clicking it for the first time is worse than one
-  with a stray terminal window. Worth adding once someone can watch a
-  real double-click succeed on an actual Windows or macOS machine first.
+- The macOS `.app` (see "macOS: why a `.app` bundle" above) on a real,
+  quarantined download: CI proves the bundle builds, its signature
+  verifies after a `ditto` round trip, every binary targets macOS 11,
+  and the frozen CLI and GUI server run from inside it -- but a CI runner
+  never quarantines anything, so the actual "one Open Anyway, not 150"
+  outcome still needs confirming by a curator on an Apple Silicon Mac,
+  ideally one running macOS 11-14. `--windowed` stays macOS-only: on
+  Windows it would hide the console with no log-file equivalent yet.
 - A `.dmg` or other installer wrapping for macOS -- only Windows has an
-  installer (Inno Setup) so far; macOS/Linux still ship as a plain zip of
-  the `--onedir` output, a real double-click-and-it-runs deliverable, just
-  not a polished one-click installer experience there.
+  installer (Inno Setup) so far; macOS ships as a zipped `.app` and Linux
+  as a plain zip of the `--onedir` output.
 - Code signing (plan 4.4) -- deliberately not done yet, a budget decision
   the project owner made explicitly (see `docs/python-app-plan.md`). An
   unsigned build triggers a Gatekeeper/SmartScreen warning with a manual
   override, which is fine for curator testing. This also means the Inno
   Setup installer itself is unsigned, so installing it hits the same
-  SmartScreen warning the plain `.exe` does.
+  SmartScreen warning the plain `.exe` does. On macOS, the `.app` is
+  ad-hoc signed only (PyInstaller's default), which is what leaves the
+  one remaining "Open Anyway" prompt -- a Developer ID certificate plus
+  `xcrun notarytool` and `stapler` is the step that would remove it.
 
 ## If a future build breaks on data files again
 
