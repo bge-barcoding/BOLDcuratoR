@@ -266,13 +266,20 @@ cleanup_old_sessions <- function(max_age_days = 30, con) {
   tryCatch({
     cutoff <- format(Sys.time() - as.difftime(max_age_days, units = "days"),
                      "%Y-%m-%dT%H:%M:%S")
+    # Count first: dbExecute's rows-affected can include the session_data
+    # rows removed by the CASCADE below, not just sessions.
+    n_old <- DBI::dbGetQuery(
+      con,
+      "SELECT COUNT(*) AS n FROM sessions WHERE updated_at < ?",
+      params = list(cutoff)
+    )$n
     # CASCADE foreign key deletes session_data rows automatically
-    result <- DBI::dbExecute(
+    DBI::dbExecute(
       con,
       "DELETE FROM sessions WHERE updated_at < ?",
       params = list(cutoff)
     )
-    result
+    n_old
   }, error = function(e) {
     warning(sprintf("Failed to cleanup sessions: %s", e$message))
     0

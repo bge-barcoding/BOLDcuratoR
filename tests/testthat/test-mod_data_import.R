@@ -80,6 +80,7 @@ test_that("mod_data_import_ui generates expected structure", {
 
   html <- as.character(ui)
   expect_true(grepl("test-taxa_input", html))
-  expect_true(grepl("test-dataset_codes", html))
-  expect_true(grepl("test-project_codes", html))
+  expect_true(grepl("test-countries", html))
+  expect_true(grepl("test-continent_filter", html))
+  expect_true(grepl("test-submit", html))
 })
