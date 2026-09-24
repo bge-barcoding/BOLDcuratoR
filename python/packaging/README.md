@@ -230,6 +230,43 @@ For a curator stuck on an old build, clearing the quarantine flag in one
 go skips all the per-file prompts (on a new-enough macOS -- see above):
 `xattr -dr com.apple.quarantine <the unzipped folder>`.
 
+## Releases
+
+Publishing a GitHub release is all it takes -- any tag name (`v3.4`,
+`V3.4`, `v4`), created from the Releases page as usual. Within a few
+minutes `.github/workflows/python-release.yml` attaches the five files the
+website's download buttons link to (`website/README.md`, "Download
+links"). Your release notes are left alone; only the assets are added.
+
+It doesn't always rebuild. The `plan` job finds the newest earlier release
+that already has all five files and diffs `python/` and the workflow file
+between that release's tag and the new one:
+
+- **something changed** -- the full build matrix runs (about 5 minutes),
+  smoke tests included, and the fresh builds are attached;
+- **nothing changed** (say, a release for an R-app-only fix) -- that
+  release's files are copied across as they are, in seconds. The Windows
+  installer then still reports the older version in Add/Remove Programs;
+  the app inside is the same build either way.
+
+The run's summary page says which it did and why.
+
+To attach executables to a release that doesn't have them (V3.3, which
+predates this trigger -- see below), or to rebuild one: **Actions → Build
+desktop executables → Run workflow**, pick `main`, and enter the release's
+tag. Tick `force_build` to rebuild even when nothing changed. Leave the tag
+blank to build on a branch just to test the pipeline -- nothing is
+published then, which is how every packaging fix here was checked before
+merging.
+
+Up to V3.3 the workflow fired on a pushed tag matching `v*` instead.
+GitHub's tag filters are case-sensitive, so V3.3's capital `V` never
+matched: it got no executables, and every download button on the website
+404'd, since `releases/latest/download/...` always points at the newest
+release. The installer's version also came out as `0.0.0-dev` for any tag
+that wasn't exactly `vX.Y.Z` (v3.2 included); tags are now padded to
+`x.y.z` (V3.3 -> 3.3.0).
+
 ## What has actually been verified, and what hasn't
 
 **Verified, on Linux, in the sandbox this was built in:**
@@ -249,8 +286,8 @@ go skips all the per-file prompts (on a new-enough macOS -- see above):
   (after a real failure on its first run -- a manually-triggered
   `workflow_dispatch` sends `github.ref_name` as the *branch* name, not a
   version, and that branch name's `/` made `OutputBaseFilename` invalid;
-  fixed by only trusting `github.ref` as a version on an actual
-  `refs/tags/vX.Y.Z` push), installs, and launches the app in `browser-app`
+  fixed by only trusting a release tag as a version -- see "Releases"
+  above), installs, and launches the app in `browser-app`
   mode -- "looks like a regular app," per the project owner's own test.
   Start Menu entry, desktop shortcut and uninstall have not been
   individually confirmed beyond that.
