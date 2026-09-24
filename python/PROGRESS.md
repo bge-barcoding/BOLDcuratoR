@@ -274,8 +274,8 @@ Three questions, all answered with the recommended (lowest-risk) option:
    `BOLDcurator.Rproj` currently relies on. "Isolated" already holds in
    practice (R and Python share no files); `python/` is simply the newer
    addition, staying where it already is.
-2. Python's desktop-release tag pattern (`v*`, `.github/workflows/python-release.yml`)
-   stays Python-only -- R deploys continuously to shinyapps.io and has no
+2. Python's desktop-release trigger (`.github/workflows/python-release.yml` --
+   originally a `v*` tag push, now any published GitHub release) stays Python-only -- R deploys continuously to shinyapps.io and has no
    tag-triggered release of its own to collide with. Revisit only if that
    changes.
 3. The existing manual-only, throwaway `spike-pages.yml` (an unrelated
@@ -1996,6 +1996,13 @@ surfacing in the UI rather than letting a curator assume otherwise.
       logged to `~/.boldcurator/boldcurator.log`. Still to confirm on a real
       quarantined download -- see `python/packaging/README.md`, "macOS: why
       a `.app` bundle"
+- [x] 4.3b every release gets executables -- V3.3 got none: the workflow
+      fired on a pushed `v*` tag, and GitHub's tag filters are
+      case-sensitive. Now fires on any *published release*, rebuilds only
+      when `python/` (or the workflow) changed since the last release that
+      has executables, and otherwise copies that release's files across;
+      `workflow_dispatch` with a `tag` backfills one. See
+      `python/packaging/README.md`, "Releases"
 - [ ] 4.4 signing -- **decided: unsigned for now**, not required to ship
       an unsigned build for curator testing
 - [ ] 4.5 installer smoke test -- the release workflow's own smoke-test

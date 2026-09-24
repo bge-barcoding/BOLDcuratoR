@@ -1,18 +1,163 @@
 name: Build desktop executables
 
 # Plan 4.3: automated release builds, so a curator gets an executable
-# without anyone running PyInstaller by hand. Fires on a version tag (a real
-# release) or manually via workflow_dispatch (to validate the pipeline
-# itself without cutting a release). See python/packaging/README.md for
-# what --collect-all is doing and what has/hasn't actually been verified.
+# without anyone running PyInstaller by hand. See python/packaging/README.md
+# for what --collect-all is doing and what has/hasn't actually been verified.
+#
+# Fires when a GitHub release is published, whatever its tag looks like.
+# Up to v3.3 this fired on a pushed tag matching 'v*' instead -- and GitHub's
+# tag filters are case-sensitive, so V3.3 (capital V) silently got no
+# executables, and the website's releases/latest/download/... buttons all
+# 404'd until it was backfilled.
+#
+# Every release gets the full set of RELEASE_ASSETS attached, but a rebuild
+# only happens when something that goes into them has changed: the plan job
+# diffs python/ and this workflow against the newest earlier release that
+# already carries the full set. No change -> that release's files are copied
+# across as-is (a few seconds, not a 5-platform matrix).
+#
+# workflow_dispatch has two uses:
+#  - no tag: build on the chosen branch to validate the pipeline itself, and
+#    publish nothing (how every packaging fix so far was tested);
+#  - a tag: backfill (or, with force_build, rebuild) an existing release's
+#    executables. The workflow definition comes from the branch you run it
+#    on, the code that gets built from the tag.
 
 on:
-  push:
-    tags: ['v*']
-  workflow_dispatch: {}
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag to attach executables to (blank = build only, publish nothing)'
+        required: false
+        default: ''
+      force_build:
+        description: 'Rebuild even if python/ is unchanged since the last release with executables'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: python-release-${{ github.event.release.tag_name || inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Every release must end up with exactly these, under exactly these names:
+  # website/index.html links straight to releases/latest/download/<name>
+  # (website/README.md, "Download links").
+  RELEASE_ASSETS: >-
+    boldcurator-linux-x86_64.zip
+    boldcurator-windows-x86_64.zip
+    boldcurator-macos-x86_64.zip
+    boldcurator-macos-arm64.zip
+    BOLDcuratorSetup-x64.exe
 
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.plan.outputs.tag }}
+      ref: ${{ steps.plan.outputs.ref }}
+      version: ${{ steps.plan.outputs.version }}
+      mode: ${{ steps.plan.outputs.mode }}
+      base: ${{ steps.plan.outputs.base }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # every tag, so any two releases can be diffed
+
+      - name: Build, or reuse the last release's executables?
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          FORCE_BUILD: ${{ inputs.force_build }}
+        run: |
+          set -euo pipefail
+          out() { echo "$1=$2" >> "$GITHUB_OUTPUT"; echo "$1=$2"; }
+
+          if [ "$EVENT" = release ]; then tag="$RELEASE_TAG"; else tag="$INPUT_TAG"; fi
+
+          if [ -z "$tag" ]; then
+            out tag ""
+            out ref "$GITHUB_SHA"
+            out version "0.0.0-dev"
+            out mode build
+            out base ""
+            echo "Pipeline check on $GITHUB_REF: building, publishing nothing." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if ! git rev-parse -q --verify "refs/tags/$tag^{commit}" >/dev/null; then
+            echo "::error::No tag named '$tag' in this repository"
+            exit 1
+          fi
+          if ! published=$(gh release view "$tag" --json publishedAt --jq '.publishedAt // ""'); then
+            echo "::error::Tag '$tag' has no GitHub release to attach executables to -- create the release first"
+            exit 1
+          fi
+
+          # The Windows installer's AppVersion. Tags here have been v3,
+          # v3.2, V3.3 -- pad to x.y.z rather than insisting on it.
+          v="${tag#[vV]}"
+          if [[ "$v" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then
+            IFS=. read -r major minor patch <<< "$v"
+            version="$major.${minor:-0}.${patch:-0}"
+          else
+            version="0.0.0-dev"
+          fi
+
+          # The newest release published before this one that already has
+          # every asset -- the baseline whose executables can be reused.
+          base=""
+          while IFS=$'\t' read -r t at; do
+            [ "$t" = "$tag" ] && continue
+            if [ -n "$published" ] && [[ "$at" > "$published" ]]; then continue; fi
+            have=$(gh release view "$t" --json assets --jq '.assets[].name')
+            complete=1
+            for a in $RELEASE_ASSETS; do
+              grep -qxF "$a" <<< "$have" || { complete=0; break; }
+            done
+            if [ "$complete" = 1 ]; then base="$t"; break; fi
+          done < <(gh release list --exclude-drafts --limit 100 \
+                     --json tagName,publishedAt \
+                     --jq 'sort_by(.publishedAt) | reverse | .[] | [.tagName, .publishedAt] | @tsv')
+
+          if [ "${FORCE_BUILD:-}" = true ]; then
+            mode=build; why="force_build was set"
+          elif [ -z "$base" ]; then
+            mode=build; why="no earlier release carries the full set of executables"
+          elif git diff --quiet "refs/tags/$base" "refs/tags/$tag" -- python .github/workflows/python-release.yml; then
+            mode=reuse; why="nothing under python/ (or this workflow) changed since $base"
+          else
+            mode=build; why="python/ changed since $base"
+          fi
+
+          out tag "$tag"
+          out ref "refs/tags/$tag"
+          out version "$version"
+          out mode "$mode"
+          out base "$base"
+          {
+            echo "**$tag**: $mode -- $why."
+            if [ "$mode" = build ] && [ -n "$base" ]; then
+              echo
+              echo "Changed since $base:"
+              echo '```'
+              git diff --stat "refs/tags/$base" "refs/tags/$tag" -- python .github/workflows/python-release.yml | tail -n 30
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
   build:
+    needs: plan
+    if: needs.plan.outputs.mode == 'build'
     strategy:
       fail-fast: false
       matrix:
@@ -46,6 +191,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
 
       - uses: actions/setup-python@v5
         with:
@@ -196,16 +343,11 @@ jobs:
         run: |
           choco install innosetup -y --no-progress
 
-          # github.ref_name is the *tag* name on a real release (vX.Y.Z --
-          # strip the v) but the *branch* name on a workflow_dispatch run,
-          # e.g. "claude/wonderful-newton-qw7llz" -- which contains a "/"
-          # and breaks OutputBaseFilename below (an actual CI failure this
-          # caused). Only trust it as a version on an actual vX.Y.Z tag.
-          if ("${{ github.ref }}" -match '^refs/tags/v(\d+\.\d+\.\d+)$') {
-            $version = $Matches[1]
-          } else {
-            $version = '0.0.0-dev'
-          }
+          # The plan job's version: the release tag padded to x.y.z (V3.3 ->
+          # 3.3.0), or 0.0.0-dev on a build-only run. Never the raw ref: on
+          # workflow_dispatch that's a branch name like "claude/foo-qw7llz",
+          # whose "/" broke OutputBaseFilename (an actual CI failure).
+          $version = '${{ needs.plan.outputs.version }}'
 
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" `
             "/DMyAppVersion=$version" packaging\windows-installer.iss
@@ -216,26 +358,38 @@ jobs:
           name: boldcurator-windows-installer
           path: python/packaging/Output/*.exe
 
-  release:
-    if: startsWith(github.ref, 'refs/tags/')
-    needs: build
+  publish:
+    needs: [plan, build]
+    # always(): build is *skipped* on a reuse, which would otherwise skip
+    # this job too.
+    if: >-
+      always() && needs.plan.result == 'success' && needs.plan.outputs.tag != '' &&
+      (needs.plan.outputs.mode == 'reuse' ||
+       (needs.plan.outputs.mode == 'build' && needs.build.result == 'success'))
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ needs.plan.outputs.tag }}
+      BASE: ${{ needs.plan.outputs.base }}
 
     steps:
       - uses: actions/download-artifact@v4
+        if: needs.plan.outputs.mode == 'build'
         with:
           path: artifacts
 
       - name: Zip each Windows/Linux onedir build; stage the Windows installer and macOS zips as-is
+        if: needs.plan.outputs.mode == 'build'
         run: |
           mkdir -p release
           for d in artifacts/*/; do
             name=$(basename "$d")
             case "$name" in
               boldcurator-windows-installer)
-                cp "$d"*.exe release/ 2>/dev/null || true
+                cp "$d"*.exe release/
                 ;;
               boldcurator-macos-*)
                 # Already zipped with ditto on the Mac -- never re-zip here
@@ -249,12 +403,34 @@ jobs:
             esac
           done
 
-      - name: List what's about to be released
-        run: ls -la release/
+      - name: Unchanged since the baseline release -- copy its executables across
+        # Byte-for-byte what $BASE shipped (so the installer still reports
+        # $BASE's version in Add/Remove Programs -- the app inside is the
+        # same build either way).
+        if: needs.plan.outputs.mode == 'reuse'
+        run: |
+          mkdir -p release
+          for a in $RELEASE_ASSETS; do
+            gh release download "$BASE" --pattern "$a" --dir release
+          done
 
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            release/*.zip
-            release/*.exe
-          generate_release_notes: true
+      - name: Check every asset the website links to is there
+        run: |
+          ls -la release/
+          missing=0
+          for a in $RELEASE_ASSETS; do
+            [ -f "release/$a" ] || { echo "::error::Missing release asset: $a"; missing=1; }
+          done
+          exit "$missing"
+
+      - name: Attach to the release
+        # --clobber: re-running (or a force_build backfill) replaces what's
+        # there. Only the assets are touched -- the release notes are left
+        # exactly as written.
+        run: |
+          gh release upload "$TAG" release/* --clobber
+          if [ "${{ needs.plan.outputs.mode }}" = reuse ]; then
+            echo "Attached $BASE's executables to $TAG (unchanged)." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Attached freshly built executables to $TAG." >> "$GITHUB_STEP_SUMMARY"
+          fi
