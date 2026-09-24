@@ -1986,6 +1986,16 @@ surfacing in the UI rather than letting a curator assume otherwise.
       proven to work outside CI (CLI + GUI server against a real snapshot),
       but `pywebview` itself is unverified -- see the top of this file and
       `python/packaging/README.md`
+- [x] 4.3a macOS delivered as a real `.app` -- Apple Silicon curators hit
+      an admin-password "Open Anyway" for every one of ~150 binaries in
+      v3.2's bare `--onedir` zip (Gatekeeper assesses loose quarantined
+      binaries one by one); v3.2 also silently needed macOS 15 (arm64) /
+      14 (Intel) and had its symlinks flattened by the Linux re-zip. Now
+      `--windowed`, zipped with `ditto` on the Mac, minimum macOS 11
+      enforced by `packaging/macos_deployment_target.py`, Finder launches
+      logged to `~/.boldcurator/boldcurator.log`. Still to confirm on a real
+      quarantined download -- see `python/packaging/README.md`, "macOS: why
+      a `.app` bundle"
 - [ ] 4.4 signing -- **decided: unsigned for now**, not required to ship
       an unsigned build for curator testing
 - [ ] 4.5 installer smoke test -- the release workflow's own smoke-test
