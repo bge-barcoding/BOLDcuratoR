@@ -428,3 +428,28 @@ def test_fetch_downloads_when_the_snapshot_id_differs(
         ["--out", str(out), "--manifest", str(manifest)])
     assert fs.fetch(args) == 0
     assert out.read_bytes() == payload
+
+
+def test_every_request_verifies_against_the_os_trust_store(monkeypatch, tmp_path):
+    """V3.3's frozen macOS build failed every Zenodo request with
+    CERTIFICATE_VERIFY_FAILED: plain urlopen looked for OpenSSL's CA file at
+    a path that only existed on the CI runner. Both ways this module reaches
+    the network must hand urlopen the truststore context instead."""
+    import truststore
+    from urllib.error import URLError
+
+    contexts = []
+
+    def fake_urlopen(url, *, timeout, context=None):
+        contexts.append(context)
+        raise URLError("offline")
+
+    monkeypatch.setattr(fs.urllib.request, "urlopen", fake_urlopen)
+
+    with pytest.raises(fs.FetchError):
+        fs._get_json("https://zenodo.org/api/records/1")
+    with pytest.raises(fs.FetchError):
+        fs.download(fs.Source(url="https://zenodo.org/f.duckdb"), tmp_path / "s.duckdb")
+
+    assert len(contexts) == 2
+    assert all(isinstance(c, truststore.SSLContext) for c in contexts)
