@@ -2003,6 +2003,14 @@ surfacing in the UI rather than letting a curator assume otherwise.
       has executables, and otherwise copies that release's files across;
       `workflow_dispatch` with a `tag` backfills one. See
       `python/packaging/README.md`, "Releases"
+- [x] 4.3c HTTPS uses the OS's own certificates -- V3.3's Intel Mac build
+      failed "Download from Zenodo" with `CERTIFICATE_VERIFY_FAILED:
+      unable to get local issuer certificate`: the bundled OpenSSL looked
+      for its CA file at a path that only exists on the CI runner.
+      `fetch_snapshot.ssl_context` now verifies through `truststore`
+      (Keychain / Windows store / distro bundles). `selftest` checks the
+      trust store loads; `selftest --network` reaches Zenodo, and the
+      release workflow runs it with no OpenSSL CA path at all, on every OS
 - [ ] 4.4 signing -- **decided: unsigned for now**, not required to ship
       an unsigned build for curator testing
 - [ ] 4.5 installer smoke test -- the release workflow's own smoke-test

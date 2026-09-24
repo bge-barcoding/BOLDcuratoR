@@ -19,9 +19,9 @@ any host that can serve a file over HTTP(S) and publish a sha256 works with
 ``--url``.  Only ``--record`` talks to Zenodo's API.
 
 Uses the standard library's ``urllib`` rather than ``requests``: this project
-has stayed dependency-light throughout (``duckdb``, ``pandas``, ``openpyxl``
-are the only runtime dependencies), and a one-shot streamed download with a
-progress readout does not need more than that.
+has stayed dependency-light throughout, and a one-shot streamed download with
+a progress readout does not need more than that. The one addition is
+``truststore``, for *which certificates to trust* -- see ``ssl_context``.
 """
 
 from __future__ import annotations
@@ -31,12 +31,15 @@ import gzip
 import hashlib
 import json
 import re
+import ssl
 import sys
 import urllib.request
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from urllib.error import HTTPError, URLError
+
+import truststore
 
 ZENODO_API = "https://zenodo.org/api/records/{record_id}"
 
@@ -87,9 +90,29 @@ class Source:
     filename: str = ""
 
 
+def ssl_context() -> ssl.SSLContext:
+    """Verify HTTPS against the operating system's own trusted certificates.
+
+    Plain ``urlopen`` verifies against OpenSSL's CA file, found at a path
+    compiled into whichever Python built the app. In the frozen macOS build
+    that path belongs to the CI runner and doesn't exist on a curator's Mac,
+    so every Zenodo request failed with ``CERTIFICATE_VERIFY_FAILED: unable
+    to get local issuer certificate`` (a real report, Intel Mac, V3.3).
+    ``truststore`` asks the OS instead: the macOS Keychain, the Windows
+    certificate store, the usual distro CA bundles on Linux. That also
+    picks up an institution's own root certificate if its network inspects
+    HTTPS, which a bundled list like ``certifi`` would reject.
+    """
+    return truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+
+
+def _urlopen(url: str):
+    return urllib.request.urlopen(url, timeout=30, context=ssl_context())
+
+
 def _get_json(url: str) -> dict:
     try:
-        with urllib.request.urlopen(url, timeout=30) as resp:
+        with _urlopen(url) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except (HTTPError, URLError) as exc:
         raise FetchError(f"Could not reach {url}: {exc}") from exc
@@ -350,7 +373,7 @@ def download(source: Source, out: Path, *, progress=print) -> Path:
     out.parent.mkdir(parents=True, exist_ok=True)
 
     try:
-        with urllib.request.urlopen(source.url, timeout=30) as resp:
+        with _urlopen(source.url) as resp:
             total = int(resp.headers.get("Content-Length") or 0)
             written = 0
             with open(tmp, "wb") as fh:

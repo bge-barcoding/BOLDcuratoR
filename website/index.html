@@ -231,6 +231,21 @@
         </details>
 
         <details>
+          <summary>Downloading the snapshot fails with "CERTIFICATE_VERIFY_FAILED"</summary>
+          <div class="answer">
+            That was a bug in the macOS builds up to V3.3: the app couldn't
+            find your Mac's trusted certificates, so it refused to talk to
+            Zenodo. Later releases use your operating system's own
+            certificates, so updating fixes it. To get going without
+            updating, download the snapshot in your browser from
+            <a href="https://doi.org/10.5281/zenodo.22849515">its Zenodo page</a>,
+            double-click the downloaded <code>.duckdb.gz</code> file to
+            unpack it, then choose "I already have a snapshot file" in the
+            app and point it at the <code>.duckdb</code> file.
+          </div>
+        </details>
+
+        <details>
           <summary>Where do my downloads (TSV, FASTA, xlsx) go?</summary>
           <div class="answer">
             Your computer's usual Downloads folder, the same as any other

@@ -171,3 +171,26 @@ def test_selftest_reports_a_broken_check_without_crashing(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "[FAIL]" in out and "substitution_matrices" in out
     assert "selftest FAILED" in out
+
+
+def test_selftest_only_touches_the_network_when_asked(monkeypatch, capsys):
+    """--network resolves the default Zenodo record (no download) -- the
+    diagnostic for a failing "Download from Zenodo". Plain selftest stays
+    offline, as CI's first smoke test relies on."""
+    from boldcurator.build import fetch_snapshot as fs
+
+    calls = []
+
+    def fake_resolve(record_id, **kwargs):
+        calls.append(record_id)
+        return fs.Source(url="https://zenodo.org/x", filename="bold_snapshot_2026-09-11.duckdb.gz")
+
+    monkeypatch.setattr(fs, "resolve_zenodo_record", fake_resolve)
+
+    assert main(["selftest"]) == 0
+    assert calls == []
+    assert "Zenodo" not in capsys.readouterr().out
+
+    assert main(["selftest", "--network"]) == 0
+    assert len(calls) == 1
+    assert "bold_snapshot_2026-09-11.duckdb.gz" in capsys.readouterr().out

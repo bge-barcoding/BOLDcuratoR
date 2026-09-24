@@ -15,6 +15,9 @@ dependencies = [
     "openpyxl>=3.1",
     "numpy>=1.24",
     "biopython>=1.83",
+    # HTTPS verification against the OS's own certificates -- see
+    # build/fetch_snapshot.py's ssl_context for why plain urllib wasn't enough.
+    "truststore>=0.9",
 ]
 
 [project.optional-dependencies]

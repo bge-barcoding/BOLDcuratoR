@@ -230,6 +230,31 @@ For a curator stuck on an old build, clearing the quarantine flag in one
 go skips all the per-file prompts (on a new-enough macOS -- see above):
 `xattr -dr com.apple.quarantine <the unzipped folder>`.
 
+## HTTPS certificates -- why `truststore`
+
+A frozen app carries its own OpenSSL, and plain `urllib` verifies HTTPS
+against the CA file whose path was compiled into it. On macOS that path
+belongs to the build machine, so on a curator's Mac there is no CA file at
+all, and every Zenodo request failed with `CERTIFICATE_VERIFY_FAILED:
+unable to get local issuer certificate` (V3.3, Intel Mac). Windows escaped
+this only because Python on Windows also reads the Windows certificate
+store.
+
+`build/fetch_snapshot.py`'s `ssl_context()` verifies through
+[`truststore`](https://pypi.org/project/truststore/) instead: the macOS
+Keychain, the Windows certificate store, or the usual distro CA bundles on
+Linux. That's also what pip does. Unlike bundling `certifi`, it trusts an
+institution's own root certificate when its network inspects HTTPS.
+
+The runner never showed the bug, since the compiled-in path exists there.
+So the release workflow runs
+`SSL_CERT_FILE=/nonexistent SSL_CERT_DIR=/nonexistent boldcurator selftest --network`
+on every platform. That leaves no OpenSSL CA file to fall back on, so the
+step passes only if HTTPS really goes through the OS. A curator can run
+`selftest --network` too (on a Mac,
+`BOLDcurator.app/Contents/MacOS/BOLDcurator selftest --network` in
+Terminal) to tell a certificate problem from a network that blocks Zenodo.
+
 ## Releases
 
 Publishing a GitHub release is all it takes -- any tag name (`v3.4`,

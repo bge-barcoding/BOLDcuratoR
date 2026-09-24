@@ -347,6 +347,12 @@ def cmd_selftest(args: argparse.Namespace) -> int:
     Run this against a frozen build directly (``boldcurator.exe selftest``)
     to check a packaging fix without going through Search -> Phylogeny ->
     Build tree in the GUI first.
+
+    ``--network`` adds the one check that needs the internet: resolving the
+    default snapshot's Zenodo record over HTTPS, without downloading it.
+    It's how a curator whose "Download from Zenodo" fails can tell a
+    certificate problem (the V3.3 macOS bug -- see
+    ``fetch_snapshot.ssl_context``) from a network that blocks Zenodo.
     """
     print(f"boldcurator {__version__} selftest")
 
@@ -379,16 +385,37 @@ def cmd_selftest(args: argparse.Namespace) -> int:
         newick = phylo.to_newick(tree)
         assert newick.endswith(";"), f"unexpected Newick output: {newick!r}"
 
+    def check_trust_store() -> None:
+        import truststore
+
+        from .build import fetch_snapshot as fs
+
+        # Importing truststore on macOS/Windows already loads the OS's own
+        # certificate API (Security.framework / crypt32) through ctypes,
+        # so this fails here, not at a curator's first download.
+        ctx = fs.ssl_context()
+        assert isinstance(ctx, truststore.SSLContext), type(ctx)
+
+    def check_zenodo() -> str:
+        from .build import fetch_snapshot as fs
+        from .config.constants import DEFAULT_SNAPSHOT_ZENODO_DOI
+
+        source = fs.resolve_zenodo_record(DEFAULT_SNAPSHOT_ZENODO_DOI)
+        return source.filename or source.url
+
     checks = [
         ("duckdb", check_duckdb),
         ("biopython (Phylogeny tab tree building)", check_phylogeny),
+        ("HTTPS certificates (the operating system's own)", check_trust_store),
     ]
+    if getattr(args, "network", False):
+        checks.append(("Zenodo over HTTPS (--network)", check_zenodo))
 
     failed = False
     for name, check in checks:
         try:
-            check()
-            print(f"  [ok]   {name}")
+            detail = check()
+            print(f"  [ok]   {name}" + (f": {detail}" if detail else ""))
         except Exception as exc:  # noqa: BLE001 -- reported, not swallowed
             failed = True
             print(f"  [FAIL] {name}: {exc}")
@@ -454,6 +481,11 @@ def build_parser() -> argparse.ArgumentParser:
         "selftest",
         help="exercise modules that break only once frozen -- no snapshot, "
              "no network, no browser")
+    selftest.add_argument(
+        "--network", action="store_true",
+        help="also reach the default snapshot's Zenodo record over HTTPS "
+             "(downloads nothing) -- tells a certificate problem apart from "
+             "a network that blocks Zenodo")
     selftest.set_defaults(func=cmd_selftest)
 
     fetch_snapshot = sub.add_parser(

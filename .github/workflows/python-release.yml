@@ -261,6 +261,18 @@ jobs:
         run: |
           "$BIN" selftest
 
+      - name: Smoke test -- HTTPS to Zenodo with no OpenSSL CA file to fall back on
+        # V3.3's macOS build failed every Zenodo request with
+        # CERTIFICATE_VERIFY_FAILED on a curator's Mac but never here: the
+        # CA path compiled into the bundled OpenSSL happens to exist on the
+        # runner. Pointing SSL_CERT_FILE/SSL_CERT_DIR at nothing recreates
+        # the curator's machine, so this passes only if HTTPS really goes
+        # through the OS trust store (fetch_snapshot.ssl_context). Needs
+        # Zenodo to be up -- if it's down, re-run rather than skip.
+        shell: bash
+        run: |
+          SSL_CERT_FILE=/nonexistent SSL_CERT_DIR=/nonexistent "$BIN" selftest --network
+
       - name: Build a tiny fixture snapshot to smoke-test against
         shell: bash
         run: |
