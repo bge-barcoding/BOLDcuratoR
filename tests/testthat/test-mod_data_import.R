@@ -76,10 +76,14 @@ test_that("format_error_message creates properly formatted messages", {
 # ---------------------------------------------------------------------------
 
 test_that("mod_data_import_ui generates expected structure", {
-  ui <- mod_data_import_ui("test")
+  # The UI embeds includeMarkdown("about.md"), a path relative to the app
+  # root the app runs from -- not tests/testthat, where testthat runs.
+  ui <- withr::with_dir("../..", mod_data_import_ui("test"))
 
   html <- as.character(ui)
+  expect_true(grepl("A shiny app to check and curate", html, fixed = TRUE))
   expect_true(grepl("test-taxa_input", html))
-  expect_true(grepl("test-dataset_codes", html))
-  expect_true(grepl("test-project_codes", html))
+  expect_true(grepl("test-countries", html))
+  expect_true(grepl("test-continent_filter", html))
+  expect_true(grepl("test-submit", html))
 })

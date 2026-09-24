@@ -81,10 +81,10 @@ describe("organize_grade_specimens — Grade A", {
 describe("organize_grade_specimens — Grade B", {
 
   it("groups by species like A", {
-    data <- make_grade_data(list("Sp" = rep("BIN1", 5)))
+    data <- make_grade_data(list("Species B" = rep("BIN1", 5)))
     result <- organize_grade_specimens(data, "B")
     expect_equal(length(result), 1)
-    expect_equal(attr(result[["Sp"]], "info")$specimen_count, 5)
+    expect_equal(attr(result[["Species B"]], "info")$specimen_count, 5)
   })
 })
 
@@ -165,17 +165,15 @@ describe("organize_grade_specimens — Grade E", {
 
   it("attaches species count and species list in info", {
     data <- make_grade_data(list(
-      "Alpha" = c("BIN_SHARED"),
-      "Beta"  = c("BIN_SHARED"),
-      "Gamma" = c("BIN_SHARED")
+      "Genus alpha" = c("BIN_SHARED"),
+      "Genus beta"  = c("BIN_SHARED"),
+      "Genus gamma" = c("BIN_SHARED")
     ))
     result <- organize_grade_specimens(data, "E")
 
     info <- attr(result[["BIN_SHARED"]], "info")
     expect_equal(info$species_count, 3)
-    expect_true(grepl("Alpha", info$species))
-    expect_true(grepl("Beta", info$species))
-    expect_true(grepl("Gamma", info$species))
+    expect_equal(info$species, "Genus alpha, Genus beta, Genus gamma")
   })
 
   it("returns empty list when no BINs are shared", {
@@ -194,6 +192,58 @@ describe("organize_grade_specimens — Grade E", {
     ))
     result <- organize_grade_specimens(data, "E")
     expect_equal(length(result), 2)
+  })
+})
+
+# ---------------------------------------------------------------------------
+# Records not identified to species — only join groups through their BIN
+# ---------------------------------------------------------------------------
+
+describe("organize_grade_specimens — non-species-level records", {
+
+  mixed <- data.frame(
+    processid = c("P1", "P2", "P3", "P4"),
+    species = c("Species A", "Species A", "", "Genus"),
+    bin_uri = c("BIN1", "BIN1", "BIN1", "BIN2"),
+    quality_score = c(10, 8, 12, 9),
+    stringsAsFactors = FALSE
+  )
+
+  it("never form a species group of their own", {
+    result <- organize_grade_specimens(mixed, "A")
+    expect_equal(names(result), "Species A")
+  })
+
+  it("join the species group that shares their BIN", {
+    result <- organize_grade_specimens(mixed, "A")
+    expect_setequal(result[["Species A"]]$processid, c("P1", "P2", "P3"))
+    expect_equal(attr(result[["Species A"]], "info")$specimen_count, 3)
+    expect_equal(result[["Species A"]]$quality_score, c(12, 10, 8))
+  })
+
+  it("join the matching species x BIN group for grade C", {
+    result <- organize_grade_specimens(mixed, "C")
+    expect_equal(names(result), "Species A_BIN1")
+    expect_setequal(result[["Species A_BIN1"]]$processid, c("P1", "P2", "P3"))
+  })
+
+  it("are excluded by identification_rank when that column is present", {
+    ranked <- mixed
+    ranked$identification_rank <- c("species", "genus", "genus", "genus")
+    result <- organize_grade_specimens(ranked, "A")
+    # P2 is binomial but ranked genus, so it only joins via BIN1
+    expect_setequal(result[["Species A"]]$processid, c("P1", "P2", "P3"))
+  })
+
+  it("do not count towards a shared BIN for grade E", {
+    data <- data.frame(
+      processid = c("P1", "P2"),
+      species = c("Species A", "Genus"),
+      bin_uri = c("BIN1", "BIN1"),
+      quality_score = c(10, 8),
+      stringsAsFactors = FALSE
+    )
+    expect_equal(length(organize_grade_specimens(data, "E")), 0)
   })
 })
 
