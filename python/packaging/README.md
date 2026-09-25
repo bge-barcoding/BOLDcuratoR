@@ -361,6 +361,10 @@ that wasn't exactly `vX.Y.Z` (v3.2 included); tags are now padded to
   ad-hoc signed only (PyInstaller's default), which is what leaves the
   one remaining "Open Anyway" prompt -- a Developer ID certificate plus
   `xcrun notarytool` and `stapler` is the step that would remove it.
+  **In progress for macOS:** `MACOS_SIGNING.md` (next to this file) is the
+  runbook -- registering for the Developer ID, a local proof on a Mac, the
+  GitHub secrets, and the exact workflow changes -- with a status table
+  saying which step it's on.
 
 ## If a future build breaks on data files again
 

@@ -2011,8 +2011,12 @@ surfacing in the UI rather than letting a curator assume otherwise.
       (Keychain / Windows store / distro bundles). `selftest` checks the
       trust store loads; `selftest --network` reaches Zenodo, and the
       release workflow runs it with no OpenSSL CA path at all, on every OS
-- [ ] 4.4 signing -- **decided: unsigned for now**, not required to ship
-      an unsigned build for curator testing
+- [ ] 4.4 signing -- **macOS: in progress** (September 2026). Unsigned
+      was fine for curator testing, but macOS 15 on Apple Silicon stops
+      curators at "Apple could not verify ... is free of malware", so the
+      project owner decided to get a Developer ID. Runbook and status:
+      `python/packaging/MACOS_SIGNING.md` (register, prove it on a Mac,
+      GitHub secrets, then the workflow changes). Windows: still unsigned
 - [ ] 4.5 installer smoke test -- the release workflow's own smoke-test
       steps are a CI proxy for this, not a replacement
 - [ ] 5.2 publish to Zenodo -- blocked on having an account/community

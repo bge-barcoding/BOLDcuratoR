@@ -29,3 +29,10 @@ renv/cellar/
 renv/local/
 renv/lock/
 renv/python/
+
+# Apple signing credentials (python/packaging/MACOS_SIGNING.md) -- these
+# belong in GitHub secrets and a password manager, never in the repository
+*.p12
+*.p8
+*.certSigningRequest
+*.cer
