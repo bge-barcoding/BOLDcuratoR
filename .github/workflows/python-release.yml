@@ -10,18 +10,21 @@ name: Build desktop executables
 # executables, and the website's releases/latest/download/... buttons all
 # 404'd until it was backfilled.
 #
-# Every release gets the full set of RELEASE_ASSETS attached, but a rebuild
-# only happens when something that goes into them has changed: the plan job
-# diffs python/ and this workflow against the newest earlier release that
-# already carries the full set. No change -> that release's files are copied
-# across as-is (a few seconds, not a 5-platform matrix).
+# Every release is built fresh and gets the full set of RELEASE_ASSETS
+# attached, each reporting that release's own version: the tag is stamped
+# into pyproject.toml (python/packaging/stamp_version.py, the same script
+# python-pypi.yml uses) before PyInstaller bundles the package metadata that
+# boldcurator.__version__ reads. Up to now a release with no python/ changes
+# re-attached the previous release's files instead -- fast, but those still
+# said the older version.
 #
 # workflow_dispatch has two uses:
 #  - no tag: build on the chosen branch to validate the pipeline itself, and
 #    publish nothing (how every packaging fix so far was tested);
-#  - a tag: backfill (or, with force_build, rebuild) an existing release's
-#    executables. The workflow definition comes from the branch you run it
-#    on, the code that gets built from the tag.
+#  - a tag: backfill (or rebuild) an existing release's executables. The
+#    workflow definition -- and stamp_version.py, so even a tag older than
+#    that script can be stamped -- comes from the branch you run it on, the
+#    code that gets built from the tag.
 
 on:
   release:
@@ -32,10 +35,6 @@ on:
         description: 'Existing release tag to attach executables to (blank = build only, publish nothing)'
         required: false
         default: ''
-      force_build:
-        description: 'Rebuild even if python/ is unchanged since the last release with executables'
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -61,15 +60,12 @@ jobs:
     outputs:
       tag: ${{ steps.plan.outputs.tag }}
       ref: ${{ steps.plan.outputs.ref }}
-      version: ${{ steps.plan.outputs.version }}
-      mode: ${{ steps.plan.outputs.mode }}
-      base: ${{ steps.plan.outputs.base }}
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # every tag, so any two releases can be diffed
+          fetch-depth: 0 # every tag, so the requested one can be checked
 
-      - name: Build, or reuse the last release's executables?
+      - name: Which tag, and does it have a release?
         id: plan
         env:
           GH_TOKEN: ${{ github.token }}
@@ -77,7 +73,6 @@ jobs:
           EVENT: ${{ github.event_name }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
           INPUT_TAG: ${{ inputs.tag }}
-          FORCE_BUILD: ${{ inputs.force_build }}
         run: |
           set -euo pipefail
           out() { echo "$1=$2" >> "$GITHUB_OUTPUT"; echo "$1=$2"; }
@@ -87,9 +82,6 @@ jobs:
           if [ -z "$tag" ]; then
             out tag ""
             out ref "$GITHUB_SHA"
-            out version "0.0.0-dev"
-            out mode build
-            out base ""
             echo "Pipeline check on $GITHUB_REF: building, publishing nothing." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
@@ -98,66 +90,17 @@ jobs:
             echo "::error::No tag named '$tag' in this repository"
             exit 1
           fi
-          if ! published=$(gh release view "$tag" --json publishedAt --jq '.publishedAt // ""'); then
+          if ! gh release view "$tag" --json tagName >/dev/null; then
             echo "::error::Tag '$tag' has no GitHub release to attach executables to -- create the release first"
             exit 1
           fi
 
-          # The Windows installer's AppVersion. Tags here have been v3,
-          # v3.2, V3.3 -- pad to x.y.z rather than insisting on it.
-          v="${tag#[vV]}"
-          if [[ "$v" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then
-            IFS=. read -r major minor patch <<< "$v"
-            version="$major.${minor:-0}.${patch:-0}"
-          else
-            version="0.0.0-dev"
-          fi
-
-          # The newest release published before this one that already has
-          # every asset -- the baseline whose executables can be reused.
-          base=""
-          while IFS=$'\t' read -r t at; do
-            [ "$t" = "$tag" ] && continue
-            if [ -n "$published" ] && [[ "$at" > "$published" ]]; then continue; fi
-            have=$(gh release view "$t" --json assets --jq '.assets[].name')
-            complete=1
-            for a in $RELEASE_ASSETS; do
-              grep -qxF "$a" <<< "$have" || { complete=0; break; }
-            done
-            if [ "$complete" = 1 ]; then base="$t"; break; fi
-          done < <(gh release list --exclude-drafts --limit 100 \
-                     --json tagName,publishedAt \
-                     --jq 'sort_by(.publishedAt) | reverse | .[] | [.tagName, .publishedAt] | @tsv')
-
-          if [ "${FORCE_BUILD:-}" = true ]; then
-            mode=build; why="force_build was set"
-          elif [ -z "$base" ]; then
-            mode=build; why="no earlier release carries the full set of executables"
-          elif git diff --quiet "refs/tags/$base" "refs/tags/$tag" -- python .github/workflows/python-release.yml; then
-            mode=reuse; why="nothing under python/ (or this workflow) changed since $base"
-          else
-            mode=build; why="python/ changed since $base"
-          fi
-
           out tag "$tag"
           out ref "refs/tags/$tag"
-          out version "$version"
-          out mode "$mode"
-          out base "$base"
-          {
-            echo "**$tag**: $mode -- $why."
-            if [ "$mode" = build ] && [ -n "$base" ]; then
-              echo
-              echo "Changed since $base:"
-              echo '```'
-              git diff --stat "refs/tags/$base" "refs/tags/$tag" -- python .github/workflows/python-release.yml | tail -n 30
-              echo '```'
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
+          echo "**$tag**: building." >> "$GITHUB_STEP_SUMMARY"
 
   build:
     needs: plan
-    if: needs.plan.outputs.mode == 'build'
     strategy:
       fail-fast: false
       matrix:
@@ -194,9 +137,35 @@ jobs:
         with:
           ref: ${{ needs.plan.outputs.ref }}
 
+      # stamp_version.py from the workflow's own commit, not the tag's: a
+      # backfill of a tag older than the script still gets stamped.
+      - uses: actions/checkout@v4
+        with:
+          path: .release-tools
+          sparse-checkout: python/packaging/stamp_version.py
+          sparse-checkout-cone-mode: false
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
+      - name: Stamp the release version into pyproject.toml
+        # Before the install, so the package metadata PyInstaller bundles
+        # (--copy-metadata boldcurator) -- and so boldcurator.__version__, the
+        # app header, --version and the Zenodo User-Agent -- carry the
+        # release's version, not the placeholder in git. V3.3 -> 3.3.0; a
+        # build-only run (no tag) gets 0.0.0.dev0.
+        id: version
+        shell: bash
+        env:
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: |
+          set -euo pipefail
+          version=$(python ../.release-tools/python/packaging/stamp_version.py \
+            --pyproject pyproject.toml "$TAG")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "Stamped version $version"
 
       - name: Install the app and PyInstaller
         run: |
@@ -211,6 +180,12 @@ jobs:
         run: python packaging/macos_deployment_target.py repin --target ${{ matrix.macos_target }}
 
       - name: Build
+        # --copy-metadata boldcurator: boldcurator.__version__ reads the
+        # package's dist-info, and --collect-all alone never bundled it --
+        # from an editable install, importlib can't map the "boldcurator"
+        # package back to its distribution, so every desktop release up to
+        # now reported 0.0.0+unknown. The --version smoke test below is
+        # what caught it.
         # macOS gets a real .app bundle (--windowed): Gatekeeper assesses a
         # bundle once, as a unit. The bare --onedir folder shipped up to
         # v3.2 made it assess every one of ~150 quarantined .so/.dylib
@@ -230,6 +205,7 @@ jobs:
             --collect-all shinychat --collect-all pywebview \
             --collect-all pythonnet --collect-all clr_loader \
             --collect-all Bio --collect-all boldcurator \
+            --copy-metadata boldcurator \
             packaging/entrypoint.py
 
       - name: Locate the built executable
@@ -246,6 +222,18 @@ jobs:
         run: |
           python packaging/macos_deployment_target.py check --target ${{ matrix.macos_target }} dist/BOLDcurator.app
           codesign --verify --deep --strict --verbose=2 dist/BOLDcurator.app
+
+      - name: Smoke test -- the build reports the release's version
+        # An unstamped build (the git placeholder, 0.0.0.dev0, on a real
+        # release) fails here rather than shipping with the wrong version.
+        shell: bash
+        run: |
+          reported=$("$BIN" --version | tr -d '\r')
+          echo "$reported"
+          [ "$reported" = "boldcurator $VERSION" ] || {
+            echo "::error::Built app reports '$reported', expected 'boldcurator $VERSION'"
+            exit 1
+          }
 
       - name: Smoke test -- selftest (no snapshot needed)
         # Catches a missing package data file before a curator does, same as
@@ -355,11 +343,12 @@ jobs:
         run: |
           choco install innosetup -y --no-progress
 
-          # The plan job's version: the release tag padded to x.y.z (V3.3 ->
-          # 3.3.0), or 0.0.0-dev on a build-only run. Never the raw ref: on
-          # workflow_dispatch that's a branch name like "claude/foo-qw7llz",
-          # whose "/" broke OutputBaseFilename (an actual CI failure).
-          $version = '${{ needs.plan.outputs.version }}'
+          # The version stamped above: the release tag padded to x.y.z
+          # (V3.3 -> 3.3.0), or 0.0.0.dev0 on a build-only run. Never the
+          # raw ref: on workflow_dispatch that's a branch name like
+          # "claude/foo-qw7llz", whose "/" broke OutputBaseFilename (an
+          # actual CI failure).
+          $version = '${{ steps.version.outputs.version }}'
 
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" `
             "/DMyAppVersion=$version" packaging\windows-installer.iss
@@ -372,12 +361,7 @@ jobs:
 
   publish:
     needs: [plan, build]
-    # always(): build is *skipped* on a reuse, which would otherwise skip
-    # this job too.
-    if: >-
-      always() && needs.plan.result == 'success' && needs.plan.outputs.tag != '' &&
-      (needs.plan.outputs.mode == 'reuse' ||
-       (needs.plan.outputs.mode == 'build' && needs.build.result == 'success'))
+    if: needs.plan.outputs.tag != ''
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -385,16 +369,13 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       TAG: ${{ needs.plan.outputs.tag }}
-      BASE: ${{ needs.plan.outputs.base }}
 
     steps:
       - uses: actions/download-artifact@v4
-        if: needs.plan.outputs.mode == 'build'
         with:
           path: artifacts
 
       - name: Zip each Windows/Linux onedir build; stage the Windows installer and macOS zips as-is
-        if: needs.plan.outputs.mode == 'build'
         run: |
           mkdir -p release
           for d in artifacts/*/; do
@@ -415,17 +396,6 @@ jobs:
             esac
           done
 
-      - name: Unchanged since the baseline release -- copy its executables across
-        # Byte-for-byte what $BASE shipped (so the installer still reports
-        # $BASE's version in Add/Remove Programs -- the app inside is the
-        # same build either way).
-        if: needs.plan.outputs.mode == 'reuse'
-        run: |
-          mkdir -p release
-          for a in $RELEASE_ASSETS; do
-            gh release download "$BASE" --pattern "$a" --dir release
-          done
-
       - name: Check every asset the website links to is there
         run: |
           ls -la release/
@@ -436,13 +406,9 @@ jobs:
           exit "$missing"
 
       - name: Attach to the release
-        # --clobber: re-running (or a force_build backfill) replaces what's
+        # --clobber: re-running (or a backfill) replaces what's
         # there. Only the assets are touched -- the release notes are left
         # exactly as written.
         run: |
           gh release upload "$TAG" release/* --clobber
-          if [ "${{ needs.plan.outputs.mode }}" = reuse ]; then
-            echo "Attached $BASE's executables to $TAG (unchanged)." >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "Attached freshly built executables to $TAG." >> "$GITHUB_STEP_SUMMARY"
-          fi
+          echo "Attached freshly built executables to $TAG." >> "$GITHUB_STEP_SUMMARY"

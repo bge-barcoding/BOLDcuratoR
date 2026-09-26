@@ -22,6 +22,7 @@ pyinstaller --onedir --name boldcurator --paths src \
     --collect-all clr_loader \
     --collect-all Bio \
     --collect-all boldcurator \
+    --copy-metadata boldcurator \
     packaging/entrypoint.py
 ```
 
@@ -41,7 +42,7 @@ python packaging/macos_deployment_target.py repin --target 11.0
 pyinstaller --onedir --paths src --windowed --name BOLDcurator \
     --icon packaging/icon.icns \
     --osx-bundle-identifier io.github.bge-barcoding.boldcurator \
-    --collect-all ...   # the same --collect-all list as above
+    --collect-all ...   # the same --collect-all/--copy-metadata list as above
     packaging/entrypoint.py
 python packaging/macos_deployment_target.py check --target 11.0 dist/BOLDcurator.app
 codesign --verify --deep --strict dist/BOLDcurator.app
@@ -118,6 +119,15 @@ of thing that silently rots the next time a dependency updates.
   (the same thing that lets `packaging/entrypoint.py` find it at all), so
   this walks its own package tree for data files exactly like any other
   entry in this list.
+- **`--copy-metadata boldcurator`**: the app's *version*. `boldcurator.__version__`
+  (the app header, `--version`, the Zenodo User-Agent) is read from the
+  package's `boldcurator-<version>.dist-info`, which `--collect-all
+  boldcurator` does **not** bundle from an editable install: importlib can't
+  map the `boldcurator` package back to its distribution there, so the
+  metadata copy is skipped without any error. Every desktop release up to
+  this flag reported `0.0.0+unknown`. The release workflow's `--version`
+  smoke test caught it, and now fails any build that doesn't report the
+  version stamped from the tag (see "Releases").
 
 ## The Windows native-window failure -- real, hit on a real machine
 
@@ -263,26 +273,40 @@ minutes `.github/workflows/python-release.yml` attaches the five files the
 website's download buttons link to (`website/README.md`, "Download
 links"). Your release notes are left alone; only the assets are added.
 
-It doesn't always rebuild. The `plan` job finds the newest earlier release
-that already has all five files and diffs `python/` and the workflow file
-between that release's tag and the new one:
+Every release is built fresh (about 5 minutes, smoke tests included).
 
-- **something changed** -- the full build matrix runs (about 5 minutes),
-  smoke tests included, and the fresh builds are attached;
-- **nothing changed** (say, a release for an R-app-only fix) -- that
-  release's files are copied across as they are, in seconds. The Windows
-  installer then still reports the older version in Add/Remove Programs;
-  the app inside is the same build either way.
+### Versions come from the tag -- never edit `pyproject.toml`
 
-The run's summary page says which it did and why.
+`pyproject.toml` keeps a placeholder, `version = "0.0.0.dev0"`, in git. Both
+release workflows rewrite their own checkout's copy from the release tag
+with `packaging/stamp_version.py` before building (`V3.4` -> `3.4.0`, `v4`
+-> `4.0.0`). So every install route reports the same version -- in the app
+header, `boldcurator --version`, and the User-Agent sent to Zenodo:
+
+- the desktop zips, and the app inside the Windows installer
+  (`python-release.yml`, which also passes it to Inno Setup as the
+  installer's AppVersion);
+- PyPI, i.e. `uv tool install`/`pip install` and the website's
+  `install.sh`/`install.ps1` (`python-pypi.yml`, with `--strict`: a tag that
+  isn't `vX`, `vX.Y` or `vX.Y.Z` is refused there rather than guessed at,
+  since a PyPI version can never be reused).
+
+The desktop build fails its smoke test if the built app reports anything
+other than the stamped version. A source checkout (`pip install -e .`)
+reports `0.0.0.dev0` -- plainly not a release.
+
+Before this, the desktop builds were never stamped at all -- every one
+reported `0.1.0.dev0`, whatever its tag -- and a release with no changes
+under `python/` re-attached the previous release's executables instead of
+rebuilding. Once builds carry their version, reused files would report the
+wrong one, so that shortcut is gone.
 
 To attach executables to a release that doesn't have them (V3.3, which
 predates this trigger -- see below), or to rebuild one: **Actions → Build
 desktop executables → Run workflow**, pick `main`, and enter the release's
-tag. Tick `force_build` to rebuild even when nothing changed. Leave the tag
-blank to build on a branch just to test the pipeline -- nothing is
-published then, which is how every packaging fix here was checked before
-merging.
+tag. Leave the tag blank to build on a branch just to test the pipeline
+-- nothing is published then, which is how every packaging fix here was
+checked before merging.
 
 Up to V3.3 the workflow fired on a pushed tag matching `v*` instead.
 GitHub's tag filters are case-sensitive, so V3.3's capital `V` never

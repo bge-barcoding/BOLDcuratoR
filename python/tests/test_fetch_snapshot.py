@@ -453,3 +453,323 @@ def test_every_request_verifies_against_the_os_trust_store(monkeypatch, tmp_path
 
     assert len(contexts) == 2
     assert all(isinstance(c, truststore.SSLContext) for c in contexts)
+
+
+# -- Parallel byte-range download -------------------------------------------
+#
+# Zenodo caps what one connection gets, so ``download`` fetches several byte
+# ranges at once whenever the host answers a ``Range`` request with a 206.
+# The plain ``http_server`` above ignores ``Range`` (SimpleHTTPRequestHandler
+# always sends the whole file), so every test above already covers the
+# single-stream fallback; these cover the parallel path.
+
+
+@pytest.fixture
+def ranged_http_server(tmp_path):
+    """Like ``http_server``, but honours ``Range: bytes=a-b`` with a 206.
+
+    Yields ``(base_url, served_dir, state)``: ``state["ranges"]`` records
+    every Range header served, ``state["agents"]`` every User-Agent seen,
+    ``state["fail_once"]`` is a set of range start offsets to drop the
+    connection on (once each) part-way through, and ``state["throttle_once"]``
+    a set of Range headers (or ``None`` for a plain GET) to answer with a
+    429 once each.
+    """
+    state = {"ranges": [], "agents": [], "fail_once": set(),
+             "throttle_once": set()}
+    lock = threading.Lock()
+
+    class Handler(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, directory=str(tmp_path), **kw)
+
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            header = self.headers.get("Range")
+            with lock:
+                state["agents"].append(self.headers.get("User-Agent"))
+                throttle = header in state["throttle_once"]
+                state["throttle_once"].discard(header)
+            if throttle:
+                self.send_response(429)
+                self.send_header("Retry-After", "0")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            if not header:
+                return super().do_GET()
+            path = Path(self.translate_path(self.path))
+            data = path.read_bytes()
+            first, _, last = header.removeprefix("bytes=").partition("-")
+            start, end = int(first), min(int(last), len(data) - 1)
+            with lock:
+                state["ranges"].append(header)
+                drop = start in state["fail_once"]
+                state["fail_once"].discard(start)
+            body = data[start:end + 1]
+            self.send_response(206)
+            self.send_header("Content-Range", f"bytes {start}-{end}/{len(data)}")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            if drop:
+                # Half the promised bytes, then hang up.
+                self.wfile.write(body[:len(body) // 2])
+                self.close_connection = True
+                return
+            self.wfile.write(body)
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}", tmp_path, state
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+@pytest.fixture
+def small_parallel(monkeypatch):
+    """Make a test-sized file big enough to split, and retries instant."""
+    monkeypatch.setattr(fs, "MIN_PARALLEL_BYTES", 1024)
+    monkeypatch.setattr(fs, "PARALLEL_CONNECTIONS", 4)
+    monkeypatch.setattr(fs, "RETRY_BACKOFF", 0)
+
+
+def _random_bytes(n: int) -> bytes:
+    import random
+    return random.Random(n).randbytes(n)
+
+
+def test_parallel_download_reassembles_the_file_exactly(
+    ranged_http_server, tmp_path, small_parallel
+):
+    base_url, served_dir, state = ranged_http_server
+    payload = _random_bytes(200_003)  # not a multiple of the range count
+    (served_dir / "snap.duckdb").write_bytes(payload)
+
+    source = fs.Source(url=f"{base_url}/snap.duckdb",
+                       checksum=f"sha256:{_sha256(payload)}")
+    out = tmp_path / "out" / "snap.duckdb"
+    fs.download(source, out, progress=lambda *a, **k: None)
+
+    assert out.read_bytes() == payload
+    # The one-byte probe, then one request per range.
+    assert state["ranges"][0] == "bytes=0-0"
+    assert len(state["ranges"]) == 1 + 4
+    assert not out.with_suffix(out.suffix + ".part").exists()
+
+
+def test_parallel_download_of_a_gzipped_source(
+    ranged_http_server, tmp_path, small_parallel
+):
+    base_url, served_dir, state = ranged_http_server
+    payload = _random_bytes(50_000) * 4
+    compressed = gzip.compress(payload)
+    (served_dir / "bold_snapshot_2026-09-11.duckdb.gz").write_bytes(compressed)
+
+    source = fs.Source(url=f"{base_url}/bold_snapshot_2026-09-11.duckdb.gz",
+                       checksum=f"md5:{hashlib.md5(compressed).hexdigest()}",
+                       filename="bold_snapshot_2026-09-11.duckdb.gz")
+    out = tmp_path / "out" / "snapshot.duckdb"
+    fs.download(source, out, progress=lambda *a, **k: None)
+
+    assert out.read_bytes() == payload
+    assert len(state["ranges"]) > 2
+    assert not out.with_suffix(out.suffix + ".gz.part").exists()
+    assert not out.with_suffix(out.suffix + ".part").exists()
+
+
+def test_parallel_download_refuses_a_wrong_checksum_and_cleans_up(
+    ranged_http_server, tmp_path, small_parallel
+):
+    base_url, served_dir, _ = ranged_http_server
+    compressed = gzip.compress(_random_bytes(100_000))
+    (served_dir / "snap.duckdb.gz").write_bytes(compressed)
+
+    source = fs.Source(url=f"{base_url}/snap.duckdb.gz",
+                       checksum="sha256:" + "0" * 64)
+    out = tmp_path / "out" / "snapshot.duckdb"
+    with pytest.raises(fs.FetchError, match="mismatch"):
+        fs.download(source, out, progress=lambda *a, **k: None)
+
+    assert not out.exists()
+    assert not out.with_suffix(out.suffix + ".gz.part").exists()
+    assert not out.with_suffix(out.suffix + ".part").exists()
+
+
+def test_parallel_download_retries_a_dropped_range_from_where_it_stopped(
+    ranged_http_server, tmp_path, small_parallel
+):
+    base_url, served_dir, state = ranged_http_server
+    payload = _random_bytes(120_000)
+    (served_dir / "snap.duckdb").write_bytes(payload)
+    state["fail_once"].add(30_000)  # the second of four 30,000-byte ranges
+
+    source = fs.Source(url=f"{base_url}/snap.duckdb",
+                       checksum=f"sha256:{_sha256(payload)}")
+    out = tmp_path / "out" / "snap.duckdb"
+    fs.download(source, out, progress=lambda *a, **k: None)
+
+    assert out.read_bytes() == payload
+    # The retry resumed part-way through the range, not from its start.
+    retries = [r for r in state["ranges"]
+               if r.endswith("-59999") and r != "bytes=30000-59999"]
+    assert retries == ["bytes=45000-59999"]
+
+
+def test_parallel_download_gives_up_on_a_range_that_keeps_failing(
+    ranged_http_server, tmp_path, small_parallel, monkeypatch
+):
+    base_url, served_dir, _ = ranged_http_server
+    (served_dir / "snap.duckdb").write_bytes(_random_bytes(100_000))
+
+    real_urlopen = fs._urlopen
+
+    def flaky_urlopen(url, headers=None):
+        if headers and headers.get("Range", "").startswith("bytes=25000-"):
+            raise fs.URLError("connection reset")
+        return real_urlopen(url, headers)
+
+    monkeypatch.setattr(fs, "_urlopen", flaky_urlopen)
+
+    out = tmp_path / "out" / "snap.duckdb"
+    with pytest.raises(fs.FetchError, match="4 attempts"):
+        fs.download(fs.Source(url=f"{base_url}/snap.duckdb"), out,
+                    progress=lambda *a, **k: None)
+    assert not out.exists()
+    assert not out.with_suffix(out.suffix + ".part").exists()
+
+
+def test_a_small_file_is_not_split_even_when_ranges_work(
+    ranged_http_server, tmp_path
+):
+    base_url, served_dir, state = ranged_http_server
+    payload = b"small enough for one request"
+    (served_dir / "snap.duckdb").write_bytes(payload)
+
+    out = tmp_path / "out" / "snap.duckdb"
+    fs.download(fs.Source(url=f"{base_url}/snap.duckdb"), out,
+                progress=lambda *a, **k: None)
+
+    assert out.read_bytes() == payload
+    assert state["ranges"] == ["bytes=0-0"]  # then one plain GET
+
+
+def test_a_truncated_gzip_download_is_reported_not_kept(http_server, tmp_path):
+    base_url, served_dir = http_server
+    compressed = gzip.compress(_random_bytes(50_000))
+    (served_dir / "snap.duckdb.gz").write_bytes(compressed[:-100])
+
+    out = tmp_path / "out" / "snapshot.duckdb"
+    with pytest.raises(fs.FetchError, match="decompress"):
+        fs.download(fs.Source(url=f"{base_url}/snap.duckdb.gz"), out,
+                    progress=lambda *a, **k: None)
+    assert not out.exists()
+    assert not out.with_suffix(out.suffix + ".part").exists()
+
+
+def test_a_multi_member_gzip_decompresses_in_full(http_server, tmp_path):
+    base_url, served_dir = http_server
+    (served_dir / "snap.duckdb.gz").write_bytes(
+        gzip.compress(b"first member ") + gzip.compress(b"second member"))
+
+    out = tmp_path / "out" / "snapshot.duckdb"
+    fs.download(fs.Source(url=f"{base_url}/snap.duckdb.gz"), out,
+                progress=lambda *a, **k: None)
+    assert out.read_bytes() == b"first member second member"
+
+
+# -- Being a client Zenodo can identify and doesn't have to throttle --------
+
+
+def test_every_request_identifies_itself_as_boldcurator(
+    ranged_http_server, tmp_path, small_parallel
+):
+    """Zenodo may rate-limit or block generic User-Agents like urllib's
+    default ``Python-urllib/3.x``; it asks for ``AppName/version (+URL)``."""
+    from boldcurator import __version__
+
+    base_url, served_dir, state = ranged_http_server
+    (served_dir / "record.json").write_text("{}")
+    (served_dir / "snap.duckdb").write_bytes(_random_bytes(10_000))
+
+    fs._get_json(f"{base_url}/record.json")
+    fs.download(fs.Source(url=f"{base_url}/snap.duckdb"), tmp_path / "s.duckdb",
+                progress=lambda *a, **k: None)
+
+    expected = (f"BOLDcurator/{__version__} "
+                "(+https://github.com/bge-barcoding/BOLDcuratoR)")
+    assert fs.USER_AGENT == expected
+    assert len(state["agents"]) == 1 + 1 + 4  # API, probe, four ranges
+    assert set(state["agents"]) == {expected}
+
+
+def test_a_rate_limited_range_waits_and_retries(
+    ranged_http_server, tmp_path, small_parallel
+):
+    base_url, served_dir, state = ranged_http_server
+    payload = _random_bytes(40_000)
+    (served_dir / "snap.duckdb").write_bytes(payload)
+    state["throttle_once"].add("bytes=10000-19999")
+
+    out = tmp_path / "out" / "snap.duckdb"
+    fs.download(fs.Source(url=f"{base_url}/snap.duckdb",
+                          checksum=f"sha256:{_sha256(payload)}"),
+                out, progress=lambda *a, **k: None)
+    assert out.read_bytes() == payload
+    assert state["ranges"].count("bytes=10000-19999") == 1  # after the 429
+
+
+def test_the_api_lookup_and_the_probe_survive_one_429(
+    ranged_http_server, tmp_path, small_parallel
+):
+    base_url, served_dir, state = ranged_http_server
+    (served_dir / "record.json").write_text('{"ok": true}')
+    (served_dir / "snap.duckdb").write_bytes(b"x" * 5000)
+    state["throttle_once"].update({None, "bytes=0-0"})
+
+    assert fs._get_json(f"{base_url}/record.json") == {"ok": True}
+    out = tmp_path / "s.duckdb"
+    fs.download(fs.Source(url=f"{base_url}/snap.duckdb"), out,
+                progress=lambda *a, **k: None)
+    assert out.read_bytes() == b"x" * 5000
+
+
+def test_a_persistent_429_is_reported_as_rate_limiting(
+    ranged_http_server, tmp_path, small_parallel, monkeypatch
+):
+    base_url, served_dir, _ = ranged_http_server
+    (served_dir / "record.json").write_text("{}")
+
+    def always_429(url, headers=None):
+        raise fs.HTTPError(url, 429, "Too Many Requests",
+                           {"Retry-After": "0"}, None)
+
+    monkeypatch.setattr(fs, "_urlopen", always_429)
+    with pytest.raises(fs.FetchError, match="rate-limiting"):
+        fs._get_json(f"{base_url}/record.json")
+    with pytest.raises(fs.FetchError, match="rate-limiting"):
+        fs.download(fs.Source(url=f"{base_url}/snap.duckdb"),
+                    tmp_path / "s.duckdb", progress=lambda *a, **k: None)
+
+
+@pytest.mark.parametrize("code, retry_after, attempt, expected", [
+    (429, "7", 1, 7.0),       # the server's own wait, as asked
+    (503, "5", 3, 5.0),
+    (429, "3600", 1, 60.0),   # capped at MAX_RETRY_AFTER
+    (429, "Wed, 21 Oct 2026 07:28:00 GMT", 2, 2.0),  # a date: backoff
+    (429, None, 3, 4.0),      # no header: backoff
+    (500, "7", 1, 1.0),       # not a rate limit: backoff, header ignored
+])
+def test_retry_delay(code, retry_after, attempt, expected):
+    headers = {"Retry-After": retry_after} if retry_after else {}
+    exc = fs.HTTPError("https://zenodo.org/x", code, "", headers, None)
+    assert fs._retry_delay(exc, attempt) == expected
+
+
+def test_retry_delay_after_a_dropped_connection_backs_off():
+    assert fs._retry_delay(fs.URLError("reset"), 2) == 2.0
+    assert fs._retry_delay(None, 1) == 1.0
