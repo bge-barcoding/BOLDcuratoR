@@ -52,9 +52,9 @@
     <div class="wrap">
       <h2>Download</h2>
       <p class="section-lede">
-        Pick your operating system. All builds are free and open source
-        (MIT licence) — see the FAQ below if your OS warns you about an
-        unsigned app on first run.
+        Pick your operating system, then follow the short
+        <a href="#install-steps">install steps</a> below it. All builds are
+        free and open source (MIT licence).
       </p>
 
       <div class="download-grid" id="download-grid">
@@ -71,7 +71,7 @@
 
         <div class="dl-card" data-os="mac-arm">
           <div class="os-name">🍎 macOS (Apple Silicon) <span class="badge" hidden>Recommended for you</span></div>
-          <p>M1/M2/M3/M4 Macs, macOS 11 (Big Sur) or newer. Unzip and move BOLDcurator to Applications.</p>
+          <p>M1/M2/M3/M4 (and later) Macs, macOS 11 (Big Sur) or newer. Every Mac sold since 2023 is one of these.</p>
           <a class="btn btn-primary" href="https://github.com/bge-barcoding/BOLDcuratoR/releases/latest/download/boldcurator-macos-arm64.zip">
             Download .zip
           </a>
@@ -79,7 +79,7 @@
 
         <div class="dl-card" data-os="mac-intel">
           <div class="os-name">🍎 macOS (Intel) <span class="badge" hidden>Recommended for you</span></div>
-          <p>Older, Intel-based Macs (pre-2020), macOS 11 (Big Sur) or newer. Unzip and move BOLDcurator to Applications.</p>
+          <p>Older, Intel-based Macs (mostly from 2020 or earlier), macOS 11 (Big Sur) or newer.</p>
           <a class="btn btn-primary" href="https://github.com/bge-barcoding/BOLDcuratoR/releases/latest/download/boldcurator-macos-x86_64.zip">
             Download .zip
           </a>
@@ -91,6 +91,48 @@
           <a class="btn btn-primary" href="https://github.com/bge-barcoding/BOLDcuratoR/releases/latest/download/boldcurator-linux-x86_64.zip">
             Download .zip
           </a>
+        </div>
+      </div>
+
+      <p class="which-mac">
+        <strong>Which Mac do I have?</strong> Apple menu → About This Mac.
+        If it says <strong>Chip: Apple M…</strong>, choose Apple Silicon. If
+        it says <strong>Processor: …Intel…</strong>, choose Intel.
+      </p>
+
+      <div class="install-steps" id="install-steps">
+        <h3>How to install</h3>
+        <p class="install-steps-lede">
+          The builds aren't code-signed yet, so Windows and macOS each show a
+          warning the first time. That's expected. These steps get past it,
+          and you only do them once.
+        </p>
+        <div class="install-grid">
+          <div class="install-os" data-os="windows">
+            <div class="install-os-name">🪟 Windows</div>
+            <ol>
+              <li>Double-click the downloaded <code>BOLDcuratorSetup-x64.exe</code>.</li>
+              <li>If you see "Windows protected your PC", click <strong>More info</strong>, then <strong>Run anyway</strong>.</li>
+              <li>Click <strong>Yes</strong> if Windows asks to allow changes, then follow the installer. BOLDcurator is added to your Start menu.</li>
+            </ol>
+            <p class="install-os-note">Using the portable .zip instead? Right-click it, choose <strong>Extract All</strong>, then run <code>boldcurator.exe</code> from the extracted folder. Step 2 applies to it too.</p>
+          </div>
+          <div class="install-os" data-os="mac">
+            <div class="install-os-name">🍎 macOS</div>
+            <ol>
+              <li>Double-click the downloaded zip to unzip it, then drag <strong>BOLDcurator.app</strong> into <strong>Applications</strong>.</li>
+              <li>Open BOLDcurator. At the warning, click <strong>Done</strong>, not Move to Trash.</li>
+              <li>Open <strong>System Settings → Privacy &amp; Security</strong> and scroll down to Security. Next to "BOLDcurator was blocked", click <strong>Open Anyway</strong>, enter your password, then click <strong>Open Anyway</strong> again.</li>
+            </ol>
+            <p class="install-os-note">The Open Anyway button only stays there for about an hour after step 2. If it's gone, repeat step 2.</p>
+          </div>
+          <div class="install-os" data-os="linux">
+            <div class="install-os-name">🐧 Linux</div>
+            <ol>
+              <li>Unzip the download.</li>
+              <li>Run the <code>boldcurator</code> executable inside the folder.</li>
+            </ol>
+          </div>
         </div>
       </div>
 
@@ -198,7 +240,7 @@ uv tool uninstall boldcurator</code></pre>
         <li>
           <div>
             <strong>Download and open the app</strong>
-            <span class="detail">Pick your OS above. On first launch, Windows/macOS may warn that the app is from an unrecognised developer — see the FAQ for how to proceed; it's a one-time prompt.</span>
+            <span class="detail">Pick your OS above and follow the <a href="#install-steps">three install steps</a> for it. Windows and macOS warn about an unrecognised developer the first time; the steps get you past that, and it's a one-time prompt.</span>
           </div>
         </li>
         <li>
@@ -300,12 +342,16 @@ uv tool uninstall boldcurator</code></pre>
             both operating systems show their standard warning for any
             unsigned app, not something specific to BOLDcurator. On
             Windows, click "More info" then "Run anyway". On macOS, open
-            BOLDcurator once and dismiss the warning, then go to System
-            Settings → Privacy &amp; Security, scroll down, click "Open
-            Anyway" next to the message about BOLDcurator, and enter your
-            password (on macOS 14 or earlier, right-clicking the app and
-            choosing "Open" also works). You only need to do this once per
-            machine. If macOS instead asks about lots of individual files
+            BOLDcurator once and click "Done" (not "Move to Trash") at the
+            warning. Then go to System Settings → Privacy &amp; Security,
+            scroll down to Security, click "Open Anyway" next to
+            "BOLDcurator was blocked", enter your password, and click "Open
+            Anyway" again. That button only stays for about an hour after
+            the warning; if it's gone, open the app again to bring it back.
+            On macOS 14 or earlier, right-clicking the app and choosing
+            "Open" also works. You only need to do this once per machine.
+            The <a href="#install-steps">install steps</a> above walk
+            through both. If macOS instead asks about lots of individual files
             (names ending in <code>.so</code> or <code>.dylib</code>), you
             have an older download &mdash; get the latest version above,
             which asks just once. To avoid the warning altogether, use the
@@ -417,26 +463,18 @@ uv tool uninstall boldcurator</code></pre>
   // back to just linking to the download section (already the href
   // default) if detection is inconclusive -- never blocks the page.
   (function () {
-    try {
-      var ua = navigator.userAgent || "";
-      var platform = navigator.platform || "";
-      var os = null;
-      if (/Windows/i.test(ua)) {
-        os = "windows";
-      } else if (/Mac/i.test(platform) || /Macintosh/i.test(ua)) {
-        // Apple Silicon Safari/Chrome still reports "MacIntel" for
-        // compatibility, so this is a heuristic, not a certainty -- the
-        // card just gets a highlight, the other three are still one click
-        // away regardless.
-        var isAppleSilicon = /Mac/.test(platform) &&
-          navigator.maxTouchPoints && navigator.maxTouchPoints > 1;
-        os = isAppleSilicon ? "mac-arm" : "mac-intel";
-      } else if (/Linux/i.test(platform) && !/Android/i.test(ua)) {
-        os = "linux";
-      }
-      if (!os) return;
+    var ua = navigator.userAgent || "";
+    var platform = navigator.platform || "";
+
+    function apply(os) {
       var card = document.querySelector('.dl-card[data-os="' + os + '"]');
       if (!card) return;
+      var others = document.querySelectorAll(".dl-card[data-recommended]");
+      for (var i = 0; i < others.length; i++) {
+        others[i].removeAttribute("data-recommended");
+        var otherBadge = others[i].querySelector(".badge");
+        if (otherBadge) otherBadge.hidden = true;
+      }
       card.setAttribute("data-recommended", "true");
       var badge = card.querySelector(".badge");
       if (badge) badge.hidden = false;
@@ -445,15 +483,57 @@ uv tool uninstall boldcurator</code></pre>
       if (primaryLink && heroButton) {
         heroButton.setAttribute("href", primaryLink.getAttribute("href"));
       }
-      // The one-command install has one line per OS family; highlight
-      // this visitor's.
+      // The install steps and the one-command install are grouped by OS
+      // family; highlight this visitor's.
       var family = os === "windows" ? "windows" : os === "linux" ? "linux" : "mac";
-      var blocks = document.querySelectorAll(".cmd-block[data-os]");
-      for (var i = 0; i < blocks.length; i++) {
-        var families = blocks[i].getAttribute("data-os").split(" ");
+      var blocks = document.querySelectorAll(".cmd-block[data-os], .install-os[data-os]");
+      for (var j = 0; j < blocks.length; j++) {
+        var families = blocks[j].getAttribute("data-os").split(" ");
         if (families.indexOf(family) !== -1) {
-          blocks[i].setAttribute("data-recommended", "true");
+          blocks[j].setAttribute("data-recommended", "true");
         }
+      }
+    }
+
+    // Every Mac browser reports "Intel" in its user agent, Apple Silicon
+    // or not, so the user agent alone can't tell them apart. The GPU name
+    // WebGL reports can: Apple Silicon has an Apple GPU ("Apple M1",
+    // "Apple M2 Pro", ...), Intel Macs have an Intel, AMD or NVIDIA one.
+    // Returns "mac-arm", "mac-intel" or null if it can't say.
+    function macFromGpu() {
+      try {
+        var canvas = document.createElement("canvas");
+        var gl = canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
+        if (!gl) return null;
+        var renderer = "";
+        var info = gl.getExtension("WEBGL_debug_renderer_info");
+        if (info) renderer = gl.getParameter(info.UNMASKED_RENDERER_WEBGL) || "";
+        if (!renderer) renderer = gl.getParameter(gl.RENDERER) || "";
+        if (/Apple M\d|Apple GPU/i.test(renderer)) return "mac-arm";
+        if (/Intel|AMD|Radeon|NVIDIA|GeForce/i.test(renderer)) return "mac-intel";
+      } catch (e) {}
+      return null;
+    }
+
+    try {
+      if (/Windows/i.test(ua)) {
+        apply("windows");
+      } else if (/Mac/i.test(platform) || /Macintosh/i.test(ua)) {
+        // Default to Apple Silicon: Apple stopped selling Intel Macs in
+        // 2023, so it's the better guess whenever the checks below can't
+        // tell. The "Which Mac do I have?" line covers the rest.
+        apply(macFromGpu() || "mac-arm");
+        // Chrome and Edge can report the CPU architecture outright, which
+        // beats the GPU guess when it's available.
+        var uaData = navigator.userAgentData;
+        if (uaData && uaData.getHighEntropyValues) {
+          uaData.getHighEntropyValues(["architecture"]).then(function (values) {
+            if (values.architecture === "arm") apply("mac-arm");
+            else if (values.architecture === "x86") apply("mac-intel");
+          }, function () {});
+        }
+      } else if (/Linux/i.test(platform) && !/Android/i.test(ua)) {
+        apply("linux");
       }
     } catch (e) {
       // Detection is a nicety, never a requirement -- the download
