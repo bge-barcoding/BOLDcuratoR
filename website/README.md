@@ -36,6 +36,28 @@ zips, matrix `matrix.name`) and `python/packaging/windows-installer.iss`
 this reason). If either ever changes, update the matching `href` in
 `index.html` in the same change.
 
+## Install scripts (`install.sh`, `install.ps1`)
+
+These are the one-command install behind the "Or install with one command"
+block. They are served from this site at
+`https://bge-barcoding.github.io/BOLDcuratoR/install.sh` and `.../install.ps1`,
+so **those two URLs, and the filenames, must not change**: the page, the
+Python README and curators' own notes all paste them. Each script:
+
+1. installs uv with Astral's installer, only if uv is missing;
+2. runs `uv tool install --python 3.11 --upgrade "boldcurator[desktop]"`;
+3. runs `boldcurator install-shortcut`;
+4. runs `uv tool update-shell`.
+
+Running it again upgrades an existing install. Both scripts accept
+`BOLDCURATOR_SPEC` (what to install) and `BOLDCURATOR_PYTHON` (which
+Python) overrides. CI's `wheel-install` job (`python-tests.yml`) uses
+`BOLDCURATOR_SPEC` to run the real scripts against a freshly built wheel on
+all three OSes, so a change here is tested before it reaches the site.
+
+The package itself comes from PyPI, published by
+`.github/workflows/python-pypi.yml` on every GitHub release.
+
 ## Screenshots
 
 `assets/screenshot-*.png` are real screenshots of the running desktop app

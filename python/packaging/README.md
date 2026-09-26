@@ -292,6 +292,55 @@ release. The installer's version also came out as `0.0.0-dev` for any tag
 that wasn't exactly `vX.Y.Z` (v3.2 included); tags are now padded to
 `x.y.z` (V3.3 -> 3.3.0).
 
+## The second route: PyPI + uv, alongside these installers
+
+Curators can also install without any of the files above:
+
+```sh
+uv tool install --python 3.11 "boldcurator[desktop]"
+boldcurator install-shortcut
+```
+
+The website wraps this in `website/install.sh` / `install.ps1` (one pasted
+line, which also installs uv if needed). It exists mainly for macOS. The
+`.app` that `install-shortcut` writes (`src/boldcurator/shortcuts.py`) is
+created on the curator's own Mac, not downloaded, so it has no quarantine
+flag and Gatekeeper never asks about it. That removes the "unidentified
+developer" prompt without a Developer ID.
+
+It is built **not** to touch anything in this folder or in
+`python-release.yml`:
+
+- **Separate entry point.** The installers still start through
+  `entrypoint.py`. The wheel's clickable entry point is a
+  `[project.gui-scripts]` launcher, `boldcurator.launcher:main`, which
+  duplicates `entrypoint.py`'s log-file redirect instead of sharing it, so
+  the installer build is unchanged.
+- **Icons stay here.** The wheel copies `icon.ico` / `icon.icns` from this
+  folder into `boldcurator/assets/` at build time (hatch `force-include`),
+  so `--icon` and Inno Setup's `SetupIconFile` still find them here.
+- **No new dependencies.** `shortcuts.py` uses only the standard library
+  (PowerShell's `WScript.Shell` on Windows, not `pywin32`). A frozen build
+  that bundles it through `--collect-all boldcurator` gains nothing, and in
+  a frozen build `install-shortcut` / `remove-shortcut` refuse to act.
+- **Separate publishing workflow.** PyPI publishing is
+  `.github/workflows/python-pypi.yml`, which runs on the same
+  `release: published` event. The tag becomes the package version with the
+  same x.y.z padding as the installer (V3.3 -> 3.3.0).
+- **Both installs share one data folder.** Both use `~/.boldcurator/`
+  (config, snapshot, saved sessions, `boldcurator.log`), so a curator with
+  both never downloads the snapshot twice.
+- **Shortcuts don't collide.** The shortcut is named "BOLDcurator (Python)"
+  and the macOS bundle id is `io.github.bge-barcoding.boldcurator.python`,
+  so it never replaces the installer's "BOLDcurator" shortcut or confuses
+  LaunchServices.
+
+`python-tests.yml`'s `wheel-install` job tests this route end to end on all
+three OSes. It builds the wheel, runs the website's own install script
+against it, and smoke-tests the result the same way the frozen build is
+tested. It also launches the app through the shortcut's own target and
+removes the shortcut.
+
 ## What has actually been verified, and what hasn't
 
 **Verified, on Linux, in the sandbox this was built in:**

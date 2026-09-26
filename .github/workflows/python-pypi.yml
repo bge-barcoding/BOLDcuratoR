@@ -1,0 +1,133 @@
+name: Publish to PyPI
+
+# The pip/uv distribution route: `uv tool install "boldcurator[desktop]"`,
+# which is what website/install.sh and install.ps1 run. Kept out of
+# python-release.yml on purpose, so the desktop installers' pipeline is
+# untouched by it -- the two run side by side on the same release.
+#
+# Fires when a GitHub release is published, like python-release.yml. The
+# release tag becomes the package version, padded to x.y.z the same way
+# that workflow pads the Windows installer's AppVersion (V3.3 -> 3.3.0).
+# pyproject.toml keeps its placeholder version in git; only this job's own
+# checkout is stamped.
+#
+# Publishing uses PyPI trusted publishing (OIDC) -- no API token is stored
+# anywhere. One-time setup on pypi.org: add a (pending) trusted publisher
+# for project "boldcurator", repository bge-barcoding/BOLDcuratoR, workflow
+# python-pypi.yml, environment "pypi" -- and create that environment under
+# the repository's Settings -> Environments.
+#
+# workflow_dispatch with no tag builds and checks the package but publishes
+# nothing -- the way to test this workflow itself. With a tag it publishes
+# that release's code (a backfill); a version already on PyPI is skipped.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag to publish (blank = build and check only, publish nothing)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: python-pypi-${{ github.event.release.tag_name || inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      publish: ${{ steps.version.outputs.publish }}
+    steps:
+      - name: Which tag?
+        id: tag
+        env:
+          EVENT: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          if [ "$EVENT" = release ]; then tag="$RELEASE_TAG"; else tag="$INPUT_TAG"; fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if [ -n "$tag" ]; then echo "ref=refs/tags/$tag"; else echo "ref=$GITHUB_SHA"; fi >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.ref }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Stamp the version from the release tag
+        id: version
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -z "$TAG" ]; then
+            version="0.0.0.dev0"; publish=false
+          else
+            v="${TAG#[vV]}"
+            if [[ ! "$v" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then
+              # Never guess: a version on PyPI can't be reused or renamed.
+              echo "::error::Tag '$TAG' is not vX, vX.Y or vX.Y.Z -- not publishing it to PyPI"
+              exit 1
+            fi
+            IFS=. read -r major minor patch <<< "$v"
+            version="$major.${minor:-0}.${patch:-0}"; publish=true
+          fi
+          sed -i -E "s/^version = \".*\"$/version = \"$version\"/" python/pyproject.toml
+          grep -qx "version = \"$version\"" python/pyproject.toml
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          echo "**boldcurator $version** -- publish: $publish" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build the sdist and wheel
+        working-directory: python
+        run: |
+          pip install build
+          python -m build
+
+      - name: Check the built wheel installs and runs
+        working-directory: python
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          python -m venv /tmp/check
+          wheel=$(ls dist/*.whl)
+          /tmp/check/bin/pip install "$wheel[desktop]"
+          /tmp/check/bin/boldcurator --version | grep -qx "boldcurator $VERSION"
+          /tmp/check/bin/boldcurator selftest
+          test -x /tmp/check/bin/boldcurator-desktop
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-dist
+          path: python/dist/
+
+  publish:
+    needs: build
+    if: needs.build.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/boldcurator/${{ needs.build.outputs.version }}/
+    permissions:
+      id-token: write # trusted publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-dist
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # A re-run, or a release republished with no new code, must not
+          # fail on a version PyPI already has.
+          skip-existing: true

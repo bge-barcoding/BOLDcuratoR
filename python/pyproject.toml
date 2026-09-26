@@ -9,6 +9,16 @@ description = "Offline curation of BOLD specimen records against a local data-pa
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
+authors = [{ name = "BGE barcoding" }]
+keywords = ["BOLD", "DNA barcoding", "biodiversity", "curation", "BAGS"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
 dependencies = [
     "duckdb>=1.1",
     "pandas>=2.0",
@@ -26,14 +36,39 @@ desktop = ["shiny>=1.0", "uvicorn>=0.30", "pywebview>=5.0"]
 bench = ["psutil>=5.9"]
 dev = ["pytest>=8.0", "psutil>=5.9"]
 
+[project.urls]
+Homepage = "https://bge-barcoding.github.io/BOLDcuratoR/"
+Source = "https://github.com/bge-barcoding/BOLDcuratoR"
+Issues = "https://github.com/bge-barcoding/BOLDcuratoR/issues"
+
 [project.scripts]
 boldcurator = "boldcurator.cli:main"
 boldcurator-build-snapshot = "boldcurator.build.snapshot_builder:main"
 boldcurator-verify-snapshot = "boldcurator.build.verify:main"
 boldcurator-fetch-snapshot = "boldcurator.build.fetch_snapshot:main"
 
+# The pip/uv route's clickable launcher (boldcurator/launcher.py): a
+# gui-script, so Windows starts it without a console window. It is what
+# `boldcurator install-shortcut` points the shortcut at. The frozen
+# installers never use it -- they start through packaging/entrypoint.py.
+[project.gui-scripts]
+boldcurator-desktop = "boldcurator.launcher:main"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/boldcurator"]
+
+# The shortcut icons, copied into the wheel. The originals stay in
+# packaging/, where PyInstaller (--icon) and Inno Setup (SetupIconFile)
+# already look for them.
+[tool.hatch.build.targets.wheel.force-include]
+"packaging/icon.ico" = "boldcurator/assets/icon.ico"
+"packaging/icon.icns" = "boldcurator/assets/icon.icns"
+
+# Only what a wheel is built from -- not the tests, parity fixtures, docs
+# screenshots or PROGRESS.md.
+[tool.hatch.build.targets.sdist]
+include = ["/src/boldcurator", "/packaging/icon.ico", "/packaging/icon.icns",
+           "/README.md", "/pyproject.toml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

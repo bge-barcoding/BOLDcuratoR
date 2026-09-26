@@ -94,6 +94,88 @@
         </div>
       </div>
 
+      <div class="uv-install" id="install-uv">
+        <h3>Or install with one command: any OS, no security warnings</h3>
+        <p>
+          Paste one line into a terminal. It installs BOLDcurator with
+          <a href="https://docs.astral.sh/uv/" target="_blank" rel="noopener">uv</a>,
+          which fetches its own copy of Python, so you don't need Python
+          installed first. It then adds a <strong>BOLDcurator (Python)</strong>
+          shortcut to your Start menu, Applications folder or app menu, and
+          your Desktop. There's nothing to unzip, no admin password, and no
+          "unidentified developer" warning on a Mac. Run the same line again
+          later to update.
+        </p>
+
+        <div class="cmd-block" data-os="mac linux">
+          <div class="cmd-label">macOS or Linux: open <em>Terminal</em> and paste</div>
+          <div class="cmd">
+            <pre><code>curl -LsSf https://bge-barcoding.github.io/BOLDcuratoR/install.sh | sh</code></pre>
+            <button type="button" class="copy-btn">Copy</button>
+          </div>
+        </div>
+
+        <div class="cmd-block" data-os="windows">
+          <div class="cmd-label">Windows: open <em>PowerShell</em> from the Start menu and paste</div>
+          <div class="cmd">
+            <pre><code>powershell -ExecutionPolicy ByPass -c "irm https://bge-barcoding.github.io/BOLDcuratoR/install.ps1 | iex"</code></pre>
+            <button type="button" class="copy-btn">Copy</button>
+          </div>
+        </div>
+
+        <details class="uv-manual">
+          <summary>Prefer to run the steps yourself? (Or see what the script does)</summary>
+          <div class="uv-manual-body">
+            <p>
+              The script runs these three commands and nothing else. You can
+              read it first:
+              <a href="install.sh">install.sh</a> ·
+              <a href="install.ps1">install.ps1</a>.
+            </p>
+            <p class="cmd-label">1. Install uv (skip if you already have it). On macOS or Linux:</p>
+            <div class="cmd">
+              <pre><code>curl -LsSf https://astral.sh/uv/install.sh | sh</code></pre>
+              <button type="button" class="copy-btn">Copy</button>
+            </div>
+            <p class="cmd-label">…or on Windows (PowerShell):</p>
+            <div class="cmd">
+              <pre><code>powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"</code></pre>
+              <button type="button" class="copy-btn">Copy</button>
+            </div>
+            <p class="cmd-label">2. Open a new terminal window, then install BOLDcurator and add its shortcut</p>
+            <div class="cmd">
+              <pre><code>uv tool install --python 3.11 "boldcurator[desktop]"
+boldcurator install-shortcut</code></pre>
+              <button type="button" class="copy-btn">Copy</button>
+            </div>
+            <p class="cmd-label">Update to the latest version</p>
+            <div class="cmd">
+              <pre><code>uv tool upgrade boldcurator</code></pre>
+              <button type="button" class="copy-btn">Copy</button>
+            </div>
+            <p class="cmd-label">Uninstall</p>
+            <div class="cmd">
+              <pre><code>boldcurator remove-shortcut
+uv tool uninstall boldcurator</code></pre>
+              <button type="button" class="copy-btn">Copy</button>
+            </div>
+            <p>
+              Already manage your own Python (3.10 or newer)?
+              <code>pip install "boldcurator[desktop]"</code> or
+              <code>pipx install "boldcurator[desktop]"</code> works too,
+              followed by <code>boldcurator install-shortcut</code>.
+            </p>
+            <p>
+              This install and the downloads above can live side by side.
+              They share the same snapshot and saved sessions (the
+              <code>.boldcurator</code> folder in your home directory), so
+              you never download the snapshot twice. Their shortcuts are
+              named differently, so neither replaces the other.
+            </p>
+          </div>
+        </details>
+      </div>
+
       <p class="dl-note">
         Prefer not to install anything? A hosted web version is also
         available — see <a href="#no-install">"Is there a version I don't
@@ -226,7 +308,10 @@
             machine. If macOS instead asks about lots of individual files
             (names ending in <code>.so</code> or <code>.dylib</code>), you
             have an older download &mdash; get the latest version above,
-            which asks just once.
+            which asks just once. To avoid the warning altogether, use the
+            <a href="#install-uv">one-command install</a> instead. It builds
+            the app's shortcut on your own computer rather than downloading
+            it, so there is nothing for Windows or macOS to warn about.
           </div>
         </details>
 
@@ -360,9 +445,45 @@
       if (primaryLink && heroButton) {
         heroButton.setAttribute("href", primaryLink.getAttribute("href"));
       }
+      // The one-command install has one line per OS family; highlight
+      // this visitor's.
+      var family = os === "windows" ? "windows" : os === "linux" ? "linux" : "mac";
+      var blocks = document.querySelectorAll(".cmd-block[data-os]");
+      for (var i = 0; i < blocks.length; i++) {
+        var families = blocks[i].getAttribute("data-os").split(" ");
+        if (families.indexOf(family) !== -1) {
+          blocks[i].setAttribute("data-recommended", "true");
+        }
+      }
     } catch (e) {
       // Detection is a nicety, never a requirement -- the download
       // section works perfectly well without it.
+    }
+  })();
+
+  // Copy buttons for the install commands. The command stays selectable
+  // text either way; the button just saves a careful drag-select, which
+  // matters when a missed character breaks the command.
+  (function () {
+    var buttons = document.querySelectorAll(".copy-btn");
+    for (var i = 0; i < buttons.length; i++) {
+      buttons[i].addEventListener("click", function (event) {
+        var button = event.currentTarget;
+        var code = button.parentNode.querySelector("code");
+        if (!code) return;
+        var text = code.textContent;
+        var done = function (label) {
+          button.textContent = label;
+          setTimeout(function () { button.textContent = "Copy"; }, 1800);
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(
+            function () { done("Copied"); },
+            function () { done("Select and copy"); });
+        } else {
+          done("Select and copy");
+        }
+      });
     }
   })();
 </script>

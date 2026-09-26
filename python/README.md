@@ -20,7 +20,38 @@ Linux built automatically on every tagged release
 feedback have been fixed; see `PROGRESS.md` for the full history and
 current state.
 
-## Setup
+## Installing (curators)
+
+There are two ways to install, and a machine can have both:
+
+- **Downloadable installers** for Windows, macOS and Linux, from the
+  [project website](https://bge-barcoding.github.io/BOLDcuratoR/#download)
+  (built by `.github/workflows/python-release.yml`; see
+  `packaging/README.md`).
+- **One pasted command** that installs from PyPI with
+  [uv](https://docs.astral.sh/uv/) and adds a "BOLDcurator (Python)"
+  shortcut to the Start menu, Applications folder or app menu. There is no
+  "unidentified developer" warning on a Mac with this route.
+
+  ```sh
+  # macOS / Linux
+  curl -LsSf https://bge-barcoding.github.io/BOLDcuratoR/install.sh | sh
+  ```
+  ```powershell
+  # Windows (PowerShell)
+  powershell -ExecutionPolicy ByPass -c "irm https://bge-barcoding.github.io/BOLDcuratoR/install.ps1 | iex"
+  ```
+
+  Or run the steps yourself:
+  `uv tool install --python 3.11 "boldcurator[desktop]"` then
+  `boldcurator install-shortcut`. Update with `uv tool upgrade boldcurator`.
+  To uninstall, run `boldcurator remove-shortcut` then
+  `uv tool uninstall boldcurator`. `pip`/`pipx` work the same way.
+
+Both routes use the same `~/.boldcurator/` folder for the snapshot, config
+and saved sessions.
+
+## Setup (development)
 
 Python 3.10 or newer. From this `python/` directory:
 

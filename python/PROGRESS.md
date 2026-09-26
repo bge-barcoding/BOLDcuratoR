@@ -64,6 +64,68 @@ capped every table's column width, and flattened the Specimens/BAGS
 curation toolbar to one row. Full details, as always, under each round's
 own "Open issues" section below.
 
+## A second install route: PyPI + uv, with a clickable shortcut
+
+Asked for by the project owner: keep the downloadable installers for
+everyone who wants to double-click, and add a pip/uv route. The main
+reason is that the unsigned macOS `.app` is blocked by Gatekeeper, and
+signing it is a budget decision still not taken. The website hosts the
+install script and also shows the commands for people to paste themselves.
+
+**What was added**
+- **Launcher.** `launcher.py` is the wheel's `[project.gui-scripts]`
+  launcher, `boldcurator-desktop`. It does what `cli.py desktop` does, with
+  output sent to `~/.boldcurator/boldcurator.log` when there is no
+  terminal.
+- **Shortcuts.** `shortcuts.py` plus `boldcurator install-shortcut` /
+  `remove-shortcut` create "BOLDcurator (Python)":
+  - Windows: a `.lnk` in the Start menu and on the Desktop.
+  - macOS: a `.app` in `~/Applications`, plus a Desktop symlink.
+  - Linux: a `.desktop` file in the app menu, plus a Desktop copy.
+
+  The macOS `.app` is written locally, so it has no quarantine flag and
+  shows no Gatekeeper prompt.
+- **Website.** `website/install.sh` and `install.ps1`, plus a new block
+  in the Download section with copy buttons and a "run the steps yourself"
+  panel.
+- **CI.** `.github/workflows/python-pypi.yml` publishes to PyPI on each
+  release (trusted publishing; the tag becomes the version). The new
+  `wheel-install` job in `python-tests.yml` runs the real install scripts
+  against a freshly built wheel on all three OSes.
+
+**Why the installers are unaffected:** `packaging/`, `entrypoint.py` and
+`python-release.yml` are not edited, and no dependency was added. See
+`packaging/README.md`, "The second route".
+
+**Verified in the sandbox (Linux):**
+- `uv build` produces a wheel containing the icons, the launcher and the
+  phylo static JS.
+- `sh website/install.sh` with `BOLDCURATOR_SPEC` pointing at that wheel
+  installs uv-managed Python 3.11 and the tool, then writes both
+  `.desktop` files.
+- The installed `boldcurator` passes `selftest`, `info` and `gui`,
+  including a 200 from `/phylo-assets/phylo-init.js`.
+- `boldcurator-desktop` launched with no terminal logs to
+  `~/.boldcurator/boldcurator.log`.
+- Re-running the script upgrades in place, and `remove-shortcut` cleans up.
+- The page was checked in Chromium at 1280 px (light and dark) and 390 px.
+
+The `.app` layout and the Windows PowerShell hand-off are covered by unit
+tests on every runner.
+
+**Not yet verified:**
+- **Real macOS and Windows.** The `.app` actually opening from Finder, and
+  the `.lnk` from the Start menu. The `wheel-install` CI job does launch
+  both through the shortcut's own target, but a double-click on a real
+  machine is still the test that counts.
+- **PyPI itself.** Nothing has been published yet. It needs a one-time
+  pending trusted publisher on pypi.org (project `boldcurator`, workflow
+  `python-pypi.yml`, environment `pypi`) and a GitHub environment named
+  `pypi`, then a release.
+- **Timing.** The website's one-command block goes live as soon as this
+  merges to `main`, but it only works once the first release has published
+  to PyPI. So publish a release right after merging.
+
 ## The "no records for" banner squashing the app on a long taxa list
 
 Reported directly, with a screenshot: searching a long species list where

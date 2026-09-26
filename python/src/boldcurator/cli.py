@@ -453,6 +453,60 @@ def cmd_desktop(args: argparse.Namespace) -> int:
     return 0
 
 
+_FROZEN_SHORTCUT_NOTE = (
+    "This is the installer build of BOLDcurator; its installer already "
+    "manages its shortcuts. install-shortcut is for a pip/uv install.")
+
+
+def cmd_install_shortcut(args: argparse.Namespace) -> int:
+    """Start-menu / Applications / app-menu shortcut for a pip/uv install
+    (:mod:`.shortcuts`). A no-op in a frozen build, whose installer made
+    its own -- a second, differently named set would only confuse."""
+    if getattr(sys, "frozen", False):
+        print(_FROZEN_SHORTCUT_NOTE)
+        return 0
+    from importlib.util import find_spec
+
+    from .shortcuts import SHORTCUT_NAME, ShortcutError, install
+
+    # The launcher exists without the desktop extra too; a shortcut to it
+    # would then only ever write cmd_desktop's "needs the optional
+    # dependencies" message to a log nobody sees.
+    missing = [m for m in ("shiny", "uvicorn") if find_spec(m) is None]
+    if missing:
+        print(f"error: the desktop app's dependencies are not installed "
+              f"({', '.join(missing)}). Reinstall with the desktop extra: "
+              f"uv tool install \"boldcurator[desktop]\"", file=sys.stderr)
+        return 1
+    try:
+        written = install(desktop=not args.no_desktop)
+    except ShortcutError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(f"Created the \"{SHORTCUT_NAME}\" shortcut:")
+    for path in written:
+        print(f"  {path}")
+    return 0
+
+
+def cmd_remove_shortcut(args: argparse.Namespace) -> int:
+    if getattr(sys, "frozen", False):
+        print(_FROZEN_SHORTCUT_NOTE)
+        return 0
+    from .shortcuts import ShortcutError, remove
+
+    try:
+        removed = remove()
+    except ShortcutError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    if not removed:
+        print("No shortcuts to remove.")
+    for path in removed:
+        print(f"Removed {path}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="boldcurator", description=__doc__)
     p.add_argument("--version", "-V", action="version",
@@ -509,6 +563,18 @@ def build_parser() -> argparse.ArgumentParser:
              "tab), or auto (try native, then browser-app, then tab, "
              "falling back silently -- the default)")
     desktop.set_defaults(func=cmd_desktop)
+
+    install_shortcut = sub.add_parser(
+        "install-shortcut",
+        help="add a clickable Start menu / Applications / app menu shortcut "
+             "(pip/uv installs; the installers make their own)")
+    install_shortcut.add_argument("--no-desktop", action="store_true",
+                                  help="skip the Desktop copy")
+    install_shortcut.set_defaults(func=cmd_install_shortcut)
+
+    remove_shortcut = sub.add_parser(
+        "remove-shortcut", help="remove the shortcuts install-shortcut made")
+    remove_shortcut.set_defaults(func=cmd_remove_shortcut)
 
     resolve = sub.add_parser("resolve", help="resolve taxon names to ranks")
     _add_snapshot_arg(resolve)
