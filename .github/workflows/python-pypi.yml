@@ -6,10 +6,10 @@ name: Publish to PyPI
 # untouched by it -- the two run side by side on the same release.
 #
 # Fires when a GitHub release is published, like python-release.yml. The
-# release tag becomes the package version, padded to x.y.z the same way
-# that workflow pads the Windows installer's AppVersion (V3.3 -> 3.3.0).
-# pyproject.toml keeps its placeholder version in git; only this job's own
-# checkout is stamped.
+# release tag becomes the package version, padded to x.y.z by
+# python/packaging/stamp_version.py -- the same script python-release.yml
+# stamps the desktop builds with (V3.3 -> 3.3.0). pyproject.toml keeps its
+# placeholder version in git; only this job's own checkout is stamped.
 #
 # Publishing uses PyPI trusted publishing (OIDC) -- no API token is stored
 # anywhere. One-time setup on pypi.org: add a (pending) trusted publisher
@@ -60,6 +60,14 @@ jobs:
         with:
           ref: ${{ steps.tag.outputs.ref }}
 
+      # stamp_version.py from the workflow's own commit, not the tag's: a
+      # backfill of a tag older than the script still gets stamped.
+      - uses: actions/checkout@v4
+        with:
+          path: .release-tools
+          sparse-checkout: python/packaging/stamp_version.py
+          sparse-checkout-cone-mode: false
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -70,20 +78,12 @@ jobs:
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
-          if [ -z "$TAG" ]; then
-            version="0.0.0.dev0"; publish=false
-          else
-            v="${TAG#[vV]}"
-            if [[ ! "$v" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then
-              # Never guess: a version on PyPI can't be reused or renamed.
-              echo "::error::Tag '$TAG' is not vX, vX.Y or vX.Y.Z -- not publishing it to PyPI"
-              exit 1
-            fi
-            IFS=. read -r major minor patch <<< "$v"
-            version="$major.${minor:-0}.${patch:-0}"; publish=true
-          fi
-          sed -i -E "s/^version = \".*\"$/version = \"$version\"/" python/pyproject.toml
-          grep -qx "version = \"$version\"" python/pyproject.toml
+          # --strict: never guess -- a version on PyPI can't be reused or
+          # renamed. The same script stamps the desktop builds
+          # (python-release.yml), so the two can't disagree.
+          version=$(python .release-tools/python/packaging/stamp_version.py \
+            --strict --pyproject python/pyproject.toml "$TAG")
+          if [ -z "$TAG" ]; then publish=false; else publish=true; fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
           echo "**boldcurator $version** -- publish: $publish" >> "$GITHUB_STEP_SUMMARY"

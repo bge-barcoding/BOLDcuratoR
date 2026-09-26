@@ -48,6 +48,10 @@ There are two ways to install, and a machine can have both:
   To uninstall, run `boldcurator remove-shortcut` then
   `uv tool uninstall boldcurator`. `pip`/`pipx` work the same way.
 
+Every route reports the same version, taken from the GitHub release tag
+(`V3.4` -> `3.4.0`); `pyproject.toml`'s own `0.0.0.dev0` is a placeholder
+that is never edited by hand -- see `packaging/README.md`, "Releases".
+
 Both routes use the same `~/.boldcurator/` folder for the snapshot, config
 and saved sessions.
 
