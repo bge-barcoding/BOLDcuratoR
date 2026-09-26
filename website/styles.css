@@ -232,6 +232,73 @@ section > .wrap > p.section-lede {
   color: var(--text-muted);
 }
 
+.which-mac {
+  margin: 14px 0 0;
+  font-size: 0.9rem;
+  color: var(--text-muted);
+}
+
+/* -- install steps ------------------------------------------------------- */
+
+.install-steps {
+  margin-top: 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
+  background: var(--bg);
+}
+
+.install-steps h3 {
+  margin: 0 0 8px;
+  font-size: 1.15rem;
+}
+
+.install-steps-lede {
+  margin: 0 0 18px;
+  color: var(--text-muted);
+  font-size: 0.95rem;
+  max-width: 760px;
+}
+
+.install-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+}
+
+.install-os {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  background: var(--bg-alt);
+}
+
+.install-os[data-recommended="true"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.install-os-name {
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.install-os ol {
+  margin: 0;
+  padding-left: 1.3em;
+  font-size: 0.92rem;
+}
+
+.install-os li { margin-bottom: 6px; }
+
+.install-os code { font-size: 0.88em; }
+
+.install-os-note {
+  margin: 10px 0 0;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
 /* -- one-command (uv) install ------------------------------------------- */
 
 .uv-install {
