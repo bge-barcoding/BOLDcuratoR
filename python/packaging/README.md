@@ -22,6 +22,7 @@ pyinstaller --onedir --name boldcurator --paths src \
     --collect-all clr_loader \
     --collect-all Bio \
     --collect-all boldcurator \
+    --copy-metadata boldcurator \
     packaging/entrypoint.py
 ```
 
@@ -41,7 +42,7 @@ python packaging/macos_deployment_target.py repin --target 11.0
 pyinstaller --onedir --paths src --windowed --name BOLDcurator \
     --icon packaging/icon.icns \
     --osx-bundle-identifier io.github.bge-barcoding.boldcurator \
-    --collect-all ...   # the same --collect-all list as above
+    --collect-all ...   # the same --collect-all/--copy-metadata list as above
     packaging/entrypoint.py
 python packaging/macos_deployment_target.py check --target 11.0 dist/BOLDcurator.app
 codesign --verify --deep --strict dist/BOLDcurator.app
@@ -118,6 +119,15 @@ of thing that silently rots the next time a dependency updates.
   (the same thing that lets `packaging/entrypoint.py` find it at all), so
   this walks its own package tree for data files exactly like any other
   entry in this list.
+- **`--copy-metadata boldcurator`**: the app's *version*. `boldcurator.__version__`
+  (the app header, `--version`, the Zenodo User-Agent) is read from the
+  package's `boldcurator-<version>.dist-info`, which `--collect-all
+  boldcurator` does **not** bundle from an editable install: importlib can't
+  map the `boldcurator` package back to its distribution there, so the
+  metadata copy is skipped without any error. Every desktop release up to
+  this flag reported `0.0.0+unknown`. The release workflow's `--version`
+  smoke test caught it, and now fails any build that doesn't report the
+  version stamped from the tag (see "Releases").
 
 ## The Windows native-window failure -- real, hit on a real machine
 

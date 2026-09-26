@@ -151,7 +151,7 @@ jobs:
 
       - name: Stamp the release version into pyproject.toml
         # Before the install, so the package metadata PyInstaller bundles
-        # (--collect-all boldcurator) -- and so boldcurator.__version__, the
+        # (--copy-metadata boldcurator) -- and so boldcurator.__version__, the
         # app header, --version and the Zenodo User-Agent -- carry the
         # release's version, not the placeholder in git. V3.3 -> 3.3.0; a
         # build-only run (no tag) gets 0.0.0.dev0.
@@ -180,6 +180,12 @@ jobs:
         run: python packaging/macos_deployment_target.py repin --target ${{ matrix.macos_target }}
 
       - name: Build
+        # --copy-metadata boldcurator: boldcurator.__version__ reads the
+        # package's dist-info, and --collect-all alone never bundled it --
+        # from an editable install, importlib can't map the "boldcurator"
+        # package back to its distribution, so every desktop release up to
+        # now reported 0.0.0+unknown. The --version smoke test below is
+        # what caught it.
         # macOS gets a real .app bundle (--windowed): Gatekeeper assesses a
         # bundle once, as a unit. The bare --onedir folder shipped up to
         # v3.2 made it assess every one of ~150 quarantined .so/.dylib
@@ -199,6 +205,7 @@ jobs:
             --collect-all shinychat --collect-all pywebview \
             --collect-all pythonnet --collect-all clr_loader \
             --collect-all Bio --collect-all boldcurator \
+            --copy-metadata boldcurator \
             packaging/entrypoint.py
 
       - name: Locate the built executable
