@@ -232,6 +232,110 @@ section > .wrap > p.section-lede {
   color: var(--text-muted);
 }
 
+/* -- one-command (uv) install ------------------------------------------- */
+
+.uv-install {
+  margin-top: 32px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
+  background: var(--bg);
+}
+
+.uv-install h3 {
+  margin: 0 0 8px;
+  font-size: 1.15rem;
+}
+
+.uv-install > p {
+  margin: 0 0 18px;
+  color: var(--text-muted);
+  font-size: 0.95rem;
+  max-width: 760px;
+}
+
+.cmd-block {
+  margin-bottom: 14px;
+  border-radius: var(--radius);
+}
+
+.cmd-block[data-recommended="true"] .cmd {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.cmd-label {
+  font-size: 0.88rem;
+  font-weight: 600;
+  margin: 0 0 6px;
+}
+
+.cmd {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-alt);
+  overflow: hidden;
+}
+
+.cmd pre {
+  margin: 0;
+  padding: 12px 14px;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+
+.copy-btn {
+  flex: none;
+  border: 0;
+  border-left: 1px solid var(--border);
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 0 16px;
+  cursor: pointer;
+}
+
+.copy-btn:hover { background: var(--bg); }
+
+.uv-manual {
+  margin-top: 18px;
+  font-size: 0.92rem;
+}
+
+.uv-manual summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.uv-manual-body { margin-top: 12px; }
+
+.uv-manual-body > p {
+  color: var(--text-muted);
+  margin: 14px 0 6px;
+}
+
+.uv-manual-body > p.cmd-label { color: var(--text); }
+
+.uv-manual-body code,
+.uv-install > p code {
+  font-size: 0.88em;
+}
+
+.uv-manual-body > p code {
+  background: var(--bg-alt);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
 .dl-note {
   margin-top: 24px;
   font-size: 0.92rem;

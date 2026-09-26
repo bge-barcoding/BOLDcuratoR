@@ -9,10 +9,14 @@ on:
     branches: [main, develop, 'claude/**']
     paths:
       - 'python/**'
+      - 'website/install.sh'
+      - 'website/install.ps1'
       - '.github/workflows/python-tests.yml'
   pull_request:
     paths:
       - 'python/**'
+      - 'website/install.sh'
+      - 'website/install.ps1'
       - '.github/workflows/python-tests.yml'
   workflow_dispatch: {}
 
@@ -42,6 +46,127 @@ jobs:
 
       - name: No-GUI-dependency import check
         run: python -c "import boldcurator.cli"
+
+  wheel-install:
+    # The pip/uv distribution route, end to end, the way a curator gets it:
+    # build the wheel, then install it with the website's own install.sh /
+    # install.ps1 (which also installs uv itself -- runners don't have it),
+    # then prove the installed tool works and its shortcut launches. The
+    # frozen installers are python-release.yml's job; nothing here touches
+    # them.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Build the wheel
+        working-directory: python
+        run: |
+          pip install build
+          python -m build --wheel
+          # The shortcut icons ride in the wheel via force-include; the
+          # Phylogeny tab's JS is package data a wheel could also drop.
+          python -m zipfile -l dist/*.whl > wheel-contents.txt
+          for f in boldcurator/assets/icon.ico boldcurator/assets/icon.icns \
+                   boldcurator/ui/static/phylo/phylo-init.js boldcurator/launcher.py; do
+            grep -q "$f" wheel-contents.txt || { echo "::error::$f missing from the wheel"; exit 1; }
+          done
+          wheel=$(ls "$PWD"/dist/*.whl)
+          # Windows: a C:\ path, not Git Bash's /d/a/..., for PowerShell and uv.
+          if command -v cygpath >/dev/null; then wheel=$(cygpath -w "$wheel"); fi
+          echo "WHEEL=$wheel" >> "$GITHUB_ENV"
+
+      - name: Install with website/install.sh (macOS, Linux)
+        if: runner.os != 'Windows'
+        run: BOLDCURATOR_SPEC="$WHEEL[desktop]" sh website/install.sh
+
+      - name: Install with website/install.ps1 (Windows PowerShell 5.1, via iex like the website says)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $env:BOLDCURATOR_SPEC = "$($env:WHEEL)[desktop]"
+          Get-Content website/install.ps1 -Raw | Invoke-Expression
+
+      - name: Put uv's bin folder on PATH for the steps below
+        run: |
+          bin="$HOME/.local/bin"
+          if command -v cygpath >/dev/null; then bin=$(cygpath -w "$bin"); fi
+          echo "$bin" >> "$GITHUB_PATH"
+
+      - name: The installed tool works
+        run: |
+          boldcurator --version
+          boldcurator selftest
+          python python/tests/make_fake_package.py --out fake.tsv.gz --rows 200
+          boldcurator-build-snapshot --tsv fake.tsv.gz --out fixture.duckdb \
+            --memory-limit 512MB --threads 1 --no-hash
+          boldcurator info --snapshot fixture.duckdb
+
+      - name: The installed GUI server starts and serves its own static files
+        run: |
+          boldcurator gui --snapshot fixture.duckdb --port 8902 &
+          pid=$!
+          up=0
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8902/ >/dev/null 2>&1; then up=1; break; fi
+            sleep 1
+          done
+          ok=1
+          [ "$up" = 1 ] || { echo "::error::The installed GUI server never came up"; ok=0; }
+          if [ "$ok" = 1 ] && ! curl -sf http://127.0.0.1:8902/phylo-assets/phylo-init.js >/dev/null; then
+            echo "::error::/phylo-assets/phylo-init.js 404s -- package data missing from the wheel"; ok=0
+          fi
+          kill "$pid" 2>/dev/null || true
+          [ "$ok" = 1 ]
+
+      - name: The shortcut exists and launches the app (macOS, Linux)
+        # Runs what the shortcut runs, with --help so it exits at once; no
+        # terminal is attached, so the launcher's output must land in
+        # ~/.boldcurator/boldcurator.log (launcher.py).
+        if: runner.os != 'Windows'
+        run: |
+          rm -f "$HOME/.boldcurator/boldcurator.log"
+          if [ "$RUNNER_OS" = macOS ]; then
+            target="$HOME/Applications/BOLDcurator (Python).app/Contents/MacOS/boldcurator-launcher"
+          else
+            entry="$HOME/.local/share/applications/boldcurator-python.desktop"
+            cat "$entry"
+            target=$(sed -n 's/^Exec="\(.*\)"$/\1/p' "$entry")
+          fi
+          "$target" --help < /dev/null > /dev/null 2>&1
+          grep -q "usage:" "$HOME/.boldcurator/boldcurator.log"
+
+      - name: The shortcut exists and launches the app (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $lnk = Join-Path ([Environment]::GetFolderPath('Programs')) 'BOLDcurator (Python).lnk'
+          if (-not (Test-Path $lnk)) { throw "No Start menu shortcut at $lnk" }
+          $target = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk).TargetPath
+          Write-Host "Shortcut target: $target"
+          $log = Join-Path $HOME '.boldcurator\boldcurator.log'
+          Remove-Item $log -ErrorAction SilentlyContinue
+          # A gui-script: Start-Process -Wait, since & would not wait for it.
+          $p = Start-Process -FilePath $target -ArgumentList '--help' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Launcher exited $($p.ExitCode)" }
+          if (-not (Select-String -Path $log -Pattern 'usage:' -Quiet)) { throw "No usage text in $log" }
+
+      - name: remove-shortcut removes it
+        run: |
+          boldcurator remove-shortcut | tee removed.txt
+          grep -q "^Removed" removed.txt
+          boldcurator remove-shortcut | grep -q "No shortcuts to remove"
 
   parity:
     # The gate before GUI work (parity/compare.py's own docstring). Linux
