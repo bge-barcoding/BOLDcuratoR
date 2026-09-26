@@ -30,7 +30,7 @@ platform's asset filename never changes**:
 | macOS (Intel) | `boldcurator-macos-x86_64.zip` |
 | Linux | `boldcurator-linux-x86_64.zip` |
 
-These names come from `python/.github/workflows/python-release.yml` (the
+These names come from `.github/workflows/python-release.yml` (the
 zips, matrix `matrix.name`) and `python/packaging/windows-installer.iss`
 (`OutputBaseFilename`, deliberately *not* version-suffixed for exactly
 this reason). If either ever changes, update the matching `href` in

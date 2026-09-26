@@ -2,7 +2,8 @@
 
 Shown once, in the window `desktop.py` opens when
 ``desktop.load_snapshot_path`` finds nothing configured yet. Two ways in,
-matching ``docs/python-app-plan.md``'s "Packaging and data loading" design:
+matching ``docs/archive/python-app-plan.md``'s "Packaging and data loading"
+design:
 
 * an existing ``.duckdb`` file's path, opened and checked with
   ``SnapshotStore`` before being accepted -- a curator who already has the

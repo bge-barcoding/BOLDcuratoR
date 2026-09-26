@@ -1,5 +1,7 @@
 # BOLDcuratoR: static data package backend + multi-user hosting
 
+> **Archived (2026-09-26).** A multi-target delivery plan for moving off the live BOLD API. Option 4C, the Python desktop app, is what shipped ([`python/`](../../python/)); the R-side phases here were never built. The snapshot build rules (§1.2–1.3) and the hosting questions (§4E, used by `data-prep/it-preflight.R`) remain useful reference.
+
 ## Context
 
 BOLDcuratoR is a Shiny app (`app.R` + `R/modules/*`, R6 classes, renv) that curates
@@ -24,7 +26,7 @@ API and the image checks are dropped entirely (see **Decisions** below), which
 removes API keys, rate limits and the shared-key ceiling from the app. New
 snapshots import with one command.
 
-There is already a design doc at `docs/offline-implementation-plan.md` (merged,
+There is already a design doc at `docs/archive/offline-implementation-plan.md` (merged,
 unimplemented). Keep its backend-abstraction shape; this plan corrects five things
 in it that would fail in production (see **Corrections** below).
 
@@ -195,7 +197,7 @@ persistent disk (remote Parquet) without a fork — see **Phase 4**.
 
 ---
 
-## Corrections to `docs/offline-implementation-plan.md`
+## Corrections to `docs/archive/offline-implementation-plan.md`
 
 Apply these when updating that doc; they are not stylistic.
 
@@ -403,7 +405,7 @@ have no `.wal` beside it.
 
 ## Phase 3 — App changes
 
-Follow the backend abstraction in `docs/offline-implementation-plan.md` §2. Default
+Follow the backend abstraction in `docs/archive/offline-implementation-plan.md` §2. Default
 mode stays `"api"` until the snapshot backend passes its tests, then flips to
 `"snapshot"`.
 

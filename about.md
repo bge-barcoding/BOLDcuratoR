@@ -1,4 +1,4 @@
-A shiny app to check and curate data on BOLD based on input taxonomy, geography, datasets and projects. Uses BOLDconnectR (https://github.com/boldsystems-central/BOLDconnectR)
+A shiny app to check and curate data on BOLD based on input taxonomy and geography. Uses BOLDconnectR (https://github.com/boldsystems-central/BOLDconnectR)
 
 ### Features
 - Process multiple species level taxa with their synonyms

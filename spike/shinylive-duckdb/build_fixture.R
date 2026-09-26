@@ -5,7 +5,7 @@
 # WHERE the browser breaks rather than just whether it works at one size.
 #
 # Schema is a trimmed version of the Phase 1 design in
-# docs/static-datapackage-plan.md: a `specimen` table sorted taxonomically (so
+# docs/archive/static-datapackage-plan.md: a `specimen` table sorted taxonomically (so
 # zone maps prune every rank from one physical layout) plus a `taxon` lookup.
 # No `nuc` -- sequences are excluded from the shipped snapshot.
 #
