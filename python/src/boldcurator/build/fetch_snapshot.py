@@ -19,21 +19,25 @@ any host that can serve a file over HTTP(S) and publish a sha256 works with
 ``--url``.  Only ``--record`` talks to Zenodo's API.
 
 Uses the standard library's ``urllib`` rather than ``requests``: this project
-has stayed dependency-light throughout, and a one-shot streamed download with
-a progress readout does not need more than that. The one addition is
+has stayed dependency-light throughout, and a streamed download (split into
+parallel byte-range requests where the host allows it -- see ``download``)
+with a progress readout does not need more than that. The one addition is
 ``truststore``, for *which certificates to trust* -- see ``ssl_context``.
 """
 
 from __future__ import annotations
 
 import argparse
-import gzip
 import hashlib
 import json
 import re
 import ssl
 import sys
+import threading
+import time
 import urllib.request
+import zlib
+from concurrent.futures import FIRST_EXCEPTION, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -58,10 +62,35 @@ _ZENODO_ID_IN_DOI = re.compile(r"zenodo\.(\d+)\b")
 #: ``resolve_zenodo_record``.
 _SNAPSHOT_DATE_IN_FILENAME = re.compile(r"(\d{4}-\d{2}-\d{2})")
 
-#: Chunk size for the streamed download and the running sha256/md5.  A few
-#: hundred KB balances syscall overhead against progress-readout granularity
-#: for files in the hundreds-of-MB to low-GB range this exists to move.
+#: Chunk size for reading off the network. 1 MB balances syscall overhead
+#: against progress-readout granularity for files in the hundreds-of-MB to
+#: low-GB range this exists to move.
 CHUNK_SIZE = 1024 * 1024
+
+#: Chunk size for the local passes over a finished download (checksum,
+#: gunzip) -- disk, not network, so bigger reads just mean fewer of them.
+DISK_CHUNK_SIZE = 8 * 1024 * 1024
+
+#: How many byte ranges of one file to fetch at once. Zenodo caps what a
+#: single connection gets, well below most curators' own bandwidth, so one
+#: stream left a multi-GB snapshot crawling in at a few MB/s; several ranged
+#: requests side by side each get their own share of that cap.
+PARALLEL_CONNECTIONS = 8
+
+#: Below this, a file isn't worth splitting -- the extra requests cost more
+#: than they save.
+MIN_PARALLEL_BYTES = 32 * 1024 * 1024
+
+#: Attempts per byte range before the whole download is given up on. Each
+#: retry resumes from the last byte that range got, so one dropped
+#: connection costs a few seconds, not the whole transfer.
+RANGE_ATTEMPTS = 4
+
+#: Seconds to wait before retry ``n`` (1-based) is ``RETRY_BACKOFF * 2**(n-1)``
+#: -- long enough for a 429/503 from a busy host to clear.
+RETRY_BACKOFF = 1.0
+
+_CONTENT_RANGE_TOTAL = re.compile(r"bytes\s+\d+-\d+/(\d+)")
 
 
 class FetchError(RuntimeError):
@@ -106,8 +135,9 @@ def ssl_context() -> ssl.SSLContext:
     return truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 
 
-def _urlopen(url: str):
-    return urllib.request.urlopen(url, timeout=30, context=ssl_context())
+def _urlopen(url: str, headers: dict[str, str] | None = None):
+    request = urllib.request.Request(url, headers=headers or {})
+    return urllib.request.urlopen(request, timeout=30, context=ssl_context())
 
 
 def _get_json(url: str) -> dict:
@@ -327,31 +357,191 @@ def check_for_update(record_id: str, local_path: Path) -> UpdateCheck:
     )
 
 
-def _verify(path: Path, checksum: str) -> None:
+def _checksum_parts(checksum: str) -> tuple[str, str]:
     algo, _, expected = checksum.partition(":")
     if algo not in ("sha256", "md5"):
         raise FetchError(f"Unsupported checksum kind {algo!r}")
+    return algo, expected
+
+
+def _mismatch(algo: str, expected: str, actual: str) -> FetchError:
+    return FetchError(
+        f"{algo} mismatch: expected {expected}, got {actual}. The download "
+        "is corrupt or the source file changed underneath it -- deleted, "
+        "not kept, since a silently wrong snapshot is worse than none.")
+
+
+def _verify(path: Path, checksum: str) -> None:
+    algo, expected = _checksum_parts(checksum)
     digest = hashlib.new(algo)
     with open(path, "rb") as fh:
-        while chunk := fh.read(CHUNK_SIZE):
+        while chunk := fh.read(DISK_CHUNK_SIZE):
             digest.update(chunk)
     actual = digest.hexdigest()
     if actual.lower() != expected.lower():
-        raise FetchError(
-            f"{algo} mismatch: expected {expected}, got {actual}. The download "
-            "is corrupt or the source file changed underneath it -- deleted, "
-            "not kept, since a silently wrong snapshot is worse than none.")
+        raise _mismatch(algo, expected, actual)
 
 
-def _decompress_gzip(src: Path, dst: Path, *, progress=print) -> None:
-    """Gunzip ``src`` into ``dst``, chunked -- a snapshot can be gigabytes,
-    and this is what keeps decompression from doubling that in memory."""
+def _verify_and_decompress(src: Path, checksum: str | None, dst: Path, *,
+                           progress=print) -> None:
+    """Check ``src`` against ``checksum`` and gunzip it into ``dst``, in one
+    read of ``src`` rather than one pass for each -- a snapshot can be
+    gigabytes, so every extra pass over it is time a curator sits waiting.
+
+    The checksum is still of the compressed bytes (what Zenodo or a manifest
+    publishes) and still decides the outcome: a mismatch deletes ``dst`` even
+    though it was written alongside, and a download that is corrupt enough
+    to break decompression part-way is reported as the mismatch it really
+    is, not as a gzip error, whenever a checksum was given.
+    """
+    digest = None
+    if checksum:
+        algo, expected = _checksum_parts(checksum)
+        digest = hashlib.new(algo)
+    # 16 + MAX_WBITS: expect a gzip header and trailer, not raw zlib.
+    inflater = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    decompress_error: str | None = None
     written = 0
-    with gzip.open(src, "rb") as fh_in, open(dst, "wb") as fh_out:
-        while chunk := fh_in.read(CHUNK_SIZE):
-            fh_out.write(chunk)
+    try:
+        with open(src, "rb") as fh_in, open(dst, "wb") as fh_out:
+            while chunk := fh_in.read(DISK_CHUNK_SIZE):
+                if digest is not None:
+                    digest.update(chunk)
+                if decompress_error is not None:
+                    continue  # keep hashing, so a mismatch is still reported
+                try:
+                    while chunk:
+                        data = inflater.decompress(chunk)
+                        fh_out.write(data)
+                        written += len(data)
+                        # A gzip file may be several members back to back
+                        # (what ``gzip.open`` accepts too): start a fresh
+                        # decompressor on whatever follows the one that ended.
+                        chunk = inflater.unused_data if inflater.eof else b""
+                        if chunk:
+                            inflater = zlib.decompressobj(16 + zlib.MAX_WBITS)
+                except zlib.error as exc:
+                    decompress_error = str(exc)
+                    continue
+                progress(f"\rVerifying and decompressing... "
+                         f"{written / 1e6:.0f} MB", end="")
+            if decompress_error is None:
+                fh_out.write(inflater.flush())
+                if not inflater.eof:
+                    decompress_error = "the file ends part-way through (truncated)"
+        progress("")
+
+        if digest is not None:
+            actual = digest.hexdigest()
+            if actual.lower() != expected.lower():
+                raise _mismatch(algo, expected, actual)
+        if decompress_error is not None:
+            raise FetchError(f"Could not decompress the download: {decompress_error}")
+    except BaseException:
+        dst.unlink(missing_ok=True)
+        raise
+
+
+def _report(progress, written: int, total: int) -> None:
+    if total:
+        progress(f"\r{written / total:.0%} "
+                 f"({written / 1e6:.0f} / {total / 1e6:.0f} MB)", end="")
+    else:
+        progress(f"\r{written / 1e6:.0f} MB", end="")
+
+
+def _stream_to(resp, tmp: Path, total: int, progress) -> None:
+    """Today's one-connection path: copy ``resp`` into ``tmp`` start to end."""
+    written = 0
+    with open(tmp, "wb") as fh:
+        while chunk := resp.read(CHUNK_SIZE):
+            fh.write(chunk)
             written += len(chunk)
-            progress(f"\rDecompressing... {written / 1e6:.0f} MB", end="")
+            _report(progress, written, total)
+
+
+def _ranged_total(resp) -> int | None:
+    """The full file size from a ``206``'s ``Content-Range``, or ``None``
+    when the server didn't honour the range (``200``) or didn't say."""
+    if getattr(resp, "status", None) != 206:
+        return None
+    match = _CONTENT_RANGE_TOTAL.match(resp.headers.get("Content-Range") or "")
+    return int(match.group(1)) if match else None
+
+
+def _fetch_range(url: str, tmp: Path, start: int, end: int, *,
+                 on_bytes, abort: threading.Event) -> None:
+    """Fetch bytes ``start..end`` (inclusive) of ``url`` into the same
+    offsets of ``tmp``, retrying from wherever a failed attempt left off."""
+    pos = start
+    last_error: Exception | None = None
+    for attempt in range(RANGE_ATTEMPTS):
+        if abort.is_set():
+            return
+        if attempt:
+            time.sleep(RETRY_BACKOFF * 2 ** (attempt - 1))
+        try:
+            with _urlopen(url, {"Range": f"bytes={pos}-{end}"}) as resp:
+                if getattr(resp, "status", None) != 206:
+                    raise FetchError(
+                        f"server stopped honouring byte ranges "
+                        f"(HTTP {getattr(resp, 'status', '?')})")
+                with open(tmp, "r+b") as fh:
+                    fh.seek(pos)
+                    while pos <= end:
+                        if abort.is_set():
+                            return
+                        chunk = resp.read(min(CHUNK_SIZE, end - pos + 1))
+                        if not chunk:
+                            break
+                        fh.write(chunk)
+                        pos += len(chunk)
+                        on_bytes(len(chunk))
+            if pos > end:
+                return
+            last_error = FetchError(f"connection closed at byte {pos} of {end + 1}")
+        except (HTTPError, URLError, OSError, FetchError) as exc:
+            last_error = exc
+    raise FetchError(
+        f"bytes {start}-{end} failed after {RANGE_ATTEMPTS} attempts: {last_error}")
+
+
+def _download_parallel(url: str, tmp: Path, total: int, progress) -> None:
+    """Fetch ``url`` as ``PARALLEL_CONNECTIONS`` byte ranges at once, each
+    written straight into its place in a pre-sized ``tmp``."""
+    with open(tmp, "wb") as fh:
+        fh.truncate(total)
+
+    step = -(-total // PARALLEL_CONNECTIONS)  # ceiling division
+    ranges = [(start, min(start + step, total) - 1)
+              for start in range(0, total, step)]
+
+    lock = threading.Lock()
+    written = 0
+
+    def on_bytes(n: int) -> None:
+        nonlocal written
+        with lock:
+            written += n
+
+    abort = threading.Event()
+    with ThreadPoolExecutor(max_workers=len(ranges)) as pool:
+        futures = [pool.submit(_fetch_range, url, tmp, a, b,
+                               on_bytes=on_bytes, abort=abort)
+                   for a, b in ranges]
+        pending = set(futures)
+        try:
+            # Progress is reported from this thread only, never a worker --
+            # both UIs' ``progress`` callbacks were written for one caller.
+            while pending:
+                done, pending = wait(pending, timeout=0.25,
+                                     return_when=FIRST_EXCEPTION)
+                _report(progress, written, total)
+                for future in done:
+                    future.result()  # re-raises a range that gave up
+        except BaseException:
+            abort.set()
+            raise
     progress("")
 
 
@@ -361,57 +551,68 @@ def download(source: Source, out: Path, *, progress=print) -> Path:
     The temp file (not ``out`` itself) is what a failed or interrupted
     download leaves behind, so ``out`` is never observed half-written.
 
+    The first request asks for a single byte. A host that answers with a
+    ``206`` and the file's full size (Zenodo does) gets the file fetched as
+    several byte ranges in parallel -- see ``PARALLEL_CONNECTIONS``; one
+    that ignores ``Range`` just sends the whole file back, which is then
+    streamed as before, so nothing is lost to the check either way.
+
     Round 4, item 2: a published snapshot may be gzipped
     (``bold_snapshot_2026-09-11.duckdb.gz``) -- detected from
     ``source.filename`` (Zenodo's own name for the file) or, failing that,
     ``source.url`` itself. The checksum Zenodo (or a manifest) publishes is
-    for the file as uploaded, so it is verified against the *compressed*
-    download, before decompressing into ``out``.
+    for the file as uploaded, so it is checked against the *compressed*
+    download, in the same pass that decompresses it into ``out``.
     """
     is_gzipped = (source.filename or source.url).split("?")[0].endswith(".gz")
     tmp = out.with_suffix(out.suffix + (".gz.part" if is_gzipped else ".part"))
     out.parent.mkdir(parents=True, exist_ok=True)
 
     try:
-        with _urlopen(source.url) as resp:
-            total = int(resp.headers.get("Content-Length") or 0)
-            written = 0
-            with open(tmp, "wb") as fh:
-                while chunk := resp.read(CHUNK_SIZE):
-                    fh.write(chunk)
-                    written += len(chunk)
-                    if total:
-                        progress(f"\r{written / total:.0%} "
-                                 f"({written / 1e6:.0f} / {total / 1e6:.0f} MB)",
-                                 end="")
-                    else:
-                        progress(f"\r{written / 1e6:.0f} MB", end="")
-        progress("")
-    except (HTTPError, URLError) as exc:
+        with _urlopen(source.url, {"Range": "bytes=0-0"}) as resp:
+            total = _ranged_total(resp)
+            if total is None:
+                # Range ignored: this *is* the whole file, so use it.
+                _stream_to(resp, tmp,
+                           int(resp.headers.get("Content-Length") or 0), progress)
+                progress("")
+        if total is not None:
+            if total >= MIN_PARALLEL_BYTES:
+                _download_parallel(source.url, tmp, total, progress)
+            else:
+                with _urlopen(source.url) as resp:
+                    _stream_to(resp, tmp, total, progress)
+                progress("")
+    except (HTTPError, URLError, OSError) as exc:
         tmp.unlink(missing_ok=True)
         raise FetchError(f"Download failed: {exc}") from exc
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
-    if source.checksum:
-        progress("Verifying checksum...")
-        try:
-            _verify(tmp, source.checksum)
-        except FetchError:
-            tmp.unlink(missing_ok=True)
-            raise
-    else:
+    if not source.checksum:
         progress("No checksum given -- integrity of this download is NOT verified.")
 
     if is_gzipped:
         decompressed = out.with_suffix(out.suffix + ".part")
         try:
-            _decompress_gzip(tmp, decompressed, progress=progress)
-        except (OSError, gzip.BadGzipFile) as exc:
-            decompressed.unlink(missing_ok=True)
+            _verify_and_decompress(tmp, source.checksum, decompressed,
+                                   progress=progress)
+        except (FetchError, OSError) as exc:
             tmp.unlink(missing_ok=True)
+            if isinstance(exc, FetchError):
+                raise
             raise FetchError(f"Could not decompress the download: {exc}") from exc
         tmp.unlink()
         decompressed.replace(out)
     else:
+        if source.checksum:
+            progress("Verifying checksum...")
+            try:
+                _verify(tmp, source.checksum)
+            except FetchError:
+                tmp.unlink(missing_ok=True)
+                raise
         tmp.replace(out)
     return out
 
