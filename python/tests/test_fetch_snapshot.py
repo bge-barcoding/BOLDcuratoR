@@ -469,10 +469,14 @@ def ranged_http_server(tmp_path):
     """Like ``http_server``, but honours ``Range: bytes=a-b`` with a 206.
 
     Yields ``(base_url, served_dir, state)``: ``state["ranges"]`` records
-    every Range header served, and ``state["fail_once"]`` is a set of range
-    start offsets to drop the connection on (once each) part-way through.
+    every Range header served, ``state["agents"]`` every User-Agent seen,
+    ``state["fail_once"]`` is a set of range start offsets to drop the
+    connection on (once each) part-way through, and ``state["throttle_once"]``
+    a set of Range headers (or ``None`` for a plain GET) to answer with a
+    429 once each.
     """
-    state = {"ranges": [], "fail_once": set()}
+    state = {"ranges": [], "agents": [], "fail_once": set(),
+             "throttle_once": set()}
     lock = threading.Lock()
 
     class Handler(http.server.SimpleHTTPRequestHandler):
@@ -484,6 +488,16 @@ def ranged_http_server(tmp_path):
 
         def do_GET(self):
             header = self.headers.get("Range")
+            with lock:
+                state["agents"].append(self.headers.get("User-Agent"))
+                throttle = header in state["throttle_once"]
+                state["throttle_once"].discard(header)
+            if throttle:
+                self.send_response(429)
+                self.send_header("Retry-After", "0")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             if not header:
                 return super().do_GET()
             path = Path(self.translate_path(self.path))
@@ -666,3 +680,96 @@ def test_a_multi_member_gzip_decompresses_in_full(http_server, tmp_path):
     fs.download(fs.Source(url=f"{base_url}/snap.duckdb.gz"), out,
                 progress=lambda *a, **k: None)
     assert out.read_bytes() == b"first member second member"
+
+
+# -- Being a client Zenodo can identify and doesn't have to throttle --------
+
+
+def test_every_request_identifies_itself_as_boldcurator(
+    ranged_http_server, tmp_path, small_parallel
+):
+    """Zenodo may rate-limit or block generic User-Agents like urllib's
+    default ``Python-urllib/3.x``; it asks for ``AppName/version (+URL)``."""
+    from boldcurator import __version__
+
+    base_url, served_dir, state = ranged_http_server
+    (served_dir / "record.json").write_text("{}")
+    (served_dir / "snap.duckdb").write_bytes(_random_bytes(10_000))
+
+    fs._get_json(f"{base_url}/record.json")
+    fs.download(fs.Source(url=f"{base_url}/snap.duckdb"), tmp_path / "s.duckdb",
+                progress=lambda *a, **k: None)
+
+    expected = (f"BOLDcurator/{__version__} "
+                "(+https://github.com/bge-barcoding/BOLDcuratoR)")
+    assert fs.USER_AGENT == expected
+    assert len(state["agents"]) == 1 + 1 + 4  # API, probe, four ranges
+    assert set(state["agents"]) == {expected}
+
+
+def test_a_rate_limited_range_waits_and_retries(
+    ranged_http_server, tmp_path, small_parallel
+):
+    base_url, served_dir, state = ranged_http_server
+    payload = _random_bytes(40_000)
+    (served_dir / "snap.duckdb").write_bytes(payload)
+    state["throttle_once"].add("bytes=10000-19999")
+
+    out = tmp_path / "out" / "snap.duckdb"
+    fs.download(fs.Source(url=f"{base_url}/snap.duckdb",
+                          checksum=f"sha256:{_sha256(payload)}"),
+                out, progress=lambda *a, **k: None)
+    assert out.read_bytes() == payload
+    assert state["ranges"].count("bytes=10000-19999") == 1  # after the 429
+
+
+def test_the_api_lookup_and_the_probe_survive_one_429(
+    ranged_http_server, tmp_path, small_parallel
+):
+    base_url, served_dir, state = ranged_http_server
+    (served_dir / "record.json").write_text('{"ok": true}')
+    (served_dir / "snap.duckdb").write_bytes(b"x" * 5000)
+    state["throttle_once"].update({None, "bytes=0-0"})
+
+    assert fs._get_json(f"{base_url}/record.json") == {"ok": True}
+    out = tmp_path / "s.duckdb"
+    fs.download(fs.Source(url=f"{base_url}/snap.duckdb"), out,
+                progress=lambda *a, **k: None)
+    assert out.read_bytes() == b"x" * 5000
+
+
+def test_a_persistent_429_is_reported_as_rate_limiting(
+    ranged_http_server, tmp_path, small_parallel, monkeypatch
+):
+    base_url, served_dir, _ = ranged_http_server
+    (served_dir / "record.json").write_text("{}")
+
+    def always_429(url, headers=None):
+        raise fs.HTTPError(url, 429, "Too Many Requests",
+                           {"Retry-After": "0"}, None)
+
+    monkeypatch.setattr(fs, "_urlopen", always_429)
+    with pytest.raises(fs.FetchError, match="rate-limiting"):
+        fs._get_json(f"{base_url}/record.json")
+    with pytest.raises(fs.FetchError, match="rate-limiting"):
+        fs.download(fs.Source(url=f"{base_url}/snap.duckdb"),
+                    tmp_path / "s.duckdb", progress=lambda *a, **k: None)
+
+
+@pytest.mark.parametrize("code, retry_after, attempt, expected", [
+    (429, "7", 1, 7.0),       # the server's own wait, as asked
+    (503, "5", 3, 5.0),
+    (429, "3600", 1, 60.0),   # capped at MAX_RETRY_AFTER
+    (429, "Wed, 21 Oct 2026 07:28:00 GMT", 2, 2.0),  # a date: backoff
+    (429, None, 3, 4.0),      # no header: backoff
+    (500, "7", 1, 1.0),       # not a rate limit: backoff, header ignored
+])
+def test_retry_delay(code, retry_after, attempt, expected):
+    headers = {"Retry-After": retry_after} if retry_after else {}
+    exc = fs.HTTPError("https://zenodo.org/x", code, "", headers, None)
+    assert fs._retry_delay(exc, attempt) == expected
+
+
+def test_retry_delay_after_a_dropped_connection_backs_off():
+    assert fs._retry_delay(fs.URLError("reset"), 2) == 2.0
+    assert fs._retry_delay(None, 1) == 1.0

@@ -401,7 +401,8 @@ def cmd_selftest(args: argparse.Namespace) -> int:
         from .config.constants import DEFAULT_SNAPSHOT_ZENODO_DOI
 
         source = fs.resolve_zenodo_record(DEFAULT_SNAPSHOT_ZENODO_DOI)
-        return source.filename or source.url
+        # The User-Agent too: what Zenodo sees, if it is the one refusing.
+        return f"{source.filename or source.url} (as {fs.USER_AGENT})"
 
     checks = [
         ("duckdb", check_duckdb),

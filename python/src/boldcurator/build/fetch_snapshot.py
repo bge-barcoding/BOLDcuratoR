@@ -23,6 +23,12 @@ has stayed dependency-light throughout, and a streamed download (split into
 parallel byte-range requests where the host allows it -- see ``download``)
 with a progress readout does not need more than that. The one addition is
 ``truststore``, for *which certificates to trust* -- see ``ssl_context``.
+
+Every request identifies itself as BOLDcurator (``USER_AGENT``) rather than
+urllib's default ``Python-urllib/3.x``: Zenodo asks automated clients for a
+clear, identifiable User-Agent and warns that generic ones may be
+rate-limited or blocked. A ``429``/``503`` is waited out as its
+``Retry-After`` header asks (see ``_retry_delay``), not hammered.
 """
 
 from __future__ import annotations
@@ -45,7 +51,16 @@ from urllib.error import HTTPError, URLError
 
 import truststore
 
+from .. import __version__
+
 ZENODO_API = "https://zenodo.org/api/records/{record_id}"
+
+#: Sent with every request, in the ``AppName/version (+URL)`` form Zenodo
+#: recommends so it can tell this app's traffic from anonymous scripts and
+#: knows where to raise a problem (the project's GitHub, rather than a
+#: personal address baked into every curator's copy).
+USER_AGENT = (f"BOLDcurator/{__version__} "
+              "(+https://github.com/bge-barcoding/BOLDcuratoR)")
 
 #: Matches the numeric id out of a full DOI (``10.5281/zenodo.22849516``), a
 #: ``doi.org``/``zenodo.org`` URL, or the id on its own -- so a curator (or
@@ -74,8 +89,10 @@ DISK_CHUNK_SIZE = 8 * 1024 * 1024
 #: How many byte ranges of one file to fetch at once. Zenodo caps what a
 #: single connection gets, well below most curators' own bandwidth, so one
 #: stream left a multi-GB snapshot crawling in at a few MB/s; several ranged
-#: requests side by side each get their own share of that cap.
-PARALLEL_CONNECTIONS = 8
+#: requests side by side each get their own share of that cap. Kept to a
+#: handful, not as many as would go faster still: Zenodo is tightening what
+#: it allows automated clients, and a polite client is one it doesn't block.
+PARALLEL_CONNECTIONS = 4
 
 #: Below this, a file isn't worth splitting -- the extra requests cost more
 #: than they save.
@@ -86,9 +103,17 @@ MIN_PARALLEL_BYTES = 32 * 1024 * 1024
 #: connection costs a few seconds, not the whole transfer.
 RANGE_ATTEMPTS = 4
 
-#: Seconds to wait before retry ``n`` (1-based) is ``RETRY_BACKOFF * 2**(n-1)``
-#: -- long enough for a 429/503 from a busy host to clear.
+#: Seconds to wait before retry ``n`` (1-based) is ``RETRY_BACKOFF * 2**(n-1)``,
+#: unless the server said how long itself -- see ``_retry_delay``.
 RETRY_BACKOFF = 1.0
+
+#: The longest a ``Retry-After`` is honoured for before retrying anyway -- a
+#: curator is watching a progress line, not leaving a batch job overnight.
+MAX_RETRY_AFTER = 60.0
+
+#: "Too many requests" and "try again shortly": the two answers that mean
+#: *slow down*, not *this is broken*.
+_RATE_LIMIT_CODES = (429, 503)
 
 _CONTENT_RANGE_TOTAL = re.compile(r"bytes\s+\d+-\d+/(\d+)")
 
@@ -136,13 +161,59 @@ def ssl_context() -> ssl.SSLContext:
 
 
 def _urlopen(url: str, headers: dict[str, str] | None = None):
-    request = urllib.request.Request(url, headers=headers or {})
+    request = urllib.request.Request(
+        url, headers={"User-Agent": USER_AGENT, **(headers or {})})
     return urllib.request.urlopen(request, timeout=30, context=ssl_context())
+
+
+def _is_rate_limited(exc: BaseException | None) -> bool:
+    return isinstance(exc, HTTPError) and exc.code in _RATE_LIMIT_CODES
+
+
+def _retry_delay(exc: BaseException | None, attempt: int) -> float:
+    """Seconds to wait before retry ``attempt`` (1-based) after ``exc``.
+
+    A 429/503 that says how long to wait (``Retry-After: <seconds>``) gets
+    exactly that, up to ``MAX_RETRY_AFTER``; anything else -- a dropped
+    connection, or a ``Retry-After`` given as a date -- backs off
+    exponentially from ``RETRY_BACKOFF``.
+    """
+    if _is_rate_limited(exc):
+        try:
+            asked = float(exc.headers.get("Retry-After", ""))
+        except (TypeError, ValueError):
+            asked = None
+        if asked is not None and asked >= 0:
+            return min(asked, MAX_RETRY_AFTER)
+    return RETRY_BACKOFF * 2 ** (attempt - 1)
+
+
+def _rate_limit_message(url: str) -> str:
+    return (f"{url} is rate-limiting requests right now (HTTP 429/503). "
+            "Wait a few minutes and try again.")
+
+
+def _urlopen_patiently(url: str, headers: dict[str, str] | None = None):
+    """``_urlopen``, but a 429/503 is waited out once before giving up --
+    for the one-off requests (the API lookup, the download's first request)
+    that ``_fetch_range``'s own retry loop doesn't cover."""
+    try:
+        return _urlopen(url, headers)
+    except HTTPError as exc:
+        if not _is_rate_limited(exc):
+            raise
+        time.sleep(_retry_delay(exc, 1))
+    try:
+        return _urlopen(url, headers)
+    except HTTPError as exc:
+        if _is_rate_limited(exc):
+            raise FetchError(_rate_limit_message(url)) from exc
+        raise
 
 
 def _get_json(url: str) -> dict:
     try:
-        with _urlopen(url) as resp:
+        with _urlopen_patiently(url) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except (HTTPError, URLError) as exc:
         raise FetchError(f"Could not reach {url}: {exc}") from exc
@@ -479,7 +550,7 @@ def _fetch_range(url: str, tmp: Path, start: int, end: int, *,
         if abort.is_set():
             return
         if attempt:
-            time.sleep(RETRY_BACKOFF * 2 ** (attempt - 1))
+            time.sleep(_retry_delay(last_error, attempt))
         try:
             with _urlopen(url, {"Range": f"bytes={pos}-{end}"}) as resp:
                 if getattr(resp, "status", None) != 206:
@@ -502,6 +573,8 @@ def _fetch_range(url: str, tmp: Path, start: int, end: int, *,
             last_error = FetchError(f"connection closed at byte {pos} of {end + 1}")
         except (HTTPError, URLError, OSError, FetchError) as exc:
             last_error = exc
+    if _is_rate_limited(last_error):
+        raise FetchError(_rate_limit_message(url)) from last_error
     raise FetchError(
         f"bytes {start}-{end} failed after {RANGE_ATTEMPTS} attempts: {last_error}")
 
@@ -569,7 +642,7 @@ def download(source: Source, out: Path, *, progress=print) -> Path:
     out.parent.mkdir(parents=True, exist_ok=True)
 
     try:
-        with _urlopen(source.url, {"Range": "bytes=0-0"}) as resp:
+        with _urlopen_patiently(source.url, {"Range": "bytes=0-0"}) as resp:
             total = _ranged_total(resp)
             if total is None:
                 # Range ignored: this *is* the whole file, so use it.
@@ -580,7 +653,7 @@ def download(source: Source, out: Path, *, progress=print) -> Path:
             if total >= MIN_PARALLEL_BYTES:
                 _download_parallel(source.url, tmp, total, progress)
             else:
-                with _urlopen(source.url) as resp:
+                with _urlopen_patiently(source.url) as resp:
                     _stream_to(resp, tmp, total, progress)
                 progress("")
     except (HTTPError, URLError, OSError) as exc:
