@@ -1,7 +1,9 @@
 # Offline (DuckDB) Implementation Plan
 
+> **Archived (2026-09-26).** An early plan for a DuckDB backend inside the R app. Never implemented; superseded by [`static-datapackage-plan.md`](static-datapackage-plan.md) and then by the Python app ([`python/`](../../python/)).
+
 Status: planning, not yet implemented. **Superseded by
-`docs/static-datapackage-plan.md`**, which keeps the backend abstraction below but
+`docs/archive/static-datapackage-plan.md`**, which keeps the backend abstraction below but
 corrects §4, §5 and §6 (gzip ingest, indexes, VACUUM, symlink swap, HAS_IMAGE) and
 adds hosting, concurrency and refresh-automation designs.
 Branch: `claude/offline-tsv-implementation-4NUEY`.
@@ -214,7 +216,7 @@ that the path persists across deploys.
 ## 8. File-level change list
 
 ### New
-- `docs/offline-implementation-plan.md` (this file)
+- `docs/archive/offline-implementation-plan.md` (this file)
 - `data-prep/build_offline_db.R`
 - `data-prep/README.md`
 - `R/utils/offline_db.R` (connection helper, path resolver, `_meta` reader)
@@ -276,7 +278,7 @@ that the path persists across deploys.
 
 ## 10. Suggested commit sequence (on `claude/offline-tsv-implementation-4NUEY`)
 
-1. `docs/offline-implementation-plan.md` — this file.
+1. `docs/archive/offline-implementation-plan.md` — this file.
 2. `data-prep/build_offline_db.R` + `data-prep/README.md`.
 3. `R/utils/offline_db.R` + `R/utils/specimen_merge.R` (lift helpers,
    no behaviour change).

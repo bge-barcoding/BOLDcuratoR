@@ -75,9 +75,10 @@ def test_every_difference_is_explained_and_the_report_says_so():
     report = (PARITY / "REPORT.md").read_text(encoding="utf-8")
     assert "**PASS**" in report
     assert "UNEXPLAINED" not in report
-    # The four divergences we expect to see, and no others.
+    # The five recorded divergences (python/PROGRESS.md) all show up.
     for tag in ("UNIFIED_SPECIES_RULE", "RANK2_IMAGE_REMOVED",
-                "CF_AFF_CONCORDANCE", "R_ROW_ERROR_ZEROES_SCORE"):
+                "CF_AFF_CONCORDANCE", "R_ROW_ERROR_ZEROES_SCORE",
+                "BIN_LESS_EXCLUDED_FROM_BAGS"):
         assert tag in report
 
 

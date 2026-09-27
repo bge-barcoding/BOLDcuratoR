@@ -8,8 +8,8 @@ Run it with ``python tools/build_snapshot.py --tsv <file> --out <file>`` or, onc
 installed, ``boldcurator-build-snapshot``.
 
 Several choices here are failure modes already diagnosed in
-``docs/static-datapackage-plan.md``; each is commented where it appears rather
-than left to look like a preference.
+``docs/archive/static-datapackage-plan.md``; each is commented where it
+appears rather than left to look like a preference.
 """
 
 from __future__ import annotations

@@ -301,10 +301,11 @@ PHYLOGENY_ALIGNMENT: dict[str, float] = {
 # --------------------------------------------------------------------------
 
 #: The BOLD public data package this snapshot is built from is itself
-#: CC BY-SA 4.0 (``docs/python-app-plan.md:13``). That licence requires both
-#: attribution *and* that any redistributed or adapted dataset carry the same
-#: licence, so both this app's own exports and whatever a curator does with a
-#: download afterwards are covered -- not just this app's own use of the data.
+#: CC BY-SA 4.0 (``docs/archive/python-app-plan.md``, "Context"). That licence
+#: requires both attribution *and* that any redistributed or adapted dataset
+#: carry the same licence, so both this app's own exports and whatever a
+#: curator does with a download afterwards are covered -- not just this app's
+#: own use of the data.
 #: Lives here, not in ``ui/``, so ``io.exports`` (which stamps it onto every
 #: text export) does not have to depend on the GUI layer to say it.
 CC_BY_SA_URL = "https://creativecommons.org/licenses/by-sa/4.0/"
@@ -324,9 +325,9 @@ BOLD_ATTRIBUTION_TEXT = (
 
 #: Where saved sessions live when the GUI is not told otherwise: per-user,
 #: not next to the snapshot -- a course's snapshot file may be shared and
-#: read-only, so it is not a safe place to write to (``docs/python-app-plan.md``'s
-#: "~20 students share one API key" context still applies to the *file*, even
-#: offline). A plain path avoids a new dependency for the common desktop case;
+#: read-only, so it is not a safe place to write to
+#: (``docs/archive/python-app-plan.md``'s "~20 students share one API key"
+#: context still applies to the *file*, even offline). A plain path avoids a new dependency for the common desktop case;
 #: ``boldcurator gui --sessions <path>`` overrides it for anything else.
 DEFAULT_SESSIONS_PATH = Path.home() / ".boldcurator" / "sessions.sqlite"
 

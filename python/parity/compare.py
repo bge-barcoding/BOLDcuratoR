@@ -3,8 +3,8 @@
 
 This is the gate before GUI work. The standard it enforces is not "the numbers
 look about right" -- it is that **every** difference maps to a divergence
-recorded in docs/python-app-plan.md. Anything unexplained is a bug and fails
-the run.
+registered in ``EXPLANATIONS`` below and listed in ``python/PROGRESS.md``.
+Anything unexplained is a bug and fails the run.
 
 The comparison is made sharp by running the R side with ``has_image = FALSE``
 for every record (see export_r_reference.R). R's 16th criterion then never

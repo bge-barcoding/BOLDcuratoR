@@ -295,14 +295,15 @@ The desktop build fails its smoke test if the built app reports anything
 other than the stamped version. A source checkout (`pip install -e .`)
 reports `0.0.0.dev0` -- plainly not a release.
 
-Before this, the desktop builds were never stamped at all -- every one
-reported `0.1.0.dev0`, whatever its tag -- and a release with no changes
+Before this, the desktop builds never carried a version at all -- every
+one reported `0.0.0+unknown`, whatever its tag (see `--copy-metadata
+boldcurator` above) -- and a release with no changes
 under `python/` re-attached the previous release's executables instead of
 rebuilding. Once builds carry their version, reused files would report the
 wrong one, so that shortcut is gone.
 
-To attach executables to a release that doesn't have them (V3.3, which
-predates this trigger -- see below), or to rebuild one: **Actions → Build
+To attach executables to a release that doesn't have them (as V3.3 was
+backfilled -- see below), or to rebuild one: **Actions → Build
 desktop executables → Run workflow**, pick `main`, and enter the release's
 tag. Leave the tag blank to build on a branch just to test the pipeline
 -- nothing is published then, which is how every packaging fix here was
@@ -426,8 +427,7 @@ removes the shortcut.
   installer (Inno Setup) so far; macOS ships as a zipped `.app` and Linux
   as a plain zip of the `--onedir` output.
 - Code signing (plan 4.4) -- deliberately not done yet, a budget decision
-  the project owner made explicitly (see `docs/python-app-plan.md`). An
-  unsigned build triggers a Gatekeeper/SmartScreen warning with a manual
+  the project owner made explicitly. An unsigned build triggers a Gatekeeper/SmartScreen warning with a manual
   override, which is fine for curator testing. This also means the Inno
   Setup installer itself is unsigned, so installing it hits the same
   SmartScreen warning the plain `.exe` does. On macOS, the `.app` is

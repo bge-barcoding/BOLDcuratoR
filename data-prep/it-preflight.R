@@ -2,7 +2,7 @@
 # data-prep/it-preflight.R
 #
 # ONE script for the hosting team to run on the server, once. Its output answers
-# most of the questions in the "4E" section of docs/static-datapackage-plan.md
+# most of the questions in the "4E" section of docs/archive/static-datapackage-plan.md
 # mechanically, so we do not discover a blocker only after the app is deployed
 # and have to ask for repeated redeploys.
 #

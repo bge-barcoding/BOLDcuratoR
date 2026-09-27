@@ -1,13 +1,13 @@
 # R vs Python parity harness
 
-The gate before any GUI work. The Python port diverges from the R Shiny app in
-several deliberate ways; without this, those divergences are indistinguishable
-from bugs.
+The Python port diverges from the R Shiny app in several deliberate ways;
+without this harness, those divergences are indistinguishable from bugs. CI
+runs it on every change.
 
 The standard it enforces is not "the numbers look about right". It is that
-**every** difference maps to a decision recorded in
-[`../../docs/python-app-plan.md`](../../docs/python-app-plan.md). Anything
-unexplained fails the run with a non-zero exit code.
+**every** difference maps to a recorded divergence (below, and in
+[`../PROGRESS.md`](../PROGRESS.md)). Anything unexplained fails the run with
+a non-zero exit code.
 
 ## What makes the comparison sharp
 
@@ -40,7 +40,9 @@ python parity/compare.py
 ```
 
 `--vanilla` matters: the repo's `.Rprofile` bootstraps renv, which tries to
-reach CRAN. `RENV_CONFIG_AUTOLOADER_ENABLED=FALSE` works too.
+reach CRAN. `RENV_CONFIG_AUTOLOADER_ENABLED=FALSE` works too. To install R
+in a bare Linux container: `apt-get install -y --no-install-recommends
+r-base-core r-cran-r6`.
 
 ## Files
 
@@ -77,6 +79,7 @@ ladder.
 | `RANK2_IMAGE_REMOVED` | R rank 3 where Python gives rank 2 — R's `RANK_2` needs an image |
 | `CF_AFF_CONCORDANCE` | R's `cf\.|aff\.<Reference>` alternation means any `cf.` record passes, whatever the reference species |
 | `R_ROW_ERROR_ZEROES_SCORE` | An unparseable `nuc_basecount` makes `as.numeric()` return `NA`; `if (NA >= 500)` then throws and R's per-row handler discards the **whole** row's score, including a `SPECIES_ID` that had passed. The snapshot builder `TRY_CAST`s the column, so neither implementation meets this in practice |
+| `BIN_LESS_EXCLUDED_FROM_BAGS` | A species-level record with no BIN is excluded from BAGS here (the project owner's decision); R counts it. A species with no BIN-assigned records gets no grade at all. Recognised from the fixture itself, since the committed R reference predates the decision |
 
 Adding a divergence means adding it to `EXPLANATIONS` in `compare.py` **and**
-recording the decision in the plan. That coupling is the point.
+recording it in this table and in `PROGRESS.md`. That coupling is the point.

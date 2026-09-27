@@ -339,7 +339,7 @@ def cmd_selftest(args: argparse.Namespace) -> int:
     transitively imports ``Bio.Align``, whose ``DistanceCalculator`` class
     body runs ``substitution_matrices.load()`` -- an ``os.listdir()`` on a
     data directory PyInstaller's import analysis doesn't bundle unless told
-    to (``--collect-all biopython``, see ``packaging/README.md``). This
+    to (``--collect-all Bio``, see ``packaging/README.md``). This
     check builds a real tiny tree, not just an import, so it fails the same
     way a curator's "Build tree" click did rather than passing on the
     import alone and missing the actual failure point.

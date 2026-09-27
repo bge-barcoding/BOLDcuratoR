@@ -36,7 +36,7 @@ def test_the_cc_by_sa_attribution_is_on_the_page(fixture_snapshot):
 
 def test_the_app_version_is_on_the_page(fixture_snapshot):
     """So a curator can tell which build they're running without opening a
-    terminal -- see PROGRESS.md's version-tracking request."""
+    terminal."""
     from boldcurator import __version__
     from boldcurator.ui.app import create_app
 

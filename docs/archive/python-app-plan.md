@@ -1,5 +1,7 @@
 # BOLDcuratoR — Python app (offline snapshot backend)
 
+> **Archived (2026-09-26).** The original design for the Python app, written before it was built. It shipped: see [`python/README.md`](../../python/README.md) for what exists now and [`python/PROGRESS.md`](../../python/PROGRESS.md) for current state, decisions and open items. The R-behaviour notes below are still an accurate description of the R app; the checklists and status lines are not current.
+
 ## Context
 
 BOLDcuratoR is an R Shiny app (~5,900 lines, `app.R` + `R/modules/*`) that curates BOLD
@@ -7,7 +9,7 @@ specimen records by fetching them live from the BOLD API via BOLDconnectR, scori
 ranking them, grading species with BAGS, and letting a curator annotate and select
 representatives for export.
 
-`docs/static-datapackage-plan.md` establishes why that shape has to change: ~20 students on
+`docs/archive/static-datapackage-plan.md` establishes why that shape has to change: ~20 students on
 a course share one API key and serialise behind it, and BIN expansion issues one HTTP round
 trip per 50 BINs (minutes to tens of minutes per search). BOLD publishes a static public
 data package (~3 GB `.gz` → ~30 GB TSV, BCDM schema, CC-BY-SA 4.0), which turns BIN
@@ -209,7 +211,7 @@ data package `.tsv.gz`.
 | `bin_species` | `bin_uri` | BIN ↔ species counts across **all** public COI-5P records — this is what makes BAGS grade E correct |
 | `_meta` | — | `snapshot_id`, `source_sha256`, `row_count`, `schema_version`, `marker_filter` |
 
-Non-negotiable build details, from `docs/static-datapackage-plan.md` §1.2–1.3 (each of these
+Non-negotiable build details, from `docs/archive/static-datapackage-plan.md` §1.2–1.3 (each of these
 is a failure mode already diagnosed there, not a preference):
 
 - `read_csv` with `auto_detect=false` and an explicit 79-column `VARCHAR` map. Auto-detect on

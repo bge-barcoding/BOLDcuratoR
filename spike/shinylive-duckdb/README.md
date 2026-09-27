@@ -3,13 +3,20 @@
 **Timeboxed to one day.** Throwaway code. Not wired into the app, and not a
 prototype of BOLDcuratoR.
 
+> **Outcome (2026-09-26):** not pursued. The real snapshot came out at
+> 7.95 GB (1.9 GB gzipped), far past a browser's budget, and target 4C -- the
+> Python desktop app in [`python/`](../../python/) -- is what shipped. Kept as
+> a record of the measurements. Don't run `.github/workflows/spike-pages.yml`:
+> it deploys to the same GitHub Pages site as the project website and would
+> replace it.
+
 ## The question
 
 Can a shinylive (webR) app query a few-hundred-megabyte DuckDB snapshot fast
 enough to be usable, inside the 4 GB wasm memory ceiling?
 
 The answer decides the local/offline delivery target in
-`docs/static-datapackage-plan.md`:
+`docs/archive/static-datapackage-plan.md`:
 
 - **Yes** → target 4B (shinylive). Zero install, hosted as static files, no
   rewrite. A fraction of the cost of 4C.
@@ -280,7 +287,7 @@ the answer is already established.
 
 ### Caching the snapshot: the layer question remains open
 
-`docs/static-datapackage-plan.md` §4B assumes "a service worker plus IDBFS caches
+`docs/archive/static-datapackage-plan.md` §4B assumes "a service worker plus IDBFS caches
 the app and the database". For the *app* that is right. For the *database* it
 looks wrong, and for the same reason the spike succeeded.
 
@@ -401,7 +408,7 @@ a useful snapshot size, 4C is proven and the day was well spent.
 
 ## Fixture schema
 
-A trimmed version of Phase 1 in `docs/static-datapackage-plan.md`:
+A trimmed version of Phase 1 in `docs/archive/static-datapackage-plan.md`:
 
 - `specimen` — 34 columns, no `nuc`, sorted
   `kingdom, phylum, class, order_, family, subfamily, genus, species, processid`.
@@ -422,5 +429,5 @@ the same treatment Phase 1 gives `country/ocean` → `country_ocean`.
 ## Recording the outcome
 
 Fill in the table above, then add a short verdict here and update
-`docs/static-datapackage-plan.md` §4B/§4C with the decision and the numbers
+`docs/archive/static-datapackage-plan.md` §4B/§4C with the decision and the numbers
 behind it.
