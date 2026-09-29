@@ -56,6 +56,16 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; \
     GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
+[InstallDelete]
+; Clear out the previous install's bundle before copying this one in. [Files]
+; only adds and overwrites, so an upgrade used to leave the old build's
+; files behind -- including its boldcurator-<old>.dist-info. With two of
+; those side by side, importlib.metadata picks the first one Windows lists
+; (alphabetical), so v3.5.1 installed over a 0.0.0.dev0 pipeline-check build
+; showed v0.0.0.dev0 in the app header, whatever the wizard said. {app}
+; holds nothing but the bundle: curator data lives in ~\.boldcurator.
+Type: filesandordirs; Name: "{app}\_internal"
+
 [Files]
 Source: "{#MyAppSourceDir}\*"; DestDir: "{app}"; \
     Flags: ignoreversion recursesubdirs createallsubdirs

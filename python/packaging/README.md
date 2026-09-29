@@ -295,6 +295,15 @@ The desktop build fails its smoke test if the built app reports anything
 other than the stamped version. A source checkout (`pip install -e .`)
 reports `0.0.0.dev0` -- plainly not a release.
 
+The Windows installer deletes the previous install's `_internal\` before
+copying in the new one (`[InstallDelete]` in `windows-installer.iss`).
+Without that, an upgrade kept the old build's `boldcurator-*.dist-info`
+next to the new one, and `importlib.metadata` reads whichever Windows lists
+first. That's how v3.5.1 installed over a pipeline-check build showed
+`v0.0.0.dev0` in the app, even though the wizard said 3.5.1 and the CI
+`--version` check passed on the clean build. The same applies to
+unzipping a desktop zip over an older one: extract into an empty folder.
+
 Before this, the desktop builds never carried a version at all -- every
 one reported `0.0.0+unknown`, whatever its tag (see `--copy-metadata
 boldcurator` above) -- and a release with no changes
