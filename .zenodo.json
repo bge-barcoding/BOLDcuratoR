@@ -1,0 +1,32 @@
+{
+  "title": "BOLDcurator: offline curation of BOLD specimen records",
+  "upload_type": "software",
+  "description": "<p>BOLDcurator is a desktop app for curating BOLD (Barcode of Life Data System) specimen records offline, against a local snapshot of the public BOLD data package: BAGS grading, specimen quality scoring and ranking, BIN review, gap analysis, phylogeny and annotation, with exports for curation workflows.</p><p>Installers for Windows, macOS and Linux, and a pip/uv install route, are described at https://bge-barcoding.github.io/BOLDcuratoR/. The BOLD snapshots it works on are published separately (see related identifiers).</p>",
+  "creators": [
+    {
+      "name": "Price, B.W."
+    }
+  ],
+  "license": "MIT",
+  "keywords": [
+    "BOLD",
+    "DNA barcoding",
+    "biodiversity",
+    "curation",
+    "BAGS",
+    "Biodiversity Genomics Europe plus"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "10.5281/zenodo.22849515",
+      "relation": "isSupplementedBy",
+      "resource_type": "dataset",
+      "scheme": "doi"
+    },
+    {
+      "identifier": "https://bge-barcoding.github.io/BOLDcuratoR/",
+      "relation": "isDocumentedBy",
+      "scheme": "url"
+    }
+  ]
+}

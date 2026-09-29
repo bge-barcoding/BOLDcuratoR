@@ -404,6 +404,14 @@ def cmd_selftest(args: argparse.Namespace) -> int:
         # The User-Agent too: what Zenodo sees, if it is the one refusing.
         return f"{source.filename or source.url} (as {fs.USER_AGENT})"
 
+    def check_app_update_record() -> str:
+        from . import app_update
+
+        # The app's own record, which the update check reads: its latest
+        # release's version, or why it couldn't be read.
+        latest = app_update.fetch_latest(timeout=30)
+        return f"latest release {latest.version} (tag {latest.tag})"
+
     checks = [
         ("duckdb", check_duckdb),
         ("biopython (Phylogeny tab tree building)", check_phylogeny),
@@ -411,6 +419,11 @@ def cmd_selftest(args: argparse.Namespace) -> int:
     ]
     if getattr(args, "network", False):
         checks.append(("Zenodo over HTTPS (--network)", check_zenodo))
+        from . import app_update
+
+        if app_update.APP_ZENODO_CONCEPT_DOI:
+            checks.append(("App update record on Zenodo (--network)",
+                           check_app_update_record))
 
     failed = False
     for name, check in checks:
@@ -451,6 +464,16 @@ def cmd_desktop(args: argparse.Namespace) -> int:
               f"pip install -e \".[desktop]\"\n  ({exc})")
         return 1
     launch(args.snapshot, page_size=args.page_size, window=args.window)
+    return 0
+
+
+def cmd_check_update(args: argparse.Namespace) -> int:
+    """Is a newer release out? Asks Zenodo afresh (:mod:`.app_update`), and
+    only ever reports -- exit 0 whatever the answer, including no answer."""
+    from .app_update import manual_check
+
+    message, _ = manual_check()
+    print(message)
     return 0
 
 
@@ -542,6 +565,12 @@ def build_parser() -> argparse.ArgumentParser:
              "(downloads nothing) -- tells a certificate problem apart from "
              "a network that blocks Zenodo")
     selftest.set_defaults(func=cmd_selftest)
+
+    check_update = sub.add_parser(
+        "check-update",
+        help="ask Zenodo whether a newer BOLDcurator release is out "
+             "(installs nothing)")
+    check_update.set_defaults(func=cmd_check_update)
 
     fetch_snapshot = sub.add_parser(
         "fetch-snapshot", help="download a pre-built snapshot (plan 5.1)")

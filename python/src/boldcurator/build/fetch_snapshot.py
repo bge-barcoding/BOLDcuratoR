@@ -160,10 +160,11 @@ def ssl_context() -> ssl.SSLContext:
     return truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 
 
-def _urlopen(url: str, headers: dict[str, str] | None = None):
+def _urlopen(url: str, headers: dict[str, str] | None = None, *,
+             timeout: float = 30):
     request = urllib.request.Request(
         url, headers={"User-Agent": USER_AGENT, **(headers or {})})
-    return urllib.request.urlopen(request, timeout=30, context=ssl_context())
+    return urllib.request.urlopen(request, timeout=timeout, context=ssl_context())
 
 
 def _is_rate_limited(exc: BaseException | None) -> bool:

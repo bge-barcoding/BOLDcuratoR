@@ -51,6 +51,14 @@ def test_the_check_for_update_button_is_on_the_data_tab(fixture_snapshot):
     assert "Check for update" in app.ui["html"]
 
 
+def test_the_app_update_check_is_on_the_data_tab(fixture_snapshot):
+    from boldcurator.ui.app import create_app
+
+    html = create_app(fixture_snapshot).ui["html"]
+    assert "Check for app update" in html
+    assert "app_update_banner" in html
+
+
 def test_banner_text_shortens_the_unmatched_taxa_warning():
     """A search over a long taxon list can produce a "No records for:
     <hundreds of names>" warning that, rendered in full in the banner
