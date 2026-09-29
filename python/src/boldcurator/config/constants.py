@@ -363,6 +363,28 @@ DEFAULT_SNAPSHOT_DIR = Path.home() / ".boldcurator"
 #: maintainer ever publishes under a genuinely different record.
 DEFAULT_SNAPSHOT_ZENODO_DOI = "10.5281/zenodo.22849515"
 
+#: The **app's** own Zenodo concept DOI -- the "cite all versions" DOI the
+#: GitHub-Zenodo integration mints when it archives this repository's first
+#: release, and which always resolves to the newest archived release after
+#: that. ``app_update`` reads the latest version from it, the same way the
+#: snapshot check above reads the latest snapshot. Empty until that first
+#: archive exists: the check is then a silent no-op. See
+#: ``packaging/README.md`` ("Update check") for the one-off setup.
+APP_ZENODO_CONCEPT_DOI = ""
+
+#: Where "a new version is available" sends a curator to get it: the
+#: website's download section, which picks the right build for their OS.
+#: The pip/uv route is told the command instead (``app_update.how_to_update``).
+APP_DOWNLOAD_URL = "https://bge-barcoding.github.io/BOLDcuratoR/#download"
+
+#: A release's notes, from the tag exactly as Zenodo reports it (``v3.5.1``,
+#: ``V3.3`` -- GitHub tag names are case-sensitive, so never re-cased).
+APP_RELEASE_NOTES_URL = "https://github.com/bge-barcoding/BOLDcuratoR/releases/tag/{tag}"
+
+#: The automatic check runs at most this often; a curator's own "Check for
+#: app update" click always asks Zenodo afresh.
+UPDATE_CHECK_INTERVAL_HOURS = 24
+
 # --------------------------------------------------------------------------
 # Geography
 # --------------------------------------------------------------------------

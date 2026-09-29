@@ -20,6 +20,29 @@ import pytest
 from boldcurator import desktop
 
 
+def test_saving_the_snapshot_path_keeps_other_config_keys(tmp_path):
+    """config.json also holds the app-update check's cache and opt-out; a
+    snapshot switch used to overwrite the whole file."""
+    config = tmp_path / "config.json"
+    desktop.update_config(config, check_for_updates=False, dismissed_version="3.6.0")
+    snapshot = tmp_path / "snap.duckdb"
+    snapshot.write_bytes(b"")
+    desktop.save_snapshot_path(snapshot, config)
+    assert desktop.load_config(config) == {
+        "check_for_updates": False, "dismissed_version": "3.6.0",
+        "snapshot_path": str(snapshot)}
+    assert not (tmp_path / "config.json.tmp").exists()
+
+
+def test_an_unreadable_config_reads_as_empty(tmp_path):
+    config = tmp_path / "config.json"
+    config.write_text("[1, 2]", encoding="utf-8")
+    assert desktop.load_config(config) == {}
+    config.write_bytes(b"\xff\xfe{")
+    assert desktop.load_config(config) == {}
+    assert desktop.load_config(tmp_path / "missing.json") == {}
+
+
 def test_load_snapshot_path_with_no_config_file(tmp_path):
     assert desktop.load_snapshot_path(tmp_path / "missing.json") is None
 

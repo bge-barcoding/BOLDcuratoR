@@ -65,6 +65,29 @@ DEFAULT_CONFIG_PATH = Path.home() / ".boldcurator" / "config.json"
 WINDOW_MODES = ("auto", "native", "browser-app", "tab")
 
 
+def load_config(config_path: Path = DEFAULT_CONFIG_PATH) -> dict:
+    """Everything in ``config.json``, or ``{}`` if it's missing or unreadable."""
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def update_config(config_path: Path = DEFAULT_CONFIG_PATH, **values) -> None:
+    """Merge ``values`` into ``config.json``, keeping every other key.
+
+    Written to a temporary file and renamed into place, so a crash halfway
+    through never leaves a truncated file -- which ``load_config`` would read
+    as empty, sending a curator back to first-run setup.
+    """
+    data = {**load_config(config_path), **values}
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = config_path.with_name(config_path.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    os.replace(tmp, config_path)
+
+
 def load_snapshot_path(config_path: Path = DEFAULT_CONFIG_PATH) -> Path | None:
     """The path saved by a previous run, or ``None`` if there isn't one.
 
@@ -72,13 +95,7 @@ def load_snapshot_path(config_path: Path = DEFAULT_CONFIG_PATH) -> Path | None:
     same as none configured -- back to setup, rather than a confusing
     failure to open it.
     """
-    if not config_path.exists():
-        return None
-    try:
-        data = json.loads(config_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return None
-    raw = data.get("snapshot_path")
+    raw = load_config(config_path).get("snapshot_path")
     if not raw:
         return None
     candidate = Path(raw)
@@ -86,8 +103,8 @@ def load_snapshot_path(config_path: Path = DEFAULT_CONFIG_PATH) -> Path | None:
 
 
 def save_snapshot_path(path: Path, config_path: Path = DEFAULT_CONFIG_PATH) -> None:
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(json.dumps({"snapshot_path": str(path)}), encoding="utf-8")
+    # Merged, not overwritten: config.json also holds app_update's keys.
+    update_config(config_path, snapshot_path=str(path))
 
 
 def _enable_webview_downloads(webview_module) -> None:

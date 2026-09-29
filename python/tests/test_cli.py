@@ -194,3 +194,37 @@ def test_selftest_only_touches_the_network_when_asked(monkeypatch, capsys):
     assert main(["selftest", "--network"]) == 0
     assert len(calls) == 1
     assert "bold_snapshot_2026-09-11.duckdb.gz" in capsys.readouterr().out
+
+
+def test_selftest_network_also_reads_the_app_update_record(monkeypatch, capsys):
+    """Once the app's own concept DOI is set, --network (which CI runs on
+    every desktop build) checks the update check's record too."""
+    from boldcurator import app_update
+    from boldcurator.build import fetch_snapshot as fs
+
+    monkeypatch.setattr(fs, "resolve_zenodo_record", lambda record_id, **kw: fs.Source(
+        url="https://zenodo.org/x", filename="bold_snapshot_2026-09-11.duckdb.gz"))
+    monkeypatch.setattr(app_update, "fetch_latest", lambda **kw: app_update.Latest(
+        version="3.6.0", tag="v3.6.0"))
+
+    monkeypatch.setattr(app_update, "APP_ZENODO_CONCEPT_DOI", "")
+    assert main(["selftest", "--network"]) == 0
+    assert "App update record" not in capsys.readouterr().out
+
+    monkeypatch.setattr(app_update, "APP_ZENODO_CONCEPT_DOI", "10.5281/zenodo.99999")
+    assert main(["selftest", "--network"]) == 0
+    assert "latest release 3.6.0 (tag v3.6.0)" in capsys.readouterr().out
+
+
+def test_check_update_prints_the_answer_and_always_exits_zero(monkeypatch, capsys):
+    from boldcurator import app_update
+
+    monkeypatch.setattr(app_update, "manual_check",
+                        lambda: ("BOLDcurator 3.6.0 is available (you have 3.5.1).", None))
+    assert main(["check-update"]) == 0
+    assert "3.6.0 is available" in capsys.readouterr().out
+
+    monkeypatch.setattr(app_update, "manual_check",
+                        lambda: ("Could not check for an app update: offline", None))
+    assert main(["check-update"]) == 0
+    assert "Could not check" in capsys.readouterr().out

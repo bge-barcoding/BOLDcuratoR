@@ -78,6 +78,7 @@ Extras: `gui` (Shiny), `desktop` (Shiny, uvicorn, pywebview), `bench`
 | `info` / `verify --snapshot FILE` | Describe / verify a snapshot (read-only) |
 | `fetch-snapshot --out FILE --record/--url/--manifest ...` | Download and verify a pre-built snapshot |
 | `benchmark --snapshot FILE` | Time every pipeline stage, with rows and peak RSS |
+| `check-update` | Ask Zenodo whether a newer release is out (installs nothing) |
 | `selftest [--network]` | Check the modules that only break once frozen; `--network` also reaches Zenodo |
 | `install-shortcut` / `remove-shortcut` | Desktop shortcut for a `uv`/`pip` install |
 
@@ -254,6 +255,8 @@ packaging/     PyInstaller entry point, Windows installer, version stamping
 
 Publish a GitHub release; CI builds the Windows, macOS and Linux downloads
 and publishes to PyPI, with the version taken from the tag. Never edit the
-version in `pyproject.toml` (it stays `0.0.0.dev0`). How the builds work, and
-why each packaging flag is there:
+version in `pyproject.toml` (it stays `0.0.0.dev0`). Zenodo archives each
+release too (`/.zenodo.json`), and that archive is what the app's "a new
+version is available" check reads. How the builds work, the update check,
+and why each packaging flag is there:
 [`packaging/README.md`](https://github.com/bge-barcoding/BOLDcuratoR/blob/main/python/packaging/README.md).

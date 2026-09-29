@@ -16,6 +16,13 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 
+@pytest.fixture(autouse=True)
+def _no_automatic_update_check(monkeypatch):
+    """No test reaches Zenodo on its own: the app's automatic update check
+    (boldcurator.app_update) is off unless a test turns it back on."""
+    monkeypatch.setenv("BOLDCURATOR_NO_UPDATE_CHECK", "1")
+
+
 @pytest.fixture(scope="session")
 def fixture_snapshot(tmp_path_factory) -> Path:
     """A small real snapshot, built through the real builder."""

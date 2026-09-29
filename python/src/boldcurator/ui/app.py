@@ -31,6 +31,7 @@ import pandas as pd
 from shiny import App, reactive, render, ui
 
 from .. import __version__
+from .. import app_update
 from ..config.constants import (
     CONTINENT_COUNTRIES,
     DEFAULT_SESSIONS_PATH,
@@ -323,6 +324,11 @@ def _banner_text(warning: str) -> str:
     return warning
 
 
+#: How long each session keeps looking for the automatic app-update check's
+#: answer (app_update's own timeout is 5 s; DNS can take longer).
+APP_UPDATE_POLL_SECONDS = 60
+
+
 def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                sessions_path: str | Path | None = None) -> App:
     store = SnapshotStore(snapshot)
@@ -548,8 +554,8 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 f"{info.bin_count:,} BINs · offline, no BOLD API",
                 class_="text-muted small",
                 title="The app version, then the BOLD snapshot's own "
-                      "version -- see the Data tab to check the snapshot "
-                      "for an update.",
+                      "version -- see the Data tab to check either for an "
+                      "update.",
             ),
             ui.tags.a(BOLD_ATTRIBUTION_SHORT, href=CC_BY_SA_URL, target="_blank",
                      rel="noopener noreferrer", class_="small",
@@ -563,6 +569,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                   "border-bottom:1px solid #dee2e6;margin-bottom:12px;",
         ),
         ui.output_ui("banner"),
+        ui.output_ui("app_update_banner"),
         ui.div(
         ui.navset_pill_list(
             ui.nav_panel(
@@ -660,6 +667,32 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                               "margin-top:6px;"),
                     ui.output_ui("session_status"),
                     ui.output_ui("session_location"),
+                    style="margin-top:6px;padding:10px 14px;"
+                          "background:#f8f9fa;border:1px solid #dee2e6;"
+                          "border-radius:5px;max-width:900px;",
+                ),
+                ui.tags.h5("BOLDcurator app", style="margin-top:22px;"),
+                ui.div(
+                    ui.div(
+                        ui.tags.span(f"This is BOLDcurator v{__version__}.",
+                                     class_="small"),
+                        ui.input_action_button(
+                            "app_check_update", "Check for app update",
+                            class_="btn-sm btn-outline-secondary"),
+                        style="display:flex;gap:8px;align-items:center;"
+                              "flex-wrap:wrap;",
+                    ),
+                    ui.tags.span(
+                        "BOLDcurator also checks by itself, at most once a "
+                        "day, and says so at the top of the window when a "
+                        "new version is out. It asks Zenodo, the same place "
+                        "the snapshots come from, and never updates "
+                        "anything without you. To switch the automatic "
+                        "check off, set \"check_for_updates\": false in "
+                        "~/.boldcurator/config.json.",
+                        class_="small text-muted", style="display:block;"
+                              "margin-top:6px;"),
+                    ui.output_ui("app_update_status"),
                     style="margin-top:6px;padding:10px 14px;"
                           "background:#f8f9fa;border:1px solid #dee2e6;"
                           "border-radius:5px;max-width:900px;",
@@ -1055,6 +1088,86 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                              kwargs={"snapshot_id": snapshot_id},
                              daemon=True).start()
             snap_op_seq.set(snap_op_seq.get() + 1)
+
+        # -- app update check (app_update) ---------------------------------
+        #
+        # The automatic check runs once per process, on its own thread; each
+        # session only polls its result (plain values -- see snap_dl_state
+        # for why no reactive.Value is set from a thread). The poll stops
+        # after APP_UPDATE_POLL_SECONDS whatever happened: a check that
+        # hasn't answered by then just means no banner this time.
+        app_update.start_background_check()
+        app_update_opened = _dt.datetime.now()
+        app_check_state = {"running": False, "message": ""}
+        #: Bumped by the check button and the banner's dismiss link.
+        app_update_seq = reactive.Value(0)
+
+        @output
+        @render.ui
+        def app_update_banner():
+            app_update_seq.get()
+            done, status = app_update.background_result()
+            waited = (_dt.datetime.now() - app_update_opened).total_seconds()
+            if app_check_state["running"] or (
+                    not done and waited < APP_UPDATE_POLL_SECONDS):
+                reactive.invalidate_later(1)
+            if not done or not app_update.should_notify(status):
+                return ui.div()
+            parts: list = [
+                ui.tags.strong(
+                    f"BOLDcurator {status.latest.version} is available"),
+                f" (you have {status.current}). {app_update.how_to_update()} ",
+            ]
+            url = app_update.download_url()
+            if url:
+                parts += [ui.tags.a("Download page", href=url, target="_blank",
+                                    rel="noopener noreferrer"), " · "]
+            parts += [
+                ui.tags.a("What's new", href=status.latest.notes_url,
+                          target="_blank", rel="noopener noreferrer"),
+                " · ",
+                ui.input_action_link("app_update_dismiss",
+                                     "Don't remind me about this version"),
+            ]
+            return ui.div(*parts, class_="alert alert-info py-2 px-3 small mb-3")
+
+        @reactive.effect
+        @reactive.event(input.app_update_dismiss)
+        def _app_update_dismiss():
+            _, status = app_update.background_result()
+            if status is not None:
+                try:
+                    app_update.dismiss(status.latest.version)
+                except OSError:
+                    pass  # can't remember it; the banner still goes for now
+            app_update_seq.set(app_update_seq.get() + 1)
+
+        def _app_run_check() -> None:
+            try:
+                message, _ = app_update.manual_check()
+            except Exception as exc:  # noqa: BLE001 -- shown, not swallowed
+                message = f"Could not check for an app update: {exc}"
+            app_check_state["message"] = message
+            app_check_state["running"] = False
+
+        @reactive.effect
+        @reactive.event(input.app_check_update)
+        def _app_check_update():
+            if app_check_state["running"]:
+                return
+            app_check_state.update(running=True,
+                                   message="Asking Zenodo for the latest release...")
+            threading.Thread(target=_app_run_check, daemon=True).start()
+            app_update_seq.set(app_update_seq.get() + 1)
+
+        @output
+        @render.ui
+        def app_update_status():
+            app_update_seq.get()
+            if app_check_state["running"]:
+                reactive.invalidate_later(0.5)
+            text = app_check_state["message"]
+            return ui.div(text, class_="small mt-2") if text else ui.div()
 
         @output
         @render.ui

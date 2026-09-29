@@ -400,6 +400,20 @@ uv tool uninstall boldcurator</code></pre>
         </details>
 
         <details>
+          <summary>How will I know when there's a new version?</summary>
+          <div class="answer">
+            The app checks by itself, at most once a day, and shows a note
+            at the top of its window when a new version is out, with how to
+            update your copy. It never updates anything without you. It
+            asks Zenodo, the same place the snapshots come from, and you
+            can also check any time from the Data tab. To switch the
+            automatic check off, add <code>"check_for_updates": false</code>
+            to <code>config.json</code> in your <code>.boldcurator</code>
+            folder.
+          </div>
+        </details>
+
+        <details>
           <summary>Where are my saved sessions, and what would I lose them?</summary>
           <div class="answer">
             Sessions are stored in one SQLite file, also under your

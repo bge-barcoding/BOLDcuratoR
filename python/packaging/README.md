@@ -326,6 +326,60 @@ release. The installer's version also came out as `0.0.0-dev` for any tag
 that wasn't exactly `vX.Y.Z` (v3.2 included); tags are now padded to
 `x.y.z` (V3.3 -> 3.3.0).
 
+### Update check -- "a new version is available"
+
+The app tells a curator when a newer release is out
+(`src/boldcurator/app_update.py`). It asks **Zenodo**, the one host the
+app already talks to for snapshots, so it needs no new firewall exception
+or privacy note. What Zenodo sees is one GET with the same
+`BOLDcurator/<version>` User-Agent as a snapshot download.
+
+It depends on the repository's GitHub-Zenodo link. Zenodo archives every
+published GitHub release under one **concept DOI** ("cite all versions"),
+which always resolves to the newest release. That record's
+`metadata.version` is the release tag, padded to `x.y.z` exactly as
+`stamp_version.py` pads it. `/.zenodo.json` supplies the archive's title,
+authors, licence and links. It must **not** set `version`, or every
+archive would report that instead of its tag.
+
+One-off setup, in this order:
+
+1. On zenodo.org, go to **GitHub**, then switch on
+   `bge-barcoding/BOLDcuratoR`.
+2. Publish a release. Zenodo archives it and mints the concept DOI, which
+   can't be known before then. It's shown on the record page under
+   "Cite all versions?".
+3. Put that DOI into `APP_ZENODO_CONCEPT_DOI` (`config/constants.py`).
+   Every release from the next one on checks for updates. Builds with the
+   constant empty, which includes every release so far, never check.
+
+How it behaves:
+
+- **Automatic**, when the app opens: at most once a day, a 5-second
+  timeout, no retries, and silent on any failure. Offline is normal for
+  this app. A newer release shows a banner at the top of the window with
+  how to update *this* install:
+  - installer: run the new installer;
+  - portable zip: extract into an empty folder, never over the old copy
+    (see the stale dist-info problem above);
+  - macOS: replace the `.app`;
+  - pip/uv: `uv tool upgrade boldcurator`.
+
+  "Don't remind me about this version" hides it until the next release.
+- **On request**: the Data tab's "Check for app update" button, or
+  `boldcurator check-update`. It always asks afresh and reports failures
+  too.
+- **Off**: `"check_for_updates": false` in `~/.boldcurator/config.json`, or
+  the environment variable `BOLDCURATOR_NO_UPDATE_CHECK=1`. A check the
+  curator asks for still runs.
+- Development builds (`0.0.0.dev0`) never check automatically.
+- Notify only: nothing is ever downloaded or installed.
+
+`selftest --network`, which every desktop build runs in CI, reads the
+concept record too once the constant is set. So a wrong DOI, or a record
+whose version isn't a `vX.Y.Z` tag, fails the build rather than silently
+never notifying anyone.
+
 ## The second route: PyPI + uv, alongside these installers
 
 Curators can also install without any of the files above:
