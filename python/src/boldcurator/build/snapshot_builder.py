@@ -407,7 +407,7 @@ def build(
             # a subsequent full build, forcing a second read of the whole
             # source -- which is exactly the workflow --keep-staging exists for.
             con.execute(
-                f"CREATE TABLE stage AS\n"
+                f"CREATE TABLE stage AS\n"  # nosec B608 # snapshot build: identifiers from the build plan via quote_ident, literals via _sql_str
                 f"SELECT {staging_select(plan, include_sequences=plan.sequence_present)}\n"
                 f"FROM {read_csv_clause(tsv, header)}\n"
                 f"{where_sql}{limit_sql}"
@@ -431,7 +431,7 @@ def build(
         phys = plan.physical
         st = _Step("sort + write specimen")
         con.execute(
-            f"CREATE TABLE out.specimen AS\n"
+            f"CREATE TABLE out.specimen AS\n"  # nosec B608 # snapshot build: identifiers from the build plan via quote_ident, literals via _sql_str
             f"SELECT row_number() OVER () - 1 AS sid,\n"
             f"       {', '.join(S.quote_ident(c) for c in phys)}\n"
             f"FROM stage\n"
@@ -464,7 +464,7 @@ def build(
             # both set above, so DuckDB spills rather than dying.
             st = _Step("sort + write sequence")
             con.execute(
-                "CREATE TABLE out.sequence AS\n"
+                "CREATE TABLE out.sequence AS\n"  # nosec B608 # snapshot build: identifiers from the build plan via quote_ident, literals via _sql_str
                 "SELECT processid, nuc FROM stage\n"
                 "WHERE nuc IS NOT NULL AND nuc <> ''\n"
                 f"ORDER BY {', '.join(S.quote_ident(c) for c in S.SPECIMEN_SORT_ORDER if c in phys)}"
@@ -611,7 +611,7 @@ def _build_recordsets(con: duckdb.DuckDBPyConnection, *, allow_drift: bool) -> N
         FROM ex
         WHERE {strip} <> ''
         ORDER BY recordset_code, sid
-        """
+        """  # nosec B608 # snapshot build: identifiers from the build plan via quote_ident, literals via _sql_str
     )
 
     distinct = con.execute(
@@ -655,7 +655,7 @@ def _build_taxon(con: duckdb.DuckDBPyConnection, physical: list[str]) -> None:
     """
     ranks = [r for r in S.TAXON_RANKS if S.physical_name(r) in physical]
     unpivot = " UNION ALL ".join(
-        f"SELECT {_sql_str(rank)} AS taxon_rank, "
+        f"SELECT {_sql_str(rank)} AS taxon_rank, "  # nosec B608 # snapshot build: identifiers from the build plan via quote_ident, literals via _sql_str
         f"{S.quote_ident(S.physical_name(rank))} AS taxon_name FROM out.specimen"
         for rank in ranks
     )
@@ -671,7 +671,7 @@ def _build_taxon(con: duckdb.DuckDBPyConnection, physical: list[str]) -> None:
         WHERE taxon_name IS NOT NULL AND taxon_name <> ''
         GROUP BY lower(taxon_name), taxon_rank
         ORDER BY taxon_lc
-        """
+        """  # nosec B608 # snapshot build: identifiers from the build plan via quote_ident, literals via _sql_str
     )
 
 
@@ -700,7 +700,7 @@ def _build_bin_species(con: duckdb.DuckDBPyConnection, physical: list[str]) -> N
           AND species IS NOT NULL AND species <> ''
         GROUP BY bin_uri, species, CAST({rank_col} AS VARCHAR)
         ORDER BY bin_uri
-        """
+        """  # nosec B608 # snapshot build: identifiers from the build plan via quote_ident, literals via _sql_str
     )
 
 

@@ -173,7 +173,7 @@ def verify(snapshot: Path, *, previous_rows: int | None = None) -> list[Check]:
             if col not in cols:
                 continue
             frac = con.execute(
-                f"SELECT count(*) FILTER (WHERE {S.quote_ident(col)} IS NULL "
+                f"SELECT count(*) FILTER (WHERE {S.quote_ident(col)} IS NULL "  # nosec B608 # col comes from a fixed tuple in this loop, quoted with quote_ident
                 f"OR CAST({S.quote_ident(col)} AS VARCHAR) = '') / count(*) FROM specimen"
             ).fetchone()[0]
             checks.append(Check(f"{col} null fraction under {limit:.0%}",

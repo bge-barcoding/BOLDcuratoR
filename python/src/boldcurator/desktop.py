@@ -204,7 +204,7 @@ def _patch_edgechromium_download_extension() -> None:
                 dialog.InitialDirectory = winreg.QueryValueEx(
                     windows_key, "{374DE290-123F-4565-9164-39C4925E467B}"
                 )[0]
-        except Exception:
+        except Exception:  # nosec B110 # best effort: no registry value just means the dialog opens in its default folder
             pass
 
         suggested = os.path.basename(args.ResultFilePath)
@@ -231,7 +231,7 @@ def _patch_edgechromium_download_extension() -> None:
         ):
             edgechromium.EdgeChrome.on_download_starting = (
                 _patched_on_download_starting)
-    except Exception:
+    except Exception:  # nosec B110 # falling back to pywebview's own behaviour is the intended outcome
         pass  # leave pywebview's own (extension-losing) behaviour in place
 
 
@@ -320,7 +320,7 @@ def _launch_browser_app(url: str, *, width: int = 1400,
     if browser is None:
         return None
     profile_dir = tempfile.mkdtemp(prefix="boldcurator-appmode-")
-    return subprocess.Popen([
+    return subprocess.Popen([  # nosec B603 # argv list, no shell; the browser path is found on this machine and the URL is our own loopback server
         browser, f"--app={url}", f"--window-size={width},{height}",
         f"--user-data-dir={profile_dir}",
     ])
@@ -379,7 +379,7 @@ def _run_setup(config_path: Path, *, window: str = "auto") -> Path:
                 box["path"] = resolved.get()
                 try:
                     win.destroy()
-                except Exception:
+                except Exception:  # nosec B110 # the window is already gone; nothing to clean up
                     pass  # already gone -- webview.start() failed below
 
             watcher = threading.Thread(target=_watch, daemon=True)

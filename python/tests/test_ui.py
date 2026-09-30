@@ -605,3 +605,21 @@ def test_unique_snapshot_path_never_silently_overwrites(tmp_path):
     third = _unique_snapshot_path("bold_snapshot_2026-09-11.duckdb",
                                   directory=tmp_path)
     assert third == tmp_path / "bold_snapshot_2026-09-11 (3).duckdb"
+
+
+def test_only_listed_snapshots_can_be_deleted(tmp_path):
+    # The delete button's path comes back from the page; a path the list
+    # never offered (anywhere else on disk, a traversal, a non-snapshot
+    # file) must be refused, not unlinked.
+    from boldcurator.ui.app import _is_listed_snapshot
+
+    data = tmp_path / "data"
+    data.mkdir()
+    listed = data / "bold_snapshot_2026-09-11.duckdb"
+    listed.write_bytes(b"")
+
+    assert _is_listed_snapshot(listed, directory=data)
+    assert not _is_listed_snapshot(data / "config.json", directory=data)
+    assert not _is_listed_snapshot(tmp_path / "elsewhere.duckdb", directory=data)
+    assert not _is_listed_snapshot(data / ".." / "elsewhere.duckdb", directory=data)
+    assert not _is_listed_snapshot(data / "sub" / "x.duckdb", directory=data)

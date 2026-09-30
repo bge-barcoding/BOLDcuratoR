@@ -162,9 +162,15 @@ def ssl_context() -> ssl.SSLContext:
 
 def _urlopen(url: str, headers: dict[str, str] | None = None, *,
              timeout: float = 30):
+    # Only ever a download: never file:// or another urllib handler, even if
+    # a manifest's "url" (someone else's JSON) says so. Raised as URLError so
+    # every caller reports it the way it already reports a network failure.
+    scheme = url.split(":", 1)[0].lower()
+    if scheme not in ("http", "https"):
+        raise URLError(f"refusing to fetch a {scheme!r} URL -- only http(s) is allowed")
     request = urllib.request.Request(
         url, headers={"User-Agent": USER_AGENT, **(headers or {})})
-    return urllib.request.urlopen(request, timeout=timeout, context=ssl_context())
+    return urllib.request.urlopen(request, timeout=timeout, context=ssl_context())  # nosec B310 # scheme restricted to http(s) just above
 
 
 def _is_rate_limited(exc: BaseException | None) -> bool:

@@ -155,6 +155,22 @@ def _snapshot_filename_for(*, filename: str = "", snapshot_id: str = "") -> str:
     return f"snapshot-{export_io.timestamp()}.duckdb"
 
 
+def _is_listed_snapshot(path: Path, *, directory: Path = DEFAULT_SNAPSHOT_DIR) -> bool:
+    """Is ``path`` one of the files the Data tab's snapshot list offers -- a
+    ``*.duckdb`` directly inside ``directory``?
+
+    The delete button's path comes back from the page, so it is checked
+    against this rather than trusted: anything else sent over the websocket
+    is refused. The parent is resolved, not the file, so a symlink in the
+    folder is still "listed" and deleting it removes only the link.
+    """
+    try:
+        return (path.suffix == ".duckdb"
+                and path.parent.resolve() == directory.resolve())
+    except OSError:
+        return False
+
+
 def _unique_snapshot_path(name: str, *, directory: Path = DEFAULT_SNAPSHOT_DIR) -> Path:
     """``directory / name``, disambiguated if that name is already taken.
 
@@ -905,6 +921,12 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             target = Path(pending_delete.get())
             pending_delete.set("")
             ui.modal_remove()
+            # The path arrives from the page (a button's data-path): only
+            # delete it if it is one the list above actually offers.
+            if not _is_listed_snapshot(target):
+                snap_msg.set(f"Refusing to delete {target}: it is not a snapshot "
+                             "in BOLDcurator's data folder.")
+                return
             try:
                 target.unlink(missing_ok=True)
                 _provenance_path(target).unlink(missing_ok=True)

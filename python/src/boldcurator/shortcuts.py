@@ -106,7 +106,7 @@ def icon_path(suffix: str) -> Path | None:
 
 def _powershell(script: str, env: dict[str, str] | None = None) -> str:
     try:
-        done = subprocess.run(
+        done = subprocess.run(  # nosec B603 B607 # argv list, no shell; PowerShell resolved from PATH like any Windows tool; script text is ours
             ["powershell", "-NoProfile", "-NonInteractive",
              "-ExecutionPolicy", "Bypass", "-Command",
              "[Console]::OutputEncoding = [Text.Encoding]::UTF8; " + script],
@@ -137,7 +137,7 @@ def _linux_desktop_dir() -> Path | None:
     home = Path.home()
     if shutil.which("xdg-user-dir"):
         try:
-            out = subprocess.run(["xdg-user-dir", "DESKTOP"], capture_output=True,
+            out = subprocess.run(["xdg-user-dir", "DESKTOP"], capture_output=True,  # nosec B603 B607 # fixed argv, no shell; xdg-user-dir resolved from PATH (freedesktop tool)
                                  text=True, check=False).stdout.strip()
         except OSError:
             out = ""
@@ -255,7 +255,7 @@ def _trust_linux_desktop_copy(path: Path) -> None:
     # GNOME shows an untrusted desktop launcher as a text file until it is
     # marked trusted; harmless (and skipped) everywhere gio is absent.
     if shutil.which("gio"):
-        subprocess.run(["gio", "set", str(path), "metadata::trusted", "true"],
+        subprocess.run(["gio", "set", str(path), "metadata::trusted", "true"],  # nosec B603 B607 # argv list, no shell; gio resolved from PATH (GNOME tool); path is the .desktop file we just wrote
                        capture_output=True, check=False)
 
 
