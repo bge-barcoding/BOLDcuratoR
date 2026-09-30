@@ -73,3 +73,20 @@ include = ["/src/boldcurator", "/packaging/icon.ico", "/packaging/icon.icns",
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+# Tools the release workflows need, locked in uv.lock alongside the app's own
+# dependencies so a desktop build is made from exactly the versions the SBOM
+# and pip-audit describe. Not part of the published package's metadata.
+[dependency-groups]
+release = ["pyinstaller>=6.0", "build>=1.2"]
+
+# Bandit (security.yml): `bandit -c pyproject.toml -r src`. Every inline
+# `# nosec` in src/ names its rule and says why; the two skipped here are
+# skipped wholesale because they flag a pattern, not a use of it:
+#   B101  assert -- used for internal invariants and in `boldcurator
+#         selftest`, never for access control or validating input;
+#   B404  `import subprocess` -- each actual call is reviewed as B603/B607
+#         and suppressed line by line, with its reason.
+[tool.bandit]
+exclude_dirs = ["tests"]
+skips = ["B101", "B404"]

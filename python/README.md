@@ -62,6 +62,13 @@ pip install -e ".[dev,desktop]"
 python -m pytest tests/ -q
 ```
 
+Or, with [uv](https://docs.astral.sh/uv/), exactly the versions pinned in
+`uv.lock` (what CI tests, pip-audit checks and the desktop builds ship):
+`uv sync --locked --extra dev --extra desktop`, then
+`uv run python -m pytest tests/ -q`. After changing dependencies in
+`pyproject.toml`, run `uv lock` and commit `uv.lock` -- CI fails on a stale
+lock.
+
 Extras: `gui` (Shiny), `desktop` (Shiny, uvicorn, pywebview), `bench`
 (psutil, for `benchmark`'s memory column), `dev` (pytest, psutil).
 
@@ -260,3 +267,11 @@ release too (`/.zenodo.json`), and that archive is what the app's "a new
 version is available" check reads. How the builds work, the update check,
 and why each packaging flag is there:
 [`packaging/README.md`](https://github.com/bge-barcoding/BOLDcuratoR/blob/main/python/packaging/README.md).
+
+Every release also carries a CycloneDX SBOM, a `SHA256SUMS.txt` and signed
+build-provenance attestations; PyPI files carry PEP 740 attestations from
+trusted publishing. How to check a download:
+[Verifying your download](https://github.com/bge-barcoding/BOLDcuratoR#verifying-your-download).
+For IT reviewers -- network use, files, privileges:
+[SECURITY_OVERVIEW.md](https://github.com/bge-barcoding/BOLDcuratoR/blob/main/docs/SECURITY_OVERVIEW.md).
+Reporting a vulnerability: [SECURITY.md](https://github.com/bge-barcoding/BOLDcuratoR/blob/main/SECURITY.md).
