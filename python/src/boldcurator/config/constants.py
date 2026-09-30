@@ -367,10 +367,9 @@ DEFAULT_SNAPSHOT_ZENODO_DOI = "10.5281/zenodo.22849515"
 #: GitHub-Zenodo integration mints when it archives this repository's first
 #: release, and which always resolves to the newest archived release after
 #: that. ``app_update`` reads the latest version from it, the same way the
-#: snapshot check above reads the latest snapshot. Empty until that first
-#: archive exists: the check is then a silent no-op. See
-#: ``packaging/README.md`` ("Update check") for the one-off setup.
-APP_ZENODO_CONCEPT_DOI = ""
+#: snapshot check above reads the latest snapshot. Set to ``""`` and the
+#: check is a silent no-op. See ``packaging/README.md`` ("Update check").
+APP_ZENODO_CONCEPT_DOI = "10.5281/zenodo.23039646"
 
 #: Where "a new version is available" sends a curator to get it: the
 #: website's download section, which picks the right build for their OS.

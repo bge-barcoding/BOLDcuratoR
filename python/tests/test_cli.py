@@ -177,6 +177,7 @@ def test_selftest_only_touches_the_network_when_asked(monkeypatch, capsys):
     """--network resolves the default Zenodo record (no download) -- the
     diagnostic for a failing "Download from Zenodo". Plain selftest stays
     offline, as CI's first smoke test relies on."""
+    from boldcurator import app_update
     from boldcurator.build import fetch_snapshot as fs
 
     calls = []
@@ -185,14 +186,19 @@ def test_selftest_only_touches_the_network_when_asked(monkeypatch, capsys):
         calls.append(record_id)
         return fs.Source(url="https://zenodo.org/x", filename="bold_snapshot_2026-09-11.duckdb.gz")
 
+    def fake_latest(**kwargs):
+        calls.append("app")
+        return app_update.Latest(version="3.6.0", tag="v3.6.0")
+
     monkeypatch.setattr(fs, "resolve_zenodo_record", fake_resolve)
+    monkeypatch.setattr(app_update, "fetch_latest", fake_latest)
 
     assert main(["selftest"]) == 0
     assert calls == []
     assert "Zenodo" not in capsys.readouterr().out
 
     assert main(["selftest", "--network"]) == 0
-    assert len(calls) == 1
+    assert len(calls) == 2
     assert "bold_snapshot_2026-09-11.duckdb.gz" in capsys.readouterr().out
 
 

@@ -350,8 +350,10 @@ One-off setup, in this order:
    can't be known before then. It's shown on the record page under
    "Cite all versions?".
 3. Put that DOI into `APP_ZENODO_CONCEPT_DOI` (`config/constants.py`).
-   Every release from the next one on checks for updates. Builds with the
-   constant empty, which includes every release so far, never check.
+   Done: it is `10.5281/zenodo.23039646`
+   (<https://doi.org/10.5281/zenodo.23039646>). Releases built before it
+   was set (v3.5.1 and earlier) never check, so their users need telling
+   once, by hand.
 
 How it behaves:
 
