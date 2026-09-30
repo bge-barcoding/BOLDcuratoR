@@ -17,6 +17,13 @@ name: Publish to PyPI
 # python-pypi.yml, environment "pypi" -- and create that environment under
 # the repository's Settings -> Environments.
 #
+# Trusted publishing also makes PyPI generate and publish PEP 740
+# attestations for each file, tying it to this workflow and commit (see the
+# "Provenance" panel on pypi.org, or `pypi-attestations verify pypi`). The
+# `github-release` job then attaches the very same sdist and wheel to the
+# GitHub release, with GitHub build-provenance attestations and lines in the
+# release's SHA256SUMS.txt.
+#
 # workflow_dispatch with no tag builds and checks the package but publishes
 # nothing -- the way to test this workflow itself. With a tag it publishes
 # that release's code (a backfill); a version already on PyPI is skipped.
@@ -44,6 +51,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       publish: ${{ steps.version.outputs.publish }}
+      tag: ${{ steps.tag.outputs.tag }}
     steps:
       - name: Which tag?
         id: tag
@@ -56,19 +64,21 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           if [ -n "$tag" ]; then echo "ref=refs/tags/$tag"; else echo "ref=$GITHUB_SHA"; fi >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          persist-credentials: false
           ref: ${{ steps.tag.outputs.ref }}
 
       # stamp_version.py from the workflow's own commit, not the tag's: a
       # backfill of a tag older than the script still gets stamped.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          persist-credentials: false
           path: .release-tools
           sparse-checkout: python/packaging/stamp_version.py
           sparse-checkout-cone-mode: false
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.11'
 
@@ -106,7 +116,7 @@ jobs:
           /tmp/check/bin/boldcurator selftest
           test -x /tmp/check/bin/boldcurator-desktop
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: python-dist
           path: python/dist/
@@ -121,13 +131,67 @@ jobs:
     permissions:
       id-token: write # trusted publishing
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: python-dist
           path: dist/
 
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           # A re-run, or a release republished with no new code, must not
           # fail on a version PyPI already has.
           skip-existing: true
+          # PEP 740 attestations (the action's default under trusted
+          # publishing -- stated so it can't be switched off by accident).
+          attestations: true
+
+  github-release:
+    # The same sdist and wheel PyPI got, on the GitHub release too: so a
+    # reviewer can `gh attestation verify` them and find them in
+    # SHA256SUMS.txt alongside the desktop builds.
+    needs: [build, publish]
+    if: needs.build.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write     # gh release upload
+      id-token: write     # sign the attestations (Sigstore, via OIDC)
+      attestations: write # store them on the repository
+    # Shared with python-release.yml's publish job: both rewrite the same
+    # release's SHA256SUMS.txt, so they take turns.
+    concurrency:
+      group: release-assets-${{ needs.build.outputs.tag }}
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ needs.build.outputs.tag }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: python-dist
+          path: dist/
+
+      - name: Build provenance for the sdist and wheel
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*
+
+      - name: Merge their checksums into the release's SHA256SUMS.txt
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum -- *) > mine.txt
+          gh release download "$TAG" --pattern SHA256SUMS.txt --output existing.txt --clobber 2>/dev/null || : > existing.txt
+          awk 'NR==FNR { mine[$2] = 1; next } !($2 in mine)' mine.txt existing.txt > merged.txt
+          cat mine.txt >> merged.txt
+          mkdir -p sums && sort -k2 merged.txt > sums/SHA256SUMS.txt
+          cat sums/SHA256SUMS.txt
+
+      - name: Build provenance for the checksum file
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: sums/SHA256SUMS.txt
+
+      - name: Attach to the release
+        run: |
+          gh release upload "$TAG" dist/* sums/SHA256SUMS.txt --clobber
+          echo "Attached the sdist, wheel and updated SHA256SUMS.txt to $TAG." >> "$GITHUB_STEP_SUMMARY"
