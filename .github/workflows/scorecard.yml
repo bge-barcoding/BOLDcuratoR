@@ -1,0 +1,55 @@
+name: OpenSSF Scorecard
+
+# https://github.com/ossf/scorecard -- an independent, automated rating of
+# this repository's security practices (branch protection, pinned actions,
+# token permissions, signed releases, SAST, dependency updates...). Results
+# go to the repository's code scanning alerts and, with publish_results, to
+# the public https://scorecard.dev viewer that the README badge links to.
+#
+# Kept in a workflow of its own: publish_results only accepts a workflow
+# with no other jobs, no workflow-level write permissions, and only a short
+# list of approved actions in the job
+# (https://github.com/ossf/scorecard-action#workflow-restrictions).
+
+on:
+  # Only the default branch is scored; the action refuses other refs.
+  push:
+    branches: [main]
+  # Re-score when branch protection changes -- it is one of the checks.
+  branch_protection_rule:
+  schedule:
+    - cron: '41 5 * * 2' # Tuesdays, 05:41 UTC
+  workflow_dispatch: {}
+
+permissions: read-all
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      security-events: write # upload the SARIF to code scanning
+      id-token: write        # publish_results: authenticate to scorecard.dev
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: scorecard-results
+          path: results.sarif
+          retention-days: 5
+
+      - uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          sarif_file: results.sarif
