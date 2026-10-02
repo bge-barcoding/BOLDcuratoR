@@ -115,7 +115,7 @@ user. `boldcurator remove-shortcut` removes them.
 Releases are built by GitHub Actions from the tagged commit, never on a
 developer's machine. A release is only built if its tagged commit is
 already on `main`, so it has been through the same review as everything
-review process. Workflow code and third-party actions are pinned to
+else there. Workflow code and third-party actions are pinned to
 exact commits, and the pipeline itself is scanned by CodeQL, zizmor and
 OpenSSF Scorecard ([security.yml](../.github/workflows/security.yml),
 [scorecard.yml](../.github/workflows/scorecard.yml)). The Python code is
