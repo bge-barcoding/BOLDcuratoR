@@ -60,7 +60,16 @@ jobs:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
           INPUT_TAG: ${{ inputs.tag }}
         run: |
+          set -euo pipefail
           if [ "$EVENT" = release ]; then tag="$RELEASE_TAG"; else tag="$INPUT_TAG"; fi
+          # A dispatch input is free text: refuse anything but the release
+          # tag shapes stamp_version.py --strict accepts (v3.5.1, V3.3, 3),
+          # before it can reach $GITHUB_OUTPUT or a checkout.
+          tag_shape='^[vV]?[0-9]+(\.[0-9]+){0,2}$'
+          if [ -n "$tag" ] && ! [[ "$tag" =~ $tag_shape ]]; then
+            echo "::error::'$tag' is not a release tag (expected e.g. v3.5.1)"
+            exit 1
+          fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           if [ -n "$tag" ]; then echo "ref=refs/tags/$tag"; else echo "ref=$GITHUB_SHA"; fi >> "$GITHUB_OUTPUT"
 
@@ -68,6 +77,20 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ steps.tag.outputs.ref }}
+          fetch-depth: 0 # the default branch too, for the check below
+
+      - name: Only reviewed code is published -- the tag must be on the default branch
+        # Same rule as python-release.yml's plan job: every release so far
+        # is tagged on main, and a tag pointing anywhere else (code that
+        # never went through main) is refused rather than sent to PyPI.
+        if: steps.tag.outputs.tag != ''
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if ! git merge-base --is-ancestor HEAD "refs/remotes/origin/$DEFAULT_BRANCH"; then
+            echo "::error::This tag's commit is not on $DEFAULT_BRANCH -- merge it first, then tag"
+            exit 1
+          fi
 
       # stamp_version.py from the workflow's own commit, not the tag's: a
       # backfill of a tag older than the script still gets stamped.

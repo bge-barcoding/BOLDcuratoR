@@ -211,9 +211,35 @@ All are fixed, and zizmor now reports **0**. Other `${{ }}` uses in `run:`
 blocks (`runner.os`, matrix values, step outputs) were moved into `env:` as
 well.
 
-**CodeQL** (`python`, `actions`; `security-extended`) and **OpenSSF
-Scorecard** have not run yet. They report to the repository's Security tab
-after the first run on `main`.
+**CodeQL** (`python`, `actions`; `security-extended`) found nothing in the
+Python code. On PR #66 it raised five alerts on the release workflows, all
+from one pattern: a job checks out a release tag (`ref:` from the release
+event or the `tag` dispatch input) and then runs code from it.
+
+| Alert | Where | Verdict |
+|---|---|---|
+| Cache poisoning via execution of untrusted code (high) ×2 | `python-release.yml`: build job's install step, `package` job | Not exploitable from outside, see below |
+| Checkout of untrusted code in a non-privileged context (medium) ×3 | `python-release.yml`: build and `package` checkouts; `python-pypi.yml`: build checkout | Same |
+
+These workflows only run on `release: published` and `workflow_dispatch`,
+and both need write access to the repository. Nothing here runs on
+`pull_request_target` or `workflow_run`, so a fork can't reach these jobs.
+The workflows also don't use the Actions cache (`setup-uv` has
+`enable-cache: false`; `setup-python` has no cache).
+
+The real version of the concern is someone with write access tagging code
+that never went through `main` and getting it built, attested and
+published. That is now closed: both workflows refuse a tag whose commit
+isn't on the default branch (`git merge-base --is-ancestor`, which every
+existing tag passes). Both also refuse a dispatch input that isn't a plain
+tag name before it reaches `$GITHUB_OUTPUT` or a checkout.
+
+CodeQL can't see that check, so the five alerts stay open. **Dismiss them
+in the Security tab as "False positive"**, citing this section. Building
+the tagged code is what a release workflow is for.
+
+**OpenSSF Scorecard** only runs on `main`. Its results appear in the
+Security tab, and on the badge, after the first run following the merge.
 
 ## Workflow and release changes (steps 2 to 4)
 
@@ -349,6 +375,11 @@ Critical findings (verified in the code):
 - [ ] Branch protection on `main`: require PRs and require the `Security`
       checks (Bandit, pip-audit, CodeQL, zizmor) and `Python app tests` to
       pass.
+- [ ] A tag ruleset limiting who can create or move `v*` / `V*` tags. The
+      workflows already refuse tags that aren't on `main`; this stops a tag
+      from being moved after release.
+- [ ] Dismiss the five CodeQL alerts on the release workflows as false
+      positives, with the reasoning in "Scanner results" above.
 - [ ] Turn on secret scanning, push protection, Dependabot alerts and
       **private vulnerability reporting** (Settings, then Code security).
 - [ ] If CodeQL "default setup" is on, switch it off: `security.yml` is the

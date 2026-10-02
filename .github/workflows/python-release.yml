@@ -74,6 +74,7 @@ jobs:
           EVENT: ${{ github.event_name }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
           INPUT_TAG: ${{ inputs.tag }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
           out() { echo "$1=$2" >> "$GITHUB_OUTPUT"; echo "$1=$2"; }
@@ -87,12 +88,30 @@ jobs:
             exit 0
           fi
 
+          # A dispatch input is free text: only a plain tag name may reach
+          # $GITHUB_OUTPUT (no newlines, no refspec syntax) or git.
+          tag_shape='^[A-Za-z0-9][A-Za-z0-9._-]*$'
+          if ! [[ "$tag" =~ $tag_shape ]]; then
+            echo "::error::'$tag' is not a plain tag name"
+            exit 1
+          fi
+
           if ! git rev-parse -q --verify "refs/tags/$tag^{commit}" >/dev/null; then
             echo "::error::No tag named '$tag' in this repository"
             exit 1
           fi
           if ! gh release view "$tag" --json tagName >/dev/null; then
             echo "::error::Tag '$tag' has no GitHub release to attach executables to -- create the release first"
+            exit 1
+          fi
+
+          # Only reviewed code is released: the tag's commit must already be
+          # on the default branch (every release so far is). This is what
+          # makes the tag checkouts below trusted -- CodeQL's "untrusted
+          # checkout" / "cache poisoning" alerts on them assume a tag could
+          # point at code that never went through main.
+          if ! git merge-base --is-ancestor "refs/tags/$tag^{commit}" "refs/remotes/origin/$DEFAULT_BRANCH"; then
+            echo "::error::Tag '$tag' points at a commit that is not on $DEFAULT_BRANCH -- merge it first, then tag"
             exit 1
           fi
 
