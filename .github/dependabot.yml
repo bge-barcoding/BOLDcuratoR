@@ -1,0 +1,39 @@
+# Weekly dependency updates, as pull requests that CI (python-tests.yml,
+# security.yml) then checks. Minor and patch bumps are grouped into one PR
+# per ecosystem so they don't pile up; a major version gets a PR of its own,
+# since that is where breaking changes live.
+#
+# cooldown: a release must be a week old before Dependabot proposes it,
+# which gives the ecosystem time to spot and yank a compromised or broken
+# release before it reaches this repository.
+#
+# Not covered: the legacy R app's renv.lock -- Dependabot has no renv
+# support (docs/SECURITY_FINDINGS.md, "Legacy R code").
+version: 2
+updates:
+  # python/uv.lock: the Python app's pinned dependencies.
+  - package-ecosystem: uv
+    directory: /python
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    cooldown:
+      default-days: 7
+    groups:
+      python-minor-and-patch:
+        update-types: [minor, patch]
+
+  # Every `uses:` in .github/workflows/, pinned to a commit SHA with the
+  # version as a trailing comment -- Dependabot updates both.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    cooldown:
+      default-days: 7
+    groups:
+      actions-minor-and-patch:
+        update-types: [minor, patch]

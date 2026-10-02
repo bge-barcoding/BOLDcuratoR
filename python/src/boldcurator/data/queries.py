@@ -75,7 +75,7 @@ def resolve_taxa(store: SnapshotStore, names: list[str]) -> Resolution:
     lowered = [n.lower() for n in cleaned]
     clause, params = _in_clause("taxon_lc", sorted(set(lowered)))
     rows = store.connection.execute(
-        f"SELECT taxon_lc, taxon_name, taxon_rank, n_records FROM taxon "
+        f"SELECT taxon_lc, taxon_name, taxon_rank, n_records FROM taxon "  # nosec B608 # identifiers are schema column names via quote_ident; every value is a bound ? parameter
         f"WHERE {clause}",
         params,
     ).fetchall()
@@ -155,7 +155,7 @@ def _seed_sql(query: SearchQuery) -> tuple[str, list[object]]:
         column = S.quote_ident(S.physical_name(rank))
         clause, values = _in_clause(column, sorted(set(names)))
         branches.append(
-            f"SELECT sid, bin_uri FROM specimen WHERE {clause}{geo_clause}"
+            f"SELECT sid, bin_uri FROM specimen WHERE {clause}{geo_clause}"  # nosec B608 # identifiers are schema column names via quote_ident; every value is a bound ? parameter
         )
         params.extend(values)
         params.extend(geo_params)
@@ -164,7 +164,7 @@ def _seed_sql(query: SearchQuery) -> tuple[str, list[object]]:
     if codes:
         clause, values = _in_clause("recordset_code", sorted(set(codes)))
         branches.append(
-            f"SELECT s.sid, s.bin_uri FROM specimen s "
+            f"SELECT s.sid, s.bin_uri FROM specimen s "  # nosec B608 # identifiers are schema column names via quote_ident; every value is a bound ? parameter
             f"WHERE s.sid IN (SELECT sid FROM specimen_recordset WHERE {clause})"
             f"{geo_clause}"
         )
@@ -180,7 +180,7 @@ def _seed_sql(query: SearchQuery) -> tuple[str, list[object]]:
 def _seed_counts(store: SnapshotStore, seed_sql: str, params: list[object]
                  ) -> tuple[int, int]:
     seed_records, seed_bins = store.connection.execute(
-        f"WITH seed AS ({seed_sql}) "
+        f"WITH seed AS ({seed_sql}) "  # nosec B608 # identifiers are schema column names via quote_ident; every value is a bound ? parameter
         "SELECT count(*), count(DISTINCT bin_uri) FILTER "
         "(WHERE bin_uri IS NOT NULL AND bin_uri <> '') FROM seed",
         params,
@@ -195,7 +195,7 @@ def _expansion_sql(seed_sql: str, projection: str) -> str:
     would otherwise drop.
     """
     return (
-        f"WITH seed AS ({seed_sql}), "
+        f"WITH seed AS ({seed_sql}), "  # nosec B608 # identifiers are schema column names via quote_ident; every value is a bound ? parameter
         "seed_bins AS (SELECT DISTINCT bin_uri FROM seed "
         "              WHERE bin_uri IS NOT NULL AND bin_uri <> '') "
         f"SELECT {projection} FROM specimen s "
@@ -272,7 +272,7 @@ def plan_search(store: SnapshotStore, query: SearchQuery) -> SearchPlan:
     if query.expand_bins and seed_bins:
         sql = _expansion_sql(seed_sql, "s.rowid AS rid")
     else:
-        sql = (f"WITH seed AS ({seed_sql}) "
+        sql = (f"WITH seed AS ({seed_sql}) "  # nosec B608 # identifiers are schema column names via quote_ident; every value is a bound ? parameter
                "SELECT s.rowid AS rid FROM specimen s "
                "WHERE s.sid IN (SELECT sid FROM seed)")
     row_ids = store.connection.execute(sql, params).fetchnumpy()["rid"]
@@ -354,14 +354,14 @@ def fetch_rows(store: SnapshotStore, row_ids, *,
     row_ids = np.asarray(row_ids)
     if len(row_ids) == 0:
         return store.connection.execute(
-            f"SELECT {projection} FROM specimen s WHERE false"
+            f"SELECT {projection} FROM specimen s WHERE false"  # nosec B608 # identifiers are schema column names via quote_ident; every value is a bound ? parameter
         ).df()
 
     order = " ORDER BY s.processid" if order_by_processid else ""
     store.connection.register("_wanted_rows", pd.DataFrame({"rid": row_ids}))
     try:
         return store.connection.execute(
-            f"SELECT {projection} FROM specimen s "
+            f"SELECT {projection} FROM specimen s "  # nosec B608 # identifiers are schema column names via quote_ident; every value is a bound ? parameter
             "SEMI JOIN _wanted_rows p ON p.rid = s.rowid"
             f"{order}"
         ).df()
@@ -456,11 +456,11 @@ def fetch_by_bin(store: SnapshotStore, bin_uris: list[str]) -> pd.DataFrame:
     projection = S.projection(store.physical_columns)
     if not bin_uris:
         return store.connection.execute(
-            f"SELECT {projection} FROM specimen s WHERE false"
+            f"SELECT {projection} FROM specimen s WHERE false"  # nosec B608 # identifiers are schema column names via quote_ident; every value is a bound ? parameter
         ).df()
     clause, params = _in_clause("bin_uri", bin_uris)
     return store.connection.execute(
-        f"SELECT {projection} FROM specimen s WHERE {clause}", params
+        f"SELECT {projection} FROM specimen s WHERE {clause}", params  # nosec B608 # identifiers are schema column names via quote_ident; every value is a bound ? parameter
     ).df()
 
 
@@ -477,7 +477,7 @@ def missing_recordset_codes(store: SnapshotStore, codes: list[str]) -> list[str]
     clause, params = _in_clause("recordset_code", sorted(set(codes)))
     found = {
         r[0] for r in store.connection.execute(
-            f"SELECT DISTINCT recordset_code FROM specimen_recordset WHERE {clause}",
+            f"SELECT DISTINCT recordset_code FROM specimen_recordset WHERE {clause}",  # nosec B608 # identifiers are schema column names via quote_ident; every value is a bound ? parameter
             params,
         ).fetchall()
     }

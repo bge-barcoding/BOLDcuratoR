@@ -29,3 +29,25 @@ renv/cellar/
 renv/local/
 renv/lock/
 renv/python/
+
+# Local secrets and environment files -- never commit these
+.env
+.env.*
+*.pem
+*.p12
+*.key
+
+# Python caches and build outputs (python/.gitignore has the app's own)
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Files the security/release workflows write into the checkout
+python/requirements-release.txt
+python/audit-*.txt
+*.sarif

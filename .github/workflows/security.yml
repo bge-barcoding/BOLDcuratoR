@@ -1,0 +1,155 @@
+name: Security
+
+# Static analysis and dependency audit for the Python app (python/) and for
+# this repository's own GitHub Actions workflows. What each job checks, and
+# what was found the first time it ran, is written up in
+# docs/SECURITY_FINDINGS.md; docs/SECURITY_OVERVIEW.md is the summary for an
+# institutional IT reviewer.
+#
+#   bandit     Python security linter over python/src ([tool.bandit] in
+#              python/pyproject.toml; every inline `# nosec` says why)
+#   pip-audit  every package pinned in python/uv.lock, on every platform,
+#              against the PyPI/OSV advisory databases
+#   codeql     GitHub CodeQL, for `python` and for `actions` (the workflow
+#              files themselves: script injection, over-broad tokens...)
+#   zizmor     a second, Actions-specific audit of .github/workflows/
+#
+# OpenSSF Scorecard runs from its own workflow (scorecard.yml): it only
+# accepts a workflow with nothing else in it.
+#
+# Runs on pushes to main (and to claude/** branches, like python-tests.yml),
+# on every pull request, and weekly -- so a newly published advisory for a
+# pinned dependency is caught even when nothing in the repo has changed.
+
+on:
+  push:
+    branches: [main, 'claude/**']
+  pull_request:
+  schedule:
+    - cron: '17 5 * * 1' # Mondays, 05:17 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bandit:
+    name: Bandit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: python
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: false
+
+      - name: Bandit over python/src
+        run: uvx --from 'bandit==1.9.4' bandit -c pyproject.toml -r src
+
+  pip-audit:
+    name: pip-audit (uv.lock)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: python
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: false
+
+      - name: The lock matches pyproject.toml
+        run: uv lock --check
+
+      - name: Export every locked package, for every platform
+        # Environment markers are stripped on purpose: pip-audit would
+        # otherwise skip whatever doesn't apply to this Linux runner
+        # (pythonnet on Windows, pyobjc on macOS...), and those ship in the
+        # desktop builds too. A package pinned at more than one version
+        # (different Python versions resolve differently) lands in a second
+        # file, since one requirements file can't list a name twice.
+        run: |
+          set -euo pipefail
+          uv export --frozen --all-extras --all-groups --no-emit-project \
+            --no-hashes --no-header --no-annotate --format requirements-txt \
+            | sed -E 's/ *;.*$//' | grep -E '^[A-Za-z0-9]' | sort -u > audit-all.txt
+          awk -F'==' '{ n = ++seen[tolower($1)]; print > ("audit-" n ".txt") }' audit-all.txt
+          wc -l audit-*.txt
+
+      - name: pip-audit
+        run: |
+          set -euo pipefail
+          status=0
+          for f in audit-[0-9]*.txt; do
+            echo "== $f"
+            uvx --from 'pip-audit==2.10.1' pip-audit --requirement "$f" \
+              --no-deps --disable-pip --progress-spinner off --desc on || status=1
+          done
+          exit "$status"
+
+  codeql:
+    name: CodeQL (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write # upload results to code scanning
+      actions: read          # read this workflow run's metadata
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python, actions]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          queries: security-extended
+          # The Python app only: the R app, the shinylive spike and the
+          # website are out of scope (docs/SECURITY_FINDINGS.md, "Legacy R
+          # code"). Ignored for `actions`, which scans .github/ regardless.
+          config: |
+            paths:
+              - python/src
+              - python/packaging
+              - python/tools
+              - .github
+
+      - uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          category: /language:${{ matrix.language }}
+
+  zizmor:
+    name: zizmor (GitHub Actions audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write # upload results to code scanning
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
+        with:
+          version: 1.30.1
+          inputs: .github/workflows

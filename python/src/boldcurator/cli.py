@@ -370,7 +370,7 @@ def cmd_selftest(args: argparse.Namespace) -> int:
 
         # Realistic enough to take every real code path: the aligner (and
         # its NUC.4.4 matrix load), an overhang, a short fragment, K2P.
-        rng = random.Random(0)
+        rng = random.Random(0)  # nosec B311 # deterministic synthetic DNA for the selftest, not security
         core = "".join(rng.choice("ACGT") for _ in range(200))
         mutated = "".join(rng.choice("ACGT") if rng.random() < 0.1 else b
                           for b in core)

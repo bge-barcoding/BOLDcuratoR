@@ -61,8 +61,9 @@ jobs:
       tag: ${{ steps.plan.outputs.tag }}
       ref: ${{ steps.plan.outputs.ref }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          persist-credentials: false
           fetch-depth: 0 # every tag, so the requested one can be checked
 
       - name: Which tag, and does it have a release?
@@ -73,6 +74,7 @@ jobs:
           EVENT: ${{ github.event_name }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
           INPUT_TAG: ${{ inputs.tag }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
           out() { echo "$1=$2" >> "$GITHUB_OUTPUT"; echo "$1=$2"; }
@@ -86,12 +88,30 @@ jobs:
             exit 0
           fi
 
+          # A dispatch input is free text: only a plain tag name may reach
+          # $GITHUB_OUTPUT (no newlines, no refspec syntax) or git.
+          tag_shape='^[A-Za-z0-9][A-Za-z0-9._-]*$'
+          if ! [[ "$tag" =~ $tag_shape ]]; then
+            echo "::error::'$tag' is not a plain tag name"
+            exit 1
+          fi
+
           if ! git rev-parse -q --verify "refs/tags/$tag^{commit}" >/dev/null; then
             echo "::error::No tag named '$tag' in this repository"
             exit 1
           fi
           if ! gh release view "$tag" --json tagName >/dev/null; then
             echo "::error::Tag '$tag' has no GitHub release to attach executables to -- create the release first"
+            exit 1
+          fi
+
+          # Only reviewed code is released: the tag's commit must already be
+          # on the default branch (every release so far is). This is what
+          # makes the tag checkouts below trusted -- CodeQL's "untrusted
+          # checkout" / "cache poisoning" alerts on them assume a tag could
+          # point at code that never went through main.
+          if ! git merge-base --is-ancestor "refs/tags/$tag^{commit}" "refs/remotes/origin/$DEFAULT_BRANCH"; then
+            echo "::error::Tag '$tag' points at a commit that is not on $DEFAULT_BRANCH -- merge it first, then tag"
             exit 1
           fi
 
@@ -131,23 +151,34 @@ jobs:
       # Anything compiled from source on the macOS runners targets the same
       # minimum as the wheels (empty, and ignored, on Windows/Linux).
       MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos_target }}
+      # The matrix entry's name, read as $PLATFORM in scripts rather than
+      # expanded into them (zizmor's template-injection audit).
+      PLATFORM: ${{ matrix.name }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          persist-credentials: false
           ref: ${{ needs.plan.outputs.ref }}
 
       # stamp_version.py from the workflow's own commit, not the tag's: a
       # backfill of a tag older than the script still gets stamped.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          persist-credentials: false
           path: .release-tools
           sparse-checkout: python/packaging/stamp_version.py
           sparse-checkout-cone-mode: false
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.11'
+
+      # Only to export uv.lock as a hashed requirements file below; the
+      # build itself still runs in setup-python's interpreter with pip.
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: false
 
       - name: Stamp the release version into pyproject.toml
         # Before the install, so the package metadata PyInstaller bundles
@@ -167,17 +198,25 @@ jobs:
           echo "VERSION=$version" >> "$GITHUB_ENV"
           echo "Stamped version $version"
 
-      - name: Install the app and PyInstaller
+      - name: Install the app and PyInstaller, exactly as uv.lock pins them
+        # --require-hashes: every wheel pip installs must match the sha256
+        # uv.lock recorded for it -- the same versions pip-audit checks
+        # (security.yml) and the release SBOM lists. The app itself goes on
+        # last, --no-deps, so nothing un-pinned can slip in with it.
+        shell: bash
         run: |
-          pip install -e ".[desktop]"
-          pip install pyinstaller
+          set -euo pipefail
+          uv export --frozen --no-emit-project --extra desktop --group release \
+            --format requirements-txt -o requirements-release.txt
+          python -m pip install --require-hashes -r requirements-release.txt
+          python -m pip install --no-deps -e .
 
       - name: macOS -- swap in wheels that run on older macOS
         # pip on a macOS 15 runner picks macOS-14/15-only wheels when a
         # package ships one (numpy, orjson did in v3.2); reinstall those
         # packages' macosx_<target> wheels before PyInstaller bundles them.
         if: runner.os == 'macOS'
-        run: python packaging/macos_deployment_target.py repin --target ${{ matrix.macos_target }}
+        run: python packaging/macos_deployment_target.py repin --target "$MACOSX_DEPLOYMENT_TARGET"
 
       - name: Build
         # --copy-metadata boldcurator: boldcurator.__version__ reads the
@@ -193,7 +232,7 @@ jobs:
         # each (packaging/README.md, "macOS: why a .app bundle").
         shell: bash
         run: |
-          if [ "${{ runner.os }}" = "macOS" ]; then
+          if [ "$RUNNER_OS" = "macOS" ]; then
             platform_flags=(--windowed --name BOLDcurator
               --icon packaging/icon.icns
               --osx-bundle-identifier io.github.bge-barcoding.boldcurator)
@@ -211,7 +250,7 @@ jobs:
       - name: Locate the built executable
         shell: bash
         run: |
-          case "${{ runner.os }}" in
+          case "$RUNNER_OS" in
             macOS)   echo "BIN=dist/BOLDcurator.app/Contents/MacOS/BOLDcurator" ;;
             Windows) echo "BIN=dist/boldcurator/boldcurator.exe" ;;
             *)       echo "BIN=dist/boldcurator/boldcurator" ;;
@@ -220,7 +259,7 @@ jobs:
       - name: macOS -- every binary runs on the target macOS, and the bundle's signature is intact
         if: runner.os == 'macOS'
         run: |
-          python packaging/macos_deployment_target.py check --target ${{ matrix.macos_target }} dist/BOLDcurator.app
+          python packaging/macos_deployment_target.py check --target "$MACOSX_DEPLOYMENT_TARGET" dist/BOLDcurator.app
           codesign --verify --deep --strict --verbose=2 dist/BOLDcurator.app
 
       - name: Smoke test -- the build reports the release's version
@@ -315,19 +354,58 @@ jobs:
         # does and re-verifies what a curator actually gets.
         if: runner.os == 'macOS'
         run: |
-          ditto -c -k --keepParent dist/BOLDcurator.app "boldcurator-${{ matrix.name }}.zip"
+          ditto -c -k --keepParent dist/BOLDcurator.app "boldcurator-$PLATFORM.zip"
           rm -rf ziptest && mkdir ziptest
-          ditto -x -k "boldcurator-${{ matrix.name }}.zip" ziptest
+          ditto -x -k "boldcurator-$PLATFORM.zip" ziptest
           codesign --verify --deep --strict --verbose=2 ziptest/BOLDcurator.app
           ziptest/BOLDcurator.app/Contents/MacOS/BOLDcurator selftest
 
-      - uses: actions/upload-artifact@v4
+      - name: macOS -- Gatekeeper assessment (enforced once Developer ID signing is live)
+        # codesign --verify above only proves the bundle's signature is
+        # intact -- today that is PyInstaller's ad-hoc signature, which
+        # Gatekeeper rejects. spctl asks the question a curator's Mac asks:
+        # would this open without "Apple could not verify ...". Until the
+        # signing runbook (python/packaging/MACOS_SIGNING.md) is finished
+        # and the repository variable MACOS_SIGNING is set to "enabled",
+        # this only reports; after that it fails the build.
+        if: runner.os == 'macOS'
+        env:
+          ENFORCE: ${{ vars.MACOS_SIGNING == 'enabled' }}
+        run: |
+          ok=true
+          spctl --assess --type execute --verbose=4 ziptest/BOLDcurator.app || ok=false
+          xcrun stapler validate ziptest/BOLDcurator.app || ok=false
+          if [ "$ok" = true ]; then
+            echo "macOS ($PLATFORM): Developer ID signed, notarised and stapled." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$ENFORCE" = true ]; then
+            echo "::error::$PLATFORM: the .app does not pass Gatekeeper (spctl/stapler above)"
+            exit 1
+          else
+            echo "::warning::$PLATFORM: not Developer ID signed/notarised -- Gatekeeper will warn (see python/packaging/MACOS_SIGNING.md)"
+            echo "macOS ($PLATFORM): **not** notarised -- Gatekeeper will warn." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # Windows Authenticode signing: a placeholder, off by default. Nothing
+      # is configured -- see docs/SECURITY_FINDINGS.md ("Windows code
+      # signing") for the options. Wire the chosen provider in here (the
+      # .exe and every .dll/.pyd under dist/boldcurator/, before they are
+      # uploaded and before Inno Setup wraps them) and in the matching
+      # step after the installer is built, then set the repository
+      # variable WINDOWS_SIGNING to "enabled".
+      - name: Windows -- sign the executable (DISABLED until a signing provider is set up)
+        if: runner.os == 'Windows' && vars.WINDOWS_SIGNING == 'enabled'
+        shell: pwsh
+        run: |
+          Write-Output "::error::WINDOWS_SIGNING is enabled but no signing provider has been wired into this step yet."
+          exit 1
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: runner.os != 'macOS'
         with:
           name: boldcurator-${{ matrix.name }}
           path: python/dist/boldcurator
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: runner.os == 'macOS'
         with:
           name: boldcurator-${{ matrix.name }}
@@ -348,30 +426,79 @@ jobs:
           # raw ref: on workflow_dispatch that's a branch name like
           # "claude/foo-qw7llz", whose "/" broke OutputBaseFilename (an
           # actual CI failure).
-          $version = '${{ steps.version.outputs.version }}'
+          $version = $env:VERSION
 
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" `
             "/DMyAppVersion=$version" packaging\windows-installer.iss
 
-      - uses: actions/upload-artifact@v4
+      - name: Windows -- sign the installer (DISABLED until a signing provider is set up)
+        if: runner.os == 'Windows' && vars.WINDOWS_SIGNING == 'enabled'
+        shell: pwsh
+        run: |
+          Write-Output "::error::WINDOWS_SIGNING is enabled but no signing provider has been wired into this step yet."
+          exit 1
+
+      - name: Windows -- report Authenticode status
+        # Says, in the run summary, what a curator's SmartScreen will see.
+        # "NotSigned" is expected until the signing steps above are live.
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $files = @(Get-Item dist\boldcurator\boldcurator.exe) + @(Get-ChildItem packaging\Output\*.exe)
+          foreach ($f in $files) {
+            $sig = Get-AuthenticodeSignature $f.FullName
+            $line = "Windows: $($f.Name) -- Authenticode $($sig.Status)"
+            Write-Output $line
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $line
+          }
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: runner.os == 'Windows'
         with:
           name: boldcurator-windows-installer
           path: python/packaging/Output/*.exe
 
-  publish:
+  package:
+    # Runs on every build, release or not, so the packaging, SBOM and
+    # checksum steps are exercised by a plain workflow_dispatch too; only
+    # `publish` below touches a release.
     needs: [plan, build]
-    if: needs.plan.outputs.tag != ''
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    env:
-      GH_TOKEN: ${{ github.token }}
-      GH_REPO: ${{ github.repository }}
-      TAG: ${{ needs.plan.outputs.tag }}
-
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+          persist-credentials: false
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          path: .release-tools
+          sparse-checkout: python/packaging/stamp_version.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.11'
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: false
+
+      - name: Stamp the release version (for the SBOM's name and version)
+        id: version
+        env:
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: |
+          set -euo pipefail
+          version=$(python .release-tools/python/packaging/stamp_version.py \
+            --pyproject python/pyproject.toml "$TAG")
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: artifacts
 
@@ -405,10 +532,103 @@ jobs:
           done
           exit "$missing"
 
+      - name: CycloneDX SBOM of what the desktop builds were made from
+        # From uv.lock -- the same hashed pins the build job installed with
+        # --require-hashes: the app's runtime dependencies (the "desktop"
+        # extra) plus PyInstaller, whose bootloader ships inside every
+        # executable. Platform-specific packages (pythonnet on Windows,
+        # pyobjc on macOS...) are listed with their environment markers.
+        working-directory: python
+        run: |
+          set -euo pipefail
+          uv export --frozen --no-emit-project --extra desktop --group release \
+            --format requirements-txt -o requirements-release.txt
+          uvx --from 'cyclonedx-bom==7.5.0' cyclonedx-py requirements \
+            --pyproject pyproject.toml --mc-type application \
+            --output-reproducible --of JSON \
+            -o "../release/boldcurator-$VERSION.cdx.json" requirements-release.txt
+          python -c "import json,sys; d=json.load(open(sys.argv[1])); print(len(d['components']), 'components')" \
+            "../release/boldcurator-$VERSION.cdx.json"
+
+      - name: SHA-256 checksums
+        working-directory: release
+        run: |
+          sha256sum -- * > ../SHA256SUMS.txt
+          mv ../SHA256SUMS.txt .
+          cat SHA256SUMS.txt
+          sha256sum --check SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-assets
+          path: release/
+
+  publish:
+    needs: [plan, package]
+    if: needs.plan.outputs.tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write     # gh release upload
+      id-token: write     # sign the attestations (Sigstore, via OIDC)
+      attestations: write # store them on the repository
+    # Shared with python-pypi.yml's release job (concurrency groups are
+    # repository-wide): the two both rewrite SHA256SUMS.txt on the same
+    # release, so they take turns instead of racing.
+    concurrency:
+      group: release-assets-${{ needs.plan.outputs.tag }}
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ needs.plan.outputs.tag }}
+
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-assets
+          path: release
+
+      - name: Build provenance for every asset
+        # SLSA build provenance, signed through Sigstore and stored on the
+        # repository: `gh attestation verify <file> --repo
+        # bge-barcoding/BOLDcuratoR` proves a download is byte-for-byte what
+        # this workflow built, from which commit.
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            release/*.zip
+            release/*.exe
+            release/*.cdx.json
+
+      - name: Tie the SBOM to each executable it describes
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: |
+            release/*.zip
+            release/*.exe
+          sbom-path: release/boldcurator-${{ needs.package.outputs.version }}.cdx.json
+
+      - name: Merge checksums with any already on the release
+        # python-pypi.yml attaches the sdist and wheel, with their own
+        # lines, to the same SHA256SUMS.txt. Keep every existing line for a
+        # file this job is not replacing; take this job's for the rest.
+        run: |
+          set -euo pipefail
+          gh release download "$TAG" --pattern SHA256SUMS.txt --output existing.txt --clobber 2>/dev/null || : > existing.txt
+          awk 'NR==FNR { mine[$2] = 1; next } !($2 in mine)' release/SHA256SUMS.txt existing.txt > merged.txt
+          cat release/SHA256SUMS.txt >> merged.txt
+          sort -k2 merged.txt > release/SHA256SUMS.txt
+          cat release/SHA256SUMS.txt
+
+      - name: Build provenance for the checksum file
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release/SHA256SUMS.txt
+
       - name: Attach to the release
         # --clobber: re-running (or a backfill) replaces what's
         # there. Only the assets are touched -- the release notes are left
         # exactly as written.
         run: |
           gh release upload "$TAG" release/* --clobber
-          echo "Attached freshly built executables to $TAG." >> "$GITHUB_STEP_SUMMARY"
+          echo "Attached freshly built executables, SBOM and SHA256SUMS.txt to $TAG." >> "$GITHUB_STEP_SUMMARY"

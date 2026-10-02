@@ -300,7 +300,7 @@ def analyse_plan(
     if result_bins:
         placeholders = ", ".join("?" for _ in result_bins)
         bin_species = store.connection.execute(
-            f"SELECT * FROM bin_species WHERE bin_uri IN ({placeholders})",
+            f"SELECT * FROM bin_species WHERE bin_uri IN ({placeholders})",  # nosec B608 # only ?-placeholders are interpolated; the BIN ids are bound parameters
             result_bins,
         ).df()
     else:

@@ -228,7 +228,7 @@ def resume(session: Session, store) -> ResumeResult:
     store.connection.register("_resume_ids", ids)
     try:
         frame = store.connection.execute(
-            f"SELECT {S.projection(store.physical_columns)} FROM specimen s "
+            f"SELECT {S.projection(store.physical_columns)} FROM specimen s "  # nosec B608 # identifiers are schema column names via quote_ident; every value is a bound ? parameter
             "SEMI JOIN _resume_ids r ON r.processid = s.processid "
             "ORDER BY s.processid"
         ).df()
