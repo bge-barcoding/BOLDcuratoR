@@ -73,7 +73,7 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           if [ -n "$tag" ]; then echo "ref=refs/tags/$tag"; else echo "ref=$GITHUB_SHA"; fi >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ steps.tag.outputs.ref }}
@@ -94,7 +94,7 @@ jobs:
 
       # stamp_version.py from the workflow's own commit, not the tag's: a
       # backfill of a tag older than the script still gets stamped.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           path: .release-tools
