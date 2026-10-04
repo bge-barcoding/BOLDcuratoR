@@ -103,9 +103,6 @@ CHECKLIST_LABELS = {
     "bin_uris": "BIN URIs", "bags_grade": "BAGS", "countries": "Countries",
 }
 
-#: ``bin_coverage`` -- likewise a real column of ``analyse_bins``'s output,
-#: still in the BIN analysis xlsx download, but dropped from the on-screen
-#: dashboard (round 3, item 5).
 BIN_LABELS = {
     "bin_uri": "BIN", "total_records": "Records", "unique_species": "Species",
     "species_list": "Species list", "countries": "Countries",

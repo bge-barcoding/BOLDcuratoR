@@ -63,7 +63,7 @@ def check_taxonomic_concordance(bin_specimens: pd.DataFrame) -> bool:
 
 
 _CONTENT_COLUMNS = ["bin_uri", "total_records", "unique_species", "species_list",
-                    "countries", "concordance", "bin_coverage"]
+                    "countries", "concordance"]
 
 
 def process_bin_content(specimens: pd.DataFrame) -> pd.DataFrame:
@@ -87,7 +87,6 @@ def process_bin_content(specimens: pd.DataFrame) -> pd.DataFrame:
     if len(frame) == 0:
         return pd.DataFrame(columns=_CONTENT_COLUMNS)
 
-    total = len(specimens)
     species_raw = column_or_missing(frame, "species")
     species = to_text(species_raw).str.strip().where(
         is_valid_species_name(species_raw), ""
@@ -129,7 +128,6 @@ def process_bin_content(specimens: pd.DataFrame) -> pd.DataFrame:
             "species_list": reindex_joined(per_species, index).to_numpy(),
             "countries": reindex_joined(per_country, index).to_numpy(),
             "concordance": concordance,
-            "bin_coverage": counts.to_numpy() / total if total else 0.0,
         },
         columns=_CONTENT_COLUMNS,
     )

@@ -24,9 +24,10 @@ aligns badly is **kept and flagged**, not dropped -- see
 :class:`AnchoredSequence` -- so the tree shows it, marked, and a curator can
 decide.
 
-Pure Python + Biopython's C ``PairwiseAligner``; ~5 ms per 658 bp alignment,
-so the 400-tip cap (config.constants.PHYLOGENY_LIMITS) costs ~2 s here,
-well under the NJ step it feeds.
+Pure Python + Biopython's C ``PairwiseAligner``; ~5-7 ms per 658 bp
+alignment, so the 1,000-tip cap (config.constants.PHYLOGENY_LIMITS) costs
+~7 s here -- the slowest step of a tree build now that neighbor-joining is
+vectorised (core.phylogeny.neighbor_joining).
 """
 
 from __future__ import annotations

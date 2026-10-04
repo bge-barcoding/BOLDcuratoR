@@ -522,19 +522,36 @@ def test_a_fresh_search_auto_selects_a_representative_per_bin_and_country(store)
 
 
 def test_auto_selection_never_overwrites_a_curator_s_own_choice(store):
+    """A curator's pick stays, and its (BIN x country) group gets no second,
+    automatic one. Every *other* group still gets a representative."""
+    from boldcurator.core.selection import UNKNOWN_COUNTRY
     from boldcurator.ui.state import AppState
 
     state = AppState(store)
     state.run_search("Lepidoptera")
     first_page = state.search.table.page(0).rows
+    first_page = first_page[first_page["bin_uri"].fillna("").astype(str) != ""]
     manual_pid = str(first_page["processid"].iloc[0])
     state.annotations.set_selected(manual_pid, user="curator")
+    manual_entry = dict(state.annotations.selected[manual_pid])
 
-    state.search.analysis(store)
+    specimens = state.search.analysis(store).specimens
 
-    assert state.annotations.selected == {
-        manual_pid: state.annotations.selected[manual_pid]
-    }, "an existing selection is a curator's, and analysis must leave it alone"
+    assert state.annotations.selected[manual_pid] == manual_entry, (
+        "an existing selection is a curator's, and analysis must leave it alone")
+
+    def group(frame):
+        country = frame["country.ocean"].fillna("").astype(str).str.strip()
+        return list(zip(frame["bin_uri"].astype(str),
+                        country.replace("", UNKNOWN_COUNTRY)))
+
+    groups = dict(zip(specimens["processid"].astype(str), group(specimens)))
+    selected = set(state.annotations.selected_processids())
+    manual_group = groups[manual_pid]
+    assert [p for p in selected if groups.get(p) == manual_group] == [manual_pid]
+    with_bin = specimens[specimens["bin_uri"].fillna("").astype(str) != ""]
+    assert {groups[p] for p in selected} == set(group(with_bin)), (
+        "every other (BIN x country) group must still get a representative")
 
 
 def test_checking_a_group_replaces_the_checked_set_rather_than_adding(store):
@@ -623,3 +640,27 @@ def test_only_listed_snapshots_can_be_deleted(tmp_path):
     assert not _is_listed_snapshot(tmp_path / "elsewhere.duckdb", directory=data)
     assert not _is_listed_snapshot(data / ".." / "elsewhere.duckdb", directory=data)
     assert not _is_listed_snapshot(data / "sub" / "x.duckdb", directory=data)
+
+
+def test_a_broader_second_search_gets_representatives_for_its_new_bins(store):
+    """Pieris, then Lepidoptera: the second result contains the first one's
+    picks, which used to make auto-selection skip it entirely, leaving every
+    BIN outside Pieris with no representative (and off the Phylogeny tab)."""
+    from boldcurator.core.phylogeny import group_keys
+    from boldcurator.ui.state import AppState
+
+    state = AppState(store)
+    state.run_search("Pieris")
+    state.search.analysis(store)
+    first_selected = dict(state.annotations.selected)
+
+    state.run_search("Lepidoptera")
+    specimens = state.search.analysis(store).specimens
+    with_bin = specimens[specimens["bin_uri"].fillna("").astype(str) != ""]
+    assert len(set(group_keys(with_bin))) > len(first_selected)
+
+    keys = dict(zip(specimens["processid"].astype(str), group_keys(specimens)))
+    selected = state.annotations.selected_processids()
+    assert {keys[p] for p in selected if p in keys} == set(group_keys(with_bin))
+    for pid, entry in first_selected.items():
+        assert state.annotations.selected[pid] == entry

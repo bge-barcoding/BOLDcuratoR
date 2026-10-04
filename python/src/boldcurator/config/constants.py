@@ -250,7 +250,7 @@ FLAG_OPTIONS: dict[str, str] = {
 DOWNLOAD_LIMITS: dict[str, int] = {
     "WARN_RECORDS": 10_000,
     "WARN_BINS": 1_000,
-    "MAX_RECORDS": 250_000,
+    "MAX_RECORDS": 350_000,
     "MAX_BINS": 25_000,
 }
 
@@ -260,19 +260,16 @@ DOWNLOAD_LIMITS: dict[str, int] = {
 
 #: The Phylogeny tab's tree builder (``core.phylogeny``) is pure Python, by
 #: design -- no external ML/alignment binary, so nothing new to bundle per
-#: OS. That trades away the speed a compiled tool would give: Biopython's
-#: ``DistanceTreeConstructor.nj()`` is a plain-Python, unvectorised O(n^3)
-#: loop, and it -- not the alignment to a reference (~5 ms per sequence, O(n))
-#: nor the K2P distances (a few vectorised NumPy multiplies) -- is what
-#: actually caps how many tips can be built
-#: "very quickly". Measured directly on this project's own hardware (not
-#: guessed): ~0.4s at 100 tips, ~6s at 250, ~54s at 500 -- a clean cubic
-#: fit (``t = k * n**3``, ``k ~= 4.3e-7``). WARN_TIPS (~1.5s) and MAX_TIPS
-#: (~25-30s worst case) are picked from that fit, with headroom for slower
-#: machines than the one this was measured on.
+#: OS. The cap used to be 400 because Biopython's
+#: ``DistanceTreeConstructor.nj()`` is a plain-Python O(n^3) loop (~54 s at
+#: 500 tips, ~7 min at 1,000). ``core.phylogeny.neighbor_joining`` gives the
+#: same tree with each step vectorised. A whole build of synthetic 658 bp
+#: sequences, measured: ~1 s at 150 tips, ~3 s at 400, ~11 s at 1,000
+#: (alignment ~7 s, NJ ~4 s; still cubic, so the NJ share grows fastest).
+#: WARN_TIPS (~5 s) and MAX_TIPS leave headroom for slower machines.
 PHYLOGENY_LIMITS: dict[str, int] = {
-    "WARN_TIPS": 150,
-    "MAX_TIPS": 400,
+    "WARN_TIPS": 500,
+    "MAX_TIPS": 1_000,
 }
 
 #: How ``core.refalign`` anchors representatives to a reference before

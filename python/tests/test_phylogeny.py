@@ -437,3 +437,109 @@ def test_reroot_recomputes_monophyly_against_the_new_root():
     assert phylo.reroot_at(tree, "A") is True
     after = phylo.check_monophyly(tree, reps, grades)
     assert after == {"sp_x": False, "sp_y": True}
+
+
+# -- neighbor_joining / monophyly against Biopython -------------------------
+
+
+def _newick(tree):
+    from io import StringIO
+
+    from Bio import Phylo
+
+    buf = StringIO()
+    Phylo.write(tree, buf, "newick")
+    return buf.getvalue()
+
+
+@pytest.mark.parametrize("seed", range(40))
+def test_neighbor_joining_matches_biopython(seed):
+    """Same tree as Biopython's own (pure-Python) nj(), names and branch
+    lengths included -- every third case with tied distances, where the pair
+    picked depends on scan order and summation order."""
+    from Bio.Phylo.TreeConstruction import DistanceMatrix, DistanceTreeConstructor
+
+    rng = np.random.default_rng(seed)
+    n = int(rng.integers(1, 25))
+    points = rng.random((n, 3))
+    dist = np.sqrt(((points[:, None] - points[None]) ** 2).sum(-1))
+    if seed % 3 == 0:
+        dist = np.round(dist, 1)
+    names = [f"t{i}" for i in range(n)]
+    expected = DistanceTreeConstructor().nj(
+        DistanceMatrix(names, [row[: i + 1].tolist() for i, row in enumerate(dist)]))
+    assert _newick(phylo.neighbor_joining(names, dist)) == _newick(expected)
+
+
+@pytest.mark.parametrize("seed", range(10))
+def test_clade_tip_sets_agree_with_biopython_is_monophyletic(seed):
+    rng = np.random.default_rng(seed)
+    n = 30
+    points = rng.random((n, 3))
+    names = [f"t{i}" for i in range(n)]
+    tree = phylo.build_tree(names, np.sqrt(((points[:, None] - points[None]) ** 2).sum(-1)))
+    sets = phylo.clade_tip_sets(tree)
+    by_name = {t.name: t for t in tree.get_terminals()}
+    for _ in range(50):
+        group = list(rng.choice(names, size=int(rng.integers(2, 8)), replace=False))
+        expected = bool(tree.is_monophyletic([by_name[g] for g in group]))
+        assert (frozenset(group) in sets) == expected
+
+
+# -- stand-ins for representatives with no sequence -------------------------
+
+
+def test_a_representative_with_no_sequence_is_replaced_by_its_group_s_best(
+        monkeypatch):
+    """A representative whose own record has no usable sequence used to take
+    its whole BIN x country off the tree."""
+    rng = random.Random(3)
+    core = _random_seq(rng, 658)
+    specimens = _f([
+        {"processid": "a1", "species": "sp_a", "bin_uri": "BA",
+         "country.ocean": "Kenya", "quality_score": 9},
+        {"processid": "a2", "species": "sp_a", "bin_uri": "BA",
+         "country.ocean": "Kenya", "quality_score": 5},
+        {"processid": "a3", "species": "sp_a", "bin_uri": "BA",
+         "country.ocean": "Kenya", "quality_score": 7},
+        {"processid": "b1", "species": "sp_b", "bin_uri": "BB",
+         "country.ocean": "Peru", "quality_score": 9},
+        {"processid": "c1", "species": "sp_c", "bin_uri": "BC",
+         "country.ocean": "Chile", "quality_score": 9},
+        {"processid": "d1", "species": "sp_d", "bin_uri": "BD",
+         "country.ocean": "Peru", "quality_score": 9},
+        {"processid": "d2", "species": "sp_d", "bin_uri": "BD",
+         "country.ocean": "Peru", "quality_score": 1},
+    ])
+    reps = specimens[specimens["processid"].isin(["a1", "b1", "c1", "d1"])]
+    sequences = {
+        "a2": _mutate(rng, core, 0.02), "a3": "",            # a3 scores higher, but empty
+        "b1": _mutate(rng, core, 0.1), "c1": _mutate(rng, core, 0.15),
+    }
+    monkeypatch.setattr(
+        phylo, "fetch_representative_sequences",
+        lambda store, r: {p: sequences[p] for p in r["processid"] if p in sequences})
+
+    result = phylo.build_phylogeny(reps, _f([]), store=None, max_tips=100,
+                                   specimens=specimens)
+
+    pids = set(result.representatives["processid"])
+    assert pids == {"a2", "b1", "c1"}
+    assert any("stand-in for a1" in f for f in result.flags["a2-sp_a-Kenya"])
+    assert any("1 representative specimen(s)" in w and "BD" in w
+               for w in result.warnings), "d has no sequenced record at all"
+
+
+def test_without_the_full_result_an_unsequenced_representative_is_left_off(
+        monkeypatch):
+    reps = _f([
+        {"processid": p, "species": "sp", "bin_uri": b, "country.ocean": "X"}
+        for p, b in (("p1", "B1"), ("p2", "B2"), ("p3", "B3"))
+    ])
+    rng = random.Random(4)
+    core = _random_seq(rng, 658)
+    monkeypatch.setattr(phylo, "fetch_representative_sequences",
+                        lambda store, r: {"p1": core, "p2": _mutate(rng, core, 0.05)})
+    result = phylo.build_phylogeny(reps, _f([]), store=None, max_tips=100)
+    assert result.tip_count == 2
+    assert any("BINs: B3" in w for w in result.warnings)

@@ -20,7 +20,7 @@ The R reference runs with `has_image = FALSE` on every record, so R's 16th crite
 | `CF_AFF_CONCORDANCE` | 2 |
 | `RANK2_IMAGE_REMOVED` | 5 |
 | `R_ROW_ERROR_ZEROES_SCORE` | 3 |
-| `UNIFIED_SPECIES_RULE` | 9 |
+| `UNIFIED_SPECIES_RULE` | 8 |
 
 ## BIN_LESS_EXCLUDED_FROM_BAGS
 
@@ -73,7 +73,6 @@ R keeps a species name that the unified rule rejects. R's destructive pass (mod_
 | specimen | `PAR0010` | species | `NA` | `` | species:R keeps the literal 'NA'; Python treats it as missing |
 | specimen | `PAR0055` | species | `Danaus sp.` | `` | rank:7 - nothing |
 | specimen | `PAR0114` | species | `Genusone sp.` | `` | bins:no valid species, two genera -> discordant |
-| specimen | `PAR0114` | selected | `TRUE` | `FALSE` | bins:no valid species, two genera -> discordant |
 | specimen | `PAR0115` | species | `Genustwo sp.` | `` | bins:no valid species, two genera -> discordant |
 | bags | `Apis nr mellifera` | presence | `True` | `False` |  |
 | bags | `Danaus sp.` | presence | `True` | `False` |  |

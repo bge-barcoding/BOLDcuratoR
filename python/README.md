@@ -36,7 +36,7 @@ first-run setup screen until it has a snapshot, then shows these tabs:
 | **Species** | Grade counts and a species checklist |
 | **BINs** | Concordant / discordant / shared BINs and a BIN content table |
 | **BAGS A-E** | One screen per grade, worked one problem at a time: per species (A, B, D), per species x BIN (C), per shared BIN (E). E and C are marked "work here first" |
-| **Phylogeny** | Neighbour-joining tree (K2P, reference-anchored alignment) of one representative per selected BIN x country, with monophyly badges for grade-C species; warns above 150 tips, refuses above 400 |
+| **Phylogeny** | Neighbour-joining tree (K2P, reference-anchored alignment) of one representative per selected BIN x country, with monophyly badges for grade-C species; warns above 500 tips, refuses above 1,000 |
 | **Specimens** | Every record, server-side paged and sortable |
 
 Across the tables: per-record annotations (flag, curator note, corrected
@@ -250,7 +250,7 @@ packaging/     PyInstaller entry point, Windows installer, version stamping
   it would mean scoring the whole result.
 - **Size policy.** The specimen table works at any size. Species, BIN and
   BAGS screens are whole-result aggregates, computed lazily once and refused
-  above `DOWNLOAD_LIMITS["MAX_RECORDS"]` (250,000) with an explanation.
+  above `DOWNLOAD_LIMITS["MAX_RECORDS"]` (350,000) with an explanation.
 - **BAGS screens are problem navigators, not flat tables.** Grade C (a
   species split across BINs) and E (a BIN shared by species) are each a set
   of separate species-BIN problems, so the screen walks them one at a time,

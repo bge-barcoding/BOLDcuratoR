@@ -1574,13 +1574,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             def body(search):
                 analysis = search.analysis(store).bin_analysis
                 summary = analysis["summary"]
-                # Round 3, item 5: "share of result" isn't something a
-                # curator scanning the BIN dashboard needs -- dropped from
-                # the on-screen table only; the BIN analysis xlsx download
-                # (analysis["content"] itself) is unchanged.
-                content = _sorted_by(
-                    analysis["content"].drop(columns=["bin_coverage"], errors="ignore"),
-                    bins_sort)
+                content = _sorted_by(analysis["content"], bins_sort)
                 return ui.div(
                     ui.div(
                         value_box(f"{summary['total_bins']:,}", "Total BINs",
@@ -1812,7 +1806,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             with reactive.isolate():
                 phylo_tick.set(phylo_tick.get() + 1)
 
-        def _phylo_run_build(representatives, bags_grades) -> None:
+        def _phylo_run_build(representatives, bags_grades, specimens) -> None:
             from ..core import phylogeny as phylo
 
             try:
@@ -1821,7 +1815,8 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
 
                 phylo_state["result"] = phylo.build_phylogeny(
                     representatives, bags_grades, store,
-                    max_tips=PHYLOGENY_LIMITS["MAX_TIPS"], progress=progress)
+                    max_tips=PHYLOGENY_LIMITS["MAX_TIPS"], progress=progress,
+                    specimens=specimens)
                 phylo_state["error"] = ""
             except phylo.PhylogenyTooLargeToBuild as exc:
                 phylo_state["error"] = str(exc)
@@ -1849,7 +1844,8 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             phylo_state.update(running=True, message="Starting...",
                                result=None, error="")
             threading.Thread(target=_phylo_run_build,
-                             args=(representatives, result.bags_grades),
+                             args=(representatives, result.bags_grades,
+                                   result.specimens),
                              daemon=True).start()
             phylo_op_seq.set(phylo_op_seq.get() + 1)
 

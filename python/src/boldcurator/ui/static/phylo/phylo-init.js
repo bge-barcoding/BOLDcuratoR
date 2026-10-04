@@ -189,9 +189,11 @@
     const width = leftMargin + maxDepth * xScale + labelWidth + 24;
     const height = Math.max(60, leaves.length * rowHeight + 24);
 
+    // Full height, not capped: the container scrolls (phylo.css), whereas
+    // squeezing 1,000 tips into a capped height shrank labels to ~1px.
     const svg = svgEl("svg", {
       width: "100%",
-      height: Math.min(height, 2000),
+      height: height,
       viewBox: `0 0 ${width} ${height}`,
       style: "background:#fff;cursor:grab;user-select:none;",
     });

@@ -92,3 +92,41 @@ def test_existing_selections_are_never_overwritten():
                  "quality_score": 9}])
     existing = {"P2": {"user": "curator"}}
     assert auto_select_best_specimens(frame, existing=existing) == existing
+
+
+def test_bin_content_has_no_bin_coverage_column():
+    frame = _f([{"processid": "P1", "bin_uri": "BOLD:A", "species": "Danaus plexippus"}])
+    assert "bin_coverage" not in analyse_bins(frame)["content"].columns
+
+
+def test_a_bin_with_no_species_name_still_gets_a_representative():
+    """Records identified only to genus or family must not take their BIN off
+    the Phylogeny tab and "Download Selected"."""
+    frame = _f([
+        {"processid": "P1", "bin_uri": "BOLD:A", "species": "Danaus plexippus",
+         "country.ocean": "France", "quality_score": 5},
+        {"processid": "P2", "bin_uri": "BOLD:B", "species": None, "genus": "Danaus",
+         "country.ocean": "France", "quality_score": 3},
+        {"processid": "P3", "bin_uri": None, "species": "Danaus plexippus",
+         "country.ocean": "France", "quality_score": 9},
+    ])
+    assert set(auto_select_best_specimens(frame)) == {"P1", "P2"}
+
+
+def test_fill_gaps_selects_only_groups_with_no_selected_record():
+    frame = _f([
+        {"processid": "P1", "bin_uri": "BOLD:A", "species": "Danaus plexippus",
+         "country.ocean": "France", "quality_score": 9},
+        {"processid": "P2", "bin_uri": "BOLD:A", "species": "Danaus plexippus",
+         "country.ocean": "France", "quality_score": 1},
+        {"processid": "P3", "bin_uri": "BOLD:B", "species": "Danaus chrysippus",
+         "country.ocean": "Kenya", "quality_score": 4},
+    ])
+    existing = {"P2": {"user": "curator"}}
+    chosen = auto_select_best_specimens(frame, existing=existing, fill_gaps=True)
+    assert set(chosen) == {"P2", "P3"}, "P1 must not join the curator's P2"
+    assert chosen["P2"] == {"user": "curator"}
+    assert chosen["P3"]["auto_selected"] is True
+
+    covered = {"P2": {}, "P3": {}}
+    assert auto_select_best_specimens(frame, existing=covered, fill_gaps=True) is covered
