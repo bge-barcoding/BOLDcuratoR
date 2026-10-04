@@ -318,6 +318,12 @@ tag. Leave the tag blank to build on a branch just to test the pipeline
 -- nothing is published then, which is how every packaging fix here was
 checked before merging.
 
+Only tags that contain `python/uv.lock` can be built: the build installs
+from it with `--require-hashes` and makes the SBOM from it. Every tag up to
+v3.5.2 predates the lock, so the workflow's `plan` job refuses them. To
+give users a build with an SBOM, checksums and attestations, publish a new
+release from `main` instead.
+
 Up to V3.3 the workflow fired on a pushed tag matching `v*` instead.
 GitHub's tag filters are case-sensitive, so V3.3's capital `V` never
 matched: it got no executables, and every download button on the website

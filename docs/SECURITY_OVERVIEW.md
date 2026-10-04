@@ -115,9 +115,12 @@ user. `boldcurator remove-shortcut` removes them.
 Releases are built by GitHub Actions from the tagged commit, never on a
 developer's machine. A release is only built if its tagged commit is
 already on `main`, so it has been through the same review as everything
-else there. Workflow code and third-party actions are pinned to
-exact commits, and the pipeline itself is scanned by CodeQL, zizmor and
-OpenSSF Scorecard ([security.yml](../.github/workflows/security.yml),
+else there. Changes reach `main` only through pull requests that pass the
+security scans below, release tags can't be moved once published, and
+every upload to PyPI waits for a maintainer's approval. Workflow code and
+third-party actions are pinned to exact commits, and the pipeline itself
+is scanned by CodeQL, zizmor and OpenSSF Scorecard
+([security.yml](../.github/workflows/security.yml),
 [scorecard.yml](../.github/workflows/scorecard.yml)). The Python code is
 scanned with Bandit and CodeQL.
 

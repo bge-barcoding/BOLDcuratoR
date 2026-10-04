@@ -234,9 +234,12 @@ isn't on the default branch (`git merge-base --is-ancestor`, which every
 existing tag passes). Both also refuse a dispatch input that isn't a plain
 tag name before it reaches `$GITHUB_OUTPUT` or a checkout.
 
-CodeQL can't see that check, so the five alerts stay open. **Dismiss them
-in the Security tab as "False positive"**, citing this section. Building
-the tagged code is what a release workflow is for.
+CodeQL can't see that check, so it keeps raising these alerts. All five
+were **dismissed as "False positive"** in the Security tab on 2026-10-04,
+citing this section. Building the tagged code is what a release workflow is
+for. If a PR that touches these lines (a Dependabot bump of
+`actions/checkout`, for example) raises them again, dismiss them the same
+way.
 
 **OpenSSF Scorecard** only runs on `main`. Its results appear in the
 Security tab, and on the badge, after the first run following the merge.
@@ -275,7 +278,10 @@ Security tab, and on the badge, after the first run following the merge.
   each file's Authenticode status to the run summary.
 
 Releases published before this change have no SBOM, checksums file or
-attestations. To backfill them, run `python-release.yml` with the tag.
+attestations, and can't be given them: every existing tag (v3.5.2 and
+older) predates `python/uv.lock`, and `python-release.yml` refuses a tag
+without one. The first release cut from `main` after this change is the
+first to carry them.
 
 ## Windows code signing
 
@@ -362,32 +368,53 @@ Critical findings (verified in the code):
 
 ## Manual steps for the maintainer
 
+### Done (2026-10-04)
+
+These are repository and account settings, not code, so nothing in the
+repository shows them. They are recorded here so they aren't raised again.
+
+- [x] **Code security settings** (Settings, then Advanced Security): secret
+      scanning, push protection, Dependabot alerts and private
+      vulnerability reporting are on. CodeQL "default setup" is off;
+      `security.yml` is the only CodeQL configuration.
+- [x] **Branch ruleset on `main`:** pull requests required (0 approvals,
+      as there is one maintainer); force pushes and deletion blocked;
+      required status checks `Bandit`, `pip-audit (uv.lock)`,
+      `CodeQL (python)`, `CodeQL (actions)` and
+      `zizmor (GitHub Actions audit)`. The `Python app tests` checks are
+      deliberately **not** required: `python-tests.yml` only runs when
+      `python/` changes, so a required check would never report on other
+      PRs and would block them.
+- [x] **Tag ruleset** on `v*` and `V*`: creating, moving and deleting tags
+      is restricted, with repository admins on the bypass list (needed to
+      publish a release). A released tag can't be moved.
+- [x] **`pypi` environment** (Settings, Environments): a required
+      reviewer, and deployment limited to `v*` tags.
+- [x] **PyPI Trusted Publisher** confirmed: project `boldcurator`,
+      repository `bge-barcoding/BOLDcuratoR`, workflow `python-pypi.yml`,
+      environment `pypi`.
+- [x] **The five CodeQL alerts** on the release workflows were dismissed as
+      false positives (see [Scanner results](#scanner-results-steps-2-and-3)).
+      A Dependabot PR that rewrites those lines can raise them again; dismiss
+      them the same way.
+- [x] **`SECURITY.md`:** contact address and response times filled in.
+
+### Still to do
+
 - [ ] **Revoke the two keys in git history (S1, S2)** with BOLD. Then
       decide whether to purge history.
 - [ ] **Fix or take down R1 and R2 on `shiny.nhm.ac.uk`.** Rotate the
       shared key after R1 is fixed.
-- [ ] PyPI Trusted Publisher: confirm the entry on pypi.org is `boldcurator`,
-      repository `bge-barcoding/BOLDcuratoR`, workflow `python-pypi.yml`,
-      environment `pypi`. This is already in use; nothing changes if it
-      matches.
-- [ ] Protect the `pypi` environment (Settings, Environments): required
-      reviewer, and deployment limited to release tags.
-- [ ] Branch protection on `main`: require PRs and require the `Security`
-      checks (Bandit, pip-audit, CodeQL, zizmor) and `Python app tests` to
-      pass.
-- [ ] A tag ruleset limiting who can create or move `v*` / `V*` tags. The
-      workflows already refuse tags that aren't on `main`; this stops a tag
-      from being moved after release.
-- [ ] Dismiss the five CodeQL alerts on the release workflows as false
-      positives, with the reasoning in "Scanner results" above.
-- [ ] Turn on secret scanning, push protection, Dependabot alerts and
-      **private vulnerability reporting** (Settings, then Code security).
-- [ ] If CodeQL "default setup" is on, switch it off: `security.yml` is the
-      advanced setup, and the two conflict.
+- [ ] **Publish a new release from `main`.** The SBOM, checksums and
+      attestations can't be backfilled onto v3.5.2 or any earlier release:
+      those tags predate `python/uv.lock`, which the build installs from
+      with `--require-hashes` and makes the SBOM from, so the workflow
+      refuses them. A new release is also the first to ship P2, P3 and the
+      corrected update-check DOI. Before tagging, run **Actions, then Build
+      desktop executables, then Run workflow** on `main` with the tag left
+      blank: that builds everything and publishes nothing, which tests the
+      pipeline end to end.
 - [ ] Choose a Windows signing route (above), wire it in, and set the
       repository variable `WINDOWS_SIGNING=enabled`.
 - [ ] Finish the macOS runbook (`python/packaging/MACOS_SIGNING.md`), then
       set `MACOS_SIGNING=enabled`.
-- [ ] Fill in the contact address and response times in `SECURITY.md`.
-- [ ] After merging, run `python-release.yml` with the latest tag to
-      backfill the SBOM, checksums and attestations for the current release.

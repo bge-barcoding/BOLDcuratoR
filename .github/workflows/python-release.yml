@@ -115,6 +115,15 @@ jobs:
             exit 1
           fi
 
+          # The build installs from the tag's python/uv.lock with
+          # --require-hashes, and the SBOM is made from it. Tags from before
+          # the lock existed (v3.5.2 and older) can't be built that way --
+          # fail here, once, rather than in every matrix job.
+          if ! git cat-file -e "refs/tags/$tag^{commit}:python/uv.lock" 2>/dev/null; then
+            echo "::error::Tag '$tag' predates python/uv.lock, so it can't be rebuilt with hashed installs and an SBOM -- publish a new release from $DEFAULT_BRANCH instead"
+            exit 1
+          fi
+
           out tag "$tag"
           out ref "refs/tags/$tag"
           echo "**$tag**: building." >> "$GITHUB_STEP_SUMMARY"
