@@ -32,8 +32,7 @@ Report it privately through GitHub instead:
 (the repository's *Security* tab, then *Report a vulnerability*). Only the
 maintainers can see the report, and you can follow it there.
 
-If you cannot use GitHub, email: `<<MAINTAINER: add a monitored security
-contact address here>>`.
+If you cannot use GitHub, email: `b.price [at] nhm.ac.uk`.
 
 Please include:
 
@@ -45,8 +44,8 @@ Please include:
 
 ## What happens next
 
-- **Acknowledgement:** within `<<MAINTAINER: e.g. 5 working days>>`.
-- **First assessment:** within `<<MAINTAINER: e.g. 10 working days>>`.
+- **Acknowledgement:** within 5 working days.
+- **First assessment:** within 10 working days.
 - **Fix or mitigation:** timing depends on severity. We will agree a
   disclosure date with you and credit you in the advisory unless you would
   rather not be named.
