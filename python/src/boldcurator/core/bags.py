@@ -13,6 +13,16 @@ evaluated against every record in the snapshot.  That is a scientific
 improvement rather than a speedup, and it means grade E will not match the
 Shiny app's; ``shared_bin_scope`` records which was used.
 
+**What makes a BIN discordant (grade E) is wider than R's, too.**  A BIN is
+discordant when it holds two different species-level names -- an interim
+species name (``Danaus cf. plexippus``, ``Danaus sp. 1``, see
+``core.species.name_status``) counts as a name of its own, strictly, so
+*D. plexippus* and *D. cf. plexippus* sharing a BIN make it E -- **or**
+records from more than one genus, family or order, whatever rank they were
+identified to (:func:`taxonomic_conflict_bins`). A record identified only to
+the BIN's own genus disagrees with nothing and changes no grade. Interim
+species are graded A-E like any species.
+
 **A BIN-less record is excluded entirely (round 7), unlike R.**  R's own
 ``calculate_bags_grade`` counts every species-level record toward
 ``specimen_count`` whether or not it has a BIN yet.  This port matched
@@ -32,7 +42,13 @@ import numpy as np
 import pandas as pd
 
 from .frames import distinct_by_group, reindex_counts, reindex_joined
-from .species import column_or_missing, is_empty, is_species_level, to_text
+from .species import (
+    column_or_missing,
+    is_empty,
+    is_empty_text,
+    is_species_level,
+    to_text,
+)
 
 GRADES = ("A", "B", "C", "D", "E")
 
@@ -73,7 +89,8 @@ def shared_bins(
     species_column: str = "species",
     bin_column: str = "bin_uri",
 ) -> set[str]:
-    """BINs holding more than one distinct species-level name.
+    """BINs holding more than one distinct species-level name (interim names
+    included, each as written).
 
     Works for both the local frame and the snapshot's ``bin_species`` table --
     the same species-level rule applies to each.
@@ -93,6 +110,47 @@ def shared_bins(
         .size()
     )
     return set(counts[counts > 1].index)
+
+
+#: Ranks compared, lowest first, for records of different taxa in one BIN.
+CONFLICT_RANKS = ("genus", "family", "order")
+
+
+def taxonomic_conflict_bins(frame: pd.DataFrame) -> set[str]:
+    """BINs holding records from more than one genus, family or order.
+
+    Every record with a BIN counts, whatever rank it was identified to: a
+    record identified only as *Pieris* in a *Danaus plexippus* BIN disagrees
+    with it at genus level. A blank rank is not a disagreement.
+
+    Evaluated over ``frame`` only. A search expands to every record of each
+    BIN it touches (``data.queries.plan_search``), so for a search result that
+    is already the BIN's whole membership in the snapshot.
+    """
+    if frame is None or len(frame) == 0:
+        return set()
+    bins = to_text(column_or_missing(frame, "bin_uri")).str.strip()
+    has_bin = bins != ""
+    out: set[str] = set()
+    for rank in CONFLICT_RANKS:
+        if rank not in frame.columns:
+            continue
+        values = to_text(frame[rank]).str.strip()
+        keep = has_bin & ~is_empty_text(values)
+        counts = (pd.DataFrame({"bin": bins[keep], "value": values[keep]})
+                  .drop_duplicates().groupby("bin").size())
+        out |= set(counts[counts > 1].index)
+    return out
+
+
+def discordant_bins(frame: pd.DataFrame,
+                    bin_species: pd.DataFrame | None = None) -> set[str]:
+    """The BINs that make a species grade E: shared by two species-level names
+    (:func:`shared_bins`, snapshot-wide when ``bin_species`` is given), or
+    holding more than one genus, family or order
+    (:func:`taxonomic_conflict_bins`)."""
+    shared = shared_bins(bin_species if bin_species is not None else frame)
+    return shared | taxonomic_conflict_bins(frame)
 
 
 def calculate_bags_grades(
@@ -137,7 +195,7 @@ def calculate_bags_grades(
         return empty
 
     scope = "snapshot" if bin_species is not None else "local"
-    shared = shared_bins(bin_species if bin_species is not None else eligible)
+    shared = discordant_bins(specimens, bin_species)
 
     # Vectorised for the same reason BIN analysis is: the loop this replaces
     # ran once per species, and a family-sized result holds thousands.

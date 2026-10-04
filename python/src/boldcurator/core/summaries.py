@@ -8,8 +8,10 @@ screens built on this carry a size cap and the specimen table does not.
 ``build_species_checklist`` is ``build_species_checklist``
 (``mod_species_analysis_utils.R:8-47``) with two changes.  It is vectorised --
 R rebuilds a one-row data frame per species and ``rbind``s them, which is
-O(species) allocations -- and the species rule is the unified one, so names R
-would have kept (``Danaus sp.``) are not counted as species here.
+O(species) allocations -- and "species" means a species-level name
+(``core.species.name_status``): resolved names, and interim species names
+recorded at species rank, which get a row (and a grade) of their own and say
+which they are in ``name_status``. Genus-rank records are not species.
 """
 
 from __future__ import annotations
@@ -17,10 +19,16 @@ from __future__ import annotations
 import pandas as pd
 
 from .frames import distinct_by_group, reindex_counts, reindex_joined
-from .species import column_or_missing, to_text
+from .species import (
+    NAME_INTERIM,
+    NAME_SPECIES,
+    column_or_missing,
+    is_species_level,
+    to_text,
+)
 
 CHECKLIST_COLUMNS = [
-    "species", "specimen_count", "bin_count", "bin_uris",
+    "species", "name_status", "specimen_count", "bin_count", "bin_uris",
     "bags_grade", "countries", "mean_quality_score",
 ]
 
@@ -42,11 +50,16 @@ def build_species_checklist(
         return pd.DataFrame(columns=CHECKLIST_COLUMNS)
 
     species = to_text(column_or_missing(specimens, "species")).str.strip()
-    keep = (species != "").to_numpy()
+    level = is_species_level(specimens)
+    keep = ((species != "") & level).to_numpy()
     frame = specimens[keep]
     if len(frame) == 0:
         return pd.DataFrame(columns=CHECKLIST_COLUMNS)
     key = species[keep]
+    # One name is one status (the species rule reads only the name), but a
+    # name's records can disagree on rank; any interim record makes it interim.
+    interim = (frame.get("name_status", pd.Series(NAME_SPECIES, index=frame.index))
+               == NAME_INTERIM)
 
     counts = key.groupby(key, sort=True).size()
     index = counts.index
@@ -67,6 +80,9 @@ def build_species_checklist(
     return pd.DataFrame(
         {
             "species": index.to_numpy(),
+            "name_status": [NAME_INTERIM if i else NAME_SPECIES for i in
+                            interim.groupby(key.to_numpy(), sort=True).any()
+                            .reindex(index).fillna(False)],
             "specimen_count": counts.to_numpy(),
             "bin_count": reindex_counts(per_bin, index).to_numpy(),
             "bin_uris": reindex_joined(per_bin, index).to_numpy(),
@@ -121,7 +137,7 @@ def gap_analysis(
         )
 
     species = to_text(column_or_missing(specimens, "species")).str.strip()
-    named = species[species != ""]
+    named = species[(species != "") & is_species_level(specimens)]
     lowered = named.str.lower()
 
     counts = lowered.value_counts()

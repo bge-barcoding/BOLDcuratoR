@@ -44,11 +44,12 @@ from ..config.constants import (
 from ..core.grouping import (
     GRADE_DESCRIPTIONS,
     GRADES,
-    INTERIM,
-    INTERIM_DESCRIPTION,
+    UNNAMED,
+    UNNAMED_DESCRIPTION,
     PRIORITY_GRADES,
     SPECIES_GRADES,
 )
+from ..core.species import SPECIES_LEVEL_STATUSES
 from ..core.table import DEFAULT_PAGE_SIZE
 from ..data.snapshot import SnapshotError, SnapshotStore
 from ..io import exports as export_io
@@ -67,7 +68,7 @@ from .format import (
     GRADE_COLOURS,
     GROUP_COLUMNS,
     GROUP_LABELS,
-    INTERIM_COLOUR,
+    UNNAMED_COLOUR,
     bold_bin_url,
     bold_record_url,
     bold_species_url,
@@ -321,24 +322,32 @@ def _grade_panel(grade: str) -> ui.Tag:
 
 
 #: Every screen built from ``core.grouping`` groups: the five BAGS grades,
-#: then the interim-name BINs that no grade covers.
-GROUP_SCREENS = (*GRADES, INTERIM)
+#: then the BINs with no species-level name, which no grade covers.
+GROUP_SCREENS = (*GRADES, UNNAMED)
 
 
-def _interim_panel() -> ui.Tag:
-    """The interim-name BINs screen. Same body as a grade's
-    (``grade_U_body``), but labelled as what it is: not a BAGS grade."""
+def _unnamed_panel() -> ui.Tag:
+    """The unnamed-BINs screen. Same body as a grade's (``grade_U_body``),
+    but labelled as what it is: not a BAGS grade."""
     return ui.nav_panel(
-        "Interim names",
+        "Unnamed BINs",
         ui.div(
-            ui.tags.strong("Interim-name BINs"),
-            ui.tags.span(f" — {INTERIM_DESCRIPTION}", style="opacity:.9;"),
-            style=f"background:{INTERIM_COLOUR};color:#fff;padding:8px 14px;"
+            ui.tags.strong("Unnamed BINs"),
+            ui.tags.span(f" — {UNNAMED_DESCRIPTION}", style="opacity:.9;"),
+            style=f"background:{UNNAMED_COLOUR};color:#fff;padding:8px 14px;"
                   "border-radius:5px;margin-bottom:10px;",
         ),
-        ui.div(ui.output_ui(f"grade_{INTERIM}_body"), class_="bc-fill-output"),
-        value=f"grade_{INTERIM}",
+        ui.div(ui.output_ui(f"grade_{UNNAMED}_body"), class_="bc-fill-output"),
+        value=f"grade_{UNNAMED}",
     )
+
+
+def _unnamed_counts(groups) -> list[tuple[int, str, str]]:
+    """``(count, label, colour)`` for the Species tab's two unnamed-BIN boxes,
+    discordant in grade E's red and concordant in the screen's own colour."""
+    discordant = sum(1 for g in groups if g.discordant)
+    return [(discordant, "discordant", GRADE_COLOURS["E"]),
+            (len(groups) - discordant, "concordant", UNNAMED_COLOUR)]
 
 
 def _banner_text(warning: str) -> str:
@@ -796,7 +805,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                         ui.div(ui.output_ui("bins_body"), class_="bc-fill-output"),
                         value="bins"),
             *[_grade_panel(g) for g in GRADES],
-            _interim_panel(),
+            _unnamed_panel(),
             ui.nav_panel("Phylogeny",
                         ui.div(ui.output_ui("phylogeny_body"), class_="bc-fill-output"),
                         value="phylogeny"),
@@ -1581,8 +1590,9 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     ui.div(
                         *[value_box(f"{counts.get(g, 0):,}", f"Grade {g}",
                                     GRADE_COLOURS[g]) for g in GRADES],
-                        value_box(f"{len(search.groups(store, INTERIM)):,}",
-                                  "Interim-name BINs", INTERIM_COLOUR),
+                        *[value_box(f"{n:,}", f"Unnamed BINs, {label}", colour)
+                          for n, label, colour in _unnamed_counts(
+                              search.groups(store, UNNAMED))],
                         style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap;",
                     ),
                     ui.download_button("dl_species_analysis",
@@ -1627,8 +1637,8 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 groups = search.groups(store, grade)
                 if not groups:
                     return ui.div(
-                        "No BINs named only with interim names in this result."
-                        if grade == INTERIM else
+                        "No BINs without a species-level name in this result."
+                        if grade == UNNAMED else
                         f"No species graded {grade} in this result.",
                         class_="text-muted")
                 index = min(group_index[grade].get(), len(groups) - 1)
@@ -2101,9 +2111,14 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             lookup = search.grade_lookup()
             if lookup:
                 rows = rows.copy()
+                # Only a species-level record carries its name's grade: a
+                # genus-rank "Danaus sp." is not the interim species
+                # "Danaus sp." (core.species.name_status).
+                level = rows["name_status"].isin(SPECIES_LEVEL_STATUSES) \
+                    if "name_status" in rows.columns else [True] * len(rows)
                 rows["bags_grade"] = [
-                    lookup.get(s, "") if isinstance(s, str) else ""
-                    for s in rows["species"].astype(object)
+                    lookup.get(s, "") if isinstance(s, str) and ok else ""
+                    for s, ok in zip(rows["species"].astype(object), level)
                 ]
 
             sort_label = (

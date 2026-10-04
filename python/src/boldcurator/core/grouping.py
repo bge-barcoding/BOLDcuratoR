@@ -25,11 +25,15 @@ Ported from ``organize_grade_specimens`` (``mod_bags_grading_utils.R:32-149``)
 and the filter at ``mod_bags_grading_server.R:54-87``, with the unified species
 rule (``core.species``) in place of R's five.
 
-**Interim-name BINs (screen ``INTERIM``, not a BAGS grade).**  Riding along
-needs a graded BIN to ride in. A BIN whose records carry only interim names
-(``Danaus cf. plexippus``, ``Danaus sp. 1``) and no species-level name has
-no grade, so it appeared on no BAGS screen at all. :func:`interim_bin_groups`
-gives each such BIN its own group so it can be curated like the rest.
+**What counts as a species here** is ``core.species.name_status``: a resolved
+name, or an interim species name (``Danaus cf. plexippus``, ``Danaus sp. 1``)
+recorded at species rank, which is graded as a species of its own. Records
+identified to genus or higher ride along.
+
+**Unnamed BINs (screen ``UNNAMED``, not a BAGS grade).**  Riding along needs
+a graded BIN to ride in, so a BIN with no species-level record at all
+appeared on no BAGS screen. :func:`unnamed_bin_groups` gives each its own
+group, discordant ones (more than one genus, family or order) first.
 """
 
 from __future__ import annotations
@@ -39,26 +43,25 @@ from typing import Callable
 
 import pandas as pd
 
-from .bags import shared_bins as compute_shared_bins
+from .bags import CONFLICT_RANKS, discordant_bins
 from .species import (
     column_or_missing,
-    is_binomial,
+    is_empty_text,
     is_species_level,
-    is_valid_species_name,
     to_text,
 )
 
 GRADES = ("A", "B", "C", "D", "E")
 
-#: The screen key for interim-name BINs. Shares the grade screens' machinery
+#: The screen key for unnamed BINs. Shares the grade screens' machinery
 #: (``group_specimens``, the app's group navigator) but is not a BAGS grade,
 #: so it is deliberately not in ``GRADES``.
-INTERIM = "U"
+UNNAMED = "U"
 
-INTERIM_DESCRIPTION = ("BINs named only with interim names (cf., aff., sp. "
-                       "...), so no BAGS grade covers them")
+UNNAMED_DESCRIPTION = ("BINs with no species-level name (every record "
+                       "identified to genus or higher), discordant ones first")
 
-#: How many distinct interim names an interim-BIN caption lists before
+#: How many distinct identifications an unnamed-BIN caption lists before
 #: summarising the rest as "+N more".
 _CAPTION_NAMES = 3
 
@@ -98,8 +101,12 @@ class SpecimenGroup:
     species: tuple[str, ...] = ()
     bins: tuple[str, ...] = ()
     #: Set when the grade says this BIN is shared but the sharing species is
-    #: not in this search's results, so the group looks innocent on screen.
+    #: not in this search's results, so the group looks innocent on screen,
+    #: or to name the genera (families, orders) a discordant BIN mixes.
     note: str = ""
+    #: An unnamed BIN whose records come from more than one genus, family or
+    #: order. (Grade E groups are discordant by definition and leave it unset.)
+    discordant: bool = False
 
     @property
     def specimen_count(self) -> int:
@@ -167,8 +174,8 @@ def group_specimens(specimens: pd.DataFrame, grades: pd.DataFrame,
     ``shared_bins`` and ``fetch_bin`` matter only for grade E -- see
     :func:`_shared_bin_groups`.
     """
-    if grade == INTERIM:
-        return interim_bin_groups(specimens)
+    if grade == UNNAMED:
+        return unnamed_bin_groups(specimens)
     if grade not in GRADES:
         raise ValueError(f"Unknown BAGS grade {grade!r}; expected one of {GRADES}")
 
@@ -200,26 +207,48 @@ def _sorted(frame: pd.DataFrame) -> pd.DataFrame:
     return frame.loc[order.index].reset_index(drop=True)
 
 
-def has_interim_name(frame: pd.DataFrame) -> pd.Series:
-    """Records identified with an interim species name.
-
-    The ``identification`` (BOLD's name at the record's lowest rank, which
-    ``core.pipeline.process_specimen_data`` leaves alone when it blanks an
-    invalid ``species``) is binomial-shaped but fails the species rule:
-    ``Danaus cf. plexippus``, ``Danaus sp. 1``, ``Danaus sp.``. A plain genus
-    (``Danaus``) is not an interim name.
-    """
-    ident = column_or_missing(frame, "identification")
-    return (is_binomial(ident) & ~is_valid_species_name(ident)).fillna(False)
+_RANK_PLURALS = {"genus": "genera", "family": "families", "order": "orders"}
 
 
-def interim_bin_groups(specimens: pd.DataFrame) -> list[SpecimenGroup]:
-    """One group per BIN that holds an interim-named record and no
-    species-level record, with every record of that BIN in the result.
+def rank_conflicts(frame: pd.DataFrame) -> dict[str, list[str]]:
+    """``rank -> distinct values`` for each of genus, family and order that has
+    more than one value among ``frame``'s records -- the per-group view of
+    ``core.bags.taxonomic_conflict_bins``."""
+    out: dict[str, list[str]] = {}
+    for rank in CONFLICT_RANKS:
+        values = _text(frame, rank)
+        distinct = sorted({v for v, empty in zip(values, is_empty_text(values))
+                           if not empty})
+        if len(distinct) > 1:
+            out[rank] = distinct
+    return out
 
-    A BIN with any species-level record is left out: that species is graded,
-    so the BIN is already on a BAGS screen with its interim records riding
-    along.
+
+def conflict_note(conflicts: dict[str, list[str]]) -> str:
+    """"records from more than one genus: Danaus, Pieris" -- the lowest
+    conflicting rank, which is the most specific thing to say."""
+    rank, values = next(iter(conflicts.items()))
+    return f"records from more than one {rank}: {', '.join(values)}"
+
+
+def conflict_counts(n_species: int, conflicts: dict[str, list[str]]) -> str:
+    """"2 species" or "1 species, 2 genera" for a caption."""
+    text = f"{n_species} species"
+    if conflicts:
+        rank, values = next(iter(conflicts.items()))
+        text += f", {len(values)} {_RANK_PLURALS[rank]}"
+    return text
+
+
+def unnamed_bin_groups(specimens: pd.DataFrame) -> list[SpecimenGroup]:
+    """One group per BIN with no species-level record -- every record in it is
+    identified to genus or higher (``core.species.NAME_HIGHER``) -- with all
+    of that BIN's records.
+
+    Discordant BINs (records from more than one genus, family or order) come
+    first, then concordant ones, each in BIN order. A BIN with any
+    species-level record is left out: that name is graded, so the BIN is on a
+    BAGS screen already, discordant ones on grade E.
     """
     if specimens is None or len(specimens) == 0:
         return []
@@ -227,27 +256,30 @@ def interim_bin_groups(specimens: pd.DataFrame) -> list[SpecimenGroup]:
     bins = _text(frame, "bin_uri")
     has_bin = bins != ""
     level = pd.Series(is_species_level(frame).to_numpy(), index=frame.index)
-    interim = pd.Series(has_interim_name(frame).to_numpy(), index=frame.index)
-
-    wanted = set(bins[interim & has_bin]) - set(bins[level & has_bin])
+    wanted = set(bins[has_bin]) - set(bins[level & has_bin])
     if not wanted:
         return []
+
     ident = _text(frame, "identification")
     in_wanted = bins.isin(wanted)
-
-    groups: list[SpecimenGroup] = []
+    discordant, concordant = [], []
     for bin_uri, members in frame[in_wanted].groupby(bins[in_wanted], sort=True):
-        names = sorted(set(ident[members.index][interim[members.index]]))
-        shown = ", ".join(names[:_CAPTION_NAMES])
+        conflicts = rank_conflicts(members)
+        names = sorted(set(ident[members.index]) - {""})
+        shown = ", ".join(names[:_CAPTION_NAMES]) or "unidentified"
         if len(names) > _CAPTION_NAMES:
             shown += f" +{len(names) - _CAPTION_NAMES} more"
-        groups.append(SpecimenGroup(
-            key=f"{INTERIM}|{bin_uri}",
-            caption=f"BIN: {bin_uri} — {shown}",
+        status = "Discordant" if conflicts else "Concordant"
+        group = SpecimenGroup(
+            key=f"{UNNAMED}|{bin_uri}",
+            caption=f"{status} BIN: {bin_uri} — {shown}",
             specimens=_sorted(members),
             bins=(bin_uri,),
-        ))
-    return groups
+            note=conflict_note(conflicts) if conflicts else "",
+            discordant=bool(conflicts),
+        )
+        (discordant if conflicts else concordant).append(group)
+    return discordant + concordant
 
 
 def _species_groups(frame, species, bins, named, grade) -> list[SpecimenGroup]:
@@ -306,7 +338,7 @@ def _shared_bin_groups(frame, species, bins, named, grades, *,
     behind a note.
     """
     if shared_bins is None:
-        shared_bins = compute_shared_bins(frame)
+        shared_bins = discordant_bins(frame)
     shared_bins = set(shared_bins)
 
     groups: list[SpecimenGroup] = []
@@ -316,7 +348,8 @@ def _shared_bin_groups(frame, species, bins, named, grades, *,
         note = ""
 
         local_names = set(species[in_bin & named]) - {""}
-        if len(local_names) < 2 and fetch_bin is not None:
+        if (len(local_names) < 2 and not rank_conflicts(members)
+                and fetch_bin is not None):
             extra = fetch_bin(bin_uri)
             if extra is not None and len(extra) and "processid" in members.columns:
                 known = set(_text(members, "processid"))
@@ -332,11 +365,16 @@ def _shared_bin_groups(frame, species, bins, named, grades, *,
                                  index=members.index)
         names = tuple(sorted(set(member_species[member_level & (member_species != "")])
                              - {""}))
-        if len(names) < 2 and not note:
+        conflicts = rank_conflicts(members)
+        outside = bool(note)
+        if len(names) < 2 and not conflicts and not note:
+            outside = True
             note = ("shared with a species outside this search — BAGS grades "
                     "sharing against the whole snapshot, not just these records")
-        label = (f"Shared BIN: {bin_uri} ({len(names)} species"
-                 f"{' here' if note else ''})")
+        if conflicts:
+            note = "; ".join(filter(None, [note, conflict_note(conflicts)]))
+        label = (f"Shared BIN: {bin_uri} ({conflict_counts(len(names), conflicts)}"
+                 f"{' here' if outside else ''})")
         groups.append(SpecimenGroup(
             key=f"E|{bin_uri}",
             caption=label,

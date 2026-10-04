@@ -17,10 +17,12 @@ The R reference runs with `has_image = FALSE` on every record, so R's 16th crite
 | Divergence | Differences |
 |---|---|
 | `BIN_LESS_EXCLUDED_FROM_BAGS` | 2 |
-| `CF_AFF_CONCORDANCE` | 2 |
+| `INTERIM_SPECIES_GRADED` | 12 |
 | `RANK2_IMAGE_REMOVED` | 5 |
+| `RANK_DECIDES_SPECIES_LEVEL` | 2 |
 | `R_ROW_ERROR_ZEROES_SCORE` | 3 |
-| `UNIFIED_SPECIES_RULE` | 8 |
+| `SPECIES_KEPT_VERBATIM` | 5 |
+| `UNIFIED_SPECIES_RULE` | 1 |
 
 ## BIN_LESS_EXCLUDED_FROM_BAGS
 
@@ -31,14 +33,24 @@ Round 7: a species-level record with no BIN assigned yet is deliberately exclude
 | bags | `Bagsus nobin` | presence | `True` | `False` |  |
 | bags | `Danaus plexippus` | specimen_count | `44` | `15` |  |
 
-## CF_AFF_CONCORDANCE
+## INTERIM_SPECIES_GRADED
 
-BIN concordance differs on a BIN holding a cf./aff. record. R's check_taxonomic_concordance (bin_analysis_utils.R:63-70) builds the pattern 'cf\.|aff\.<Reference>', which by alternation precedence means 'contains cf.' OR 'contains aff.<Reference>' -- so any cf. record passes regardless of the reference species. Under the unified rule such records are simply not species-level.
+An interim species name recorded at species rank (Genus cf. species, Genus sp. 1) is a species-level name here: it gets a BAGS grade of its own, and it makes a BIN it shares with any other species-level name discordant (grade E), strictly -- D. cf. plexippus beside D. plexippus counts as two names. R blanks such names, so it neither grades them nor lets them make a BIN shared. The project owner's decision.
 
 | Aspect | Key | Field | R | Python | Fixture case |
 |---|---|---|---|---|---|
-| bins | `BOLD:AAA0900` | unique_species | `5` | `2` |  |
-| bins | `BOLD:AAA0900` | species_list | `Apis nr mellifera; Danaus plexippus; NA; None; Pieris rapae` | `Danaus plexippus; Pieris rapae` |  |
+| bags | `Concordus cf. gamma` | presence | `False` | `True` |  |
+| bags | `Concordus gamma` | bags_grade | `D` | `E` |  |
+| bags | `Concordus gamma` | shared_bins | `FALSE` | `TRUE` |  |
+| bags | `Danaus aff. plexippus` | presence | `False` | `True` |  |
+| bags | `Danaus cf. plexippus` | presence | `False` | `True` |  |
+| bags | `Danaus spp.` | presence | `False` | `True` |  |
+| bags | `Vanessa atalanta 2` | presence | `False` | `True` |  |
+| bins | `BOLD:AAA0900` | unique_species | `5` | `8` |  |
+| bins | `BOLD:AAA0900` | species_list | `Apis nr mellifera; Danaus plexippus; NA; None; Pieris rapae` | `Apis nr mellifera; Danaus aff. plexippus; Danaus cf. plexippus; Danaus plexippus; Danaus sp.; Danaus spp.; Pieris rapae; Vanessa atalanta 2` |  |
+| bins | `BOLD:CON0002` | unique_species | `1` | `2` |  |
+| bins | `BOLD:CON0002` | species_list | `Concordus gamma` | `Concordus cf. gamma; Concordus gamma` |  |
+| bins | `BOLD:CON0002` | concordance | `Concordant` | `Discordant` |  |
 
 ## RANK2_IMAGE_REMOVED
 
@@ -52,6 +64,15 @@ R gives rank 3 where Python gives rank 2. R's RANK_2 requires HAS_IMAGE (constan
 | specimen | `PAR0050` | rank | `3` | `2` | rank:2 via the coord alternative |
 | specimen | `PAR0108` | rank | `3` | `2` | select:higher score wins outright |
 
+## RANK_DECIDES_SPECIES_LEVEL
+
+A valid binomial whose identification_rank is not species or subspecies is not a species-level name here, anywhere. R's grade tabs already respect the rank, but its BIN species list (bin_analysis_utils.R:114) ignores it, so R lists the name as a species of the BIN.
+
+| Aspect | Key | Field | R | Python | Fixture case |
+|---|---|---|---|---|---|
+| bins | `BOLD:BAGG001` | unique_species | `1` | `0` |  |
+| bins | `BOLD:BAGG001` | species_list | `Bagsus genusonly` | `` |  |
+
 ## R_ROW_ERROR_ZEROES_SCORE
 
 R discards the whole row's score when any criterion raises. An unparseable nuc_basecount makes as.numeric() return NA, and check_sequence_quality (specimen_scorer.R:186) then evaluates `if (NA >= 500)`, which throws 'missing value where TRUE/FALSE needed'. The per-row tryCatch at specimen_scorer.R:43-51 catches it and sets quality_score to 0 with an empty criteria_met -- so a perfectly good SPECIES_ID is thrown away too. Python coerces to NaN, fails only SEQ_QUALITY, and keeps the rest. Verified directly against the R scorer. In practice the snapshot builder TRY_CASTs nuc_basecount to BIGINT, so an unparseable value reaches the app as NULL and neither implementation sees this case.
@@ -62,17 +83,22 @@ R discards the whole row's score when any criterion raises. An unparseable nuc_b
 | specimen | `PAR0019` | criteria_met | `` | `SPECIES_ID` | seq_quality:unparseable basecount |
 | specimen | `PAR0019` | rank | `7` | `6` | seq_quality:unparseable basecount |
 
+## SPECIES_KEPT_VERBATIM
+
+R blanks a species name its rule rejects (mod_data_import_utils.R:180), so the original value is lost from every screen and export. Python keeps the species field exactly as BOLD has it and records what kind of name it is in name_status (core.species.name_status) -- the project owner's decision. Only the missing tokens (blank, 'None', 'NA') are blanked.
+
+| Aspect | Key | Field | R | Python | Fixture case |
+|---|---|---|---|---|---|
+| specimen | `PAR0003` | species | `` | `Danaus spp.` | species:both reject: spp\. is unanchored in R |
+| specimen | `PAR0004` | species | `` | `Danaus cf. plexippus` | species:both reject |
+| specimen | `PAR0005` | species | `` | `Danaus aff. plexippus` | species:both reject |
+| specimen | `PAR0007` | species | `` | `Vanessa atalanta 2` | species:both reject: digit |
+| specimen | `PAR0113` | species | `` | `Concordus cf. gamma` | bins:a cf. record beside it -- R's alternation lets any cf. pass |
+
 ## UNIFIED_SPECIES_RULE
 
 R keeps a species name that the unified rule rejects. R's destructive pass (mod_data_import_utils.R:180) anchors the pattern as ^sp\. so 'Danaus sp.' survives it, omits ' nr ', and tests only == "" for emptiness so the literals 'None' and 'NA' survive as species names. The rule here is also wider than any of R's: interim names without a full stop (cf, aff, sp), nr., gr., agg., complex, indet. and ? are rejected, and ssp. is no longer mistaken for sp. Everything downstream of the name follows: SPECIES_ID, quality_score, rank, BAGS eligibility and auto-selection candidacy.
 
 | Aspect | Key | Field | R | Python | Fixture case |
 |---|---|---|---|---|---|
-| specimen | `PAR0002` | species | `Danaus sp.` | `` | species:R keeps it: its destructive pattern anchors ^sp\. |
-| specimen | `PAR0006` | species | `Apis nr mellifera` | `` | species:R keeps it: ' nr ' is absent from R's pattern |
 | specimen | `PAR0010` | species | `NA` | `` | species:R keeps the literal 'NA'; Python treats it as missing |
-| specimen | `PAR0055` | species | `Danaus sp.` | `` | rank:7 - nothing |
-| specimen | `PAR0114` | species | `Genusone sp.` | `` | bins:no valid species, two genera -> discordant |
-| specimen | `PAR0115` | species | `Genustwo sp.` | `` | bins:no valid species, two genera -> discordant |
-| bags | `Apis nr mellifera` | presence | `True` | `False` |  |
-| bags | `Danaus sp.` | presence | `True` | `False` |  |

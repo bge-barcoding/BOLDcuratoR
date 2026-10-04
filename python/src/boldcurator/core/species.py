@@ -165,41 +165,116 @@ def is_binomial(values: pd.Series) -> pd.Series:
     return matches(values, _BINOMIAL_RE)
 
 
+#: ``name_status`` values -- what kind of name a record's ``species`` field is.
+#: Resolved species name, at species (or subspecies) rank where the rank is
+#: known.
+NAME_SPECIES = "species"
+#: A species-rank identification whose name fails the species rule:
+#: ``Danaus cf. plexippus``, ``Danaus sp. 1``, a bare ``Danaus sp.``.
+NAME_INTERIM = "interim species"
+#: Identified above species: a genus- or family-rank record, a one-word name,
+#: or an invalid name whose rank is not species (or not recorded).
+NAME_HIGHER = "higher rank"
+#: No name at any rank.
+NAME_NONE = "unidentified"
+
+#: The statuses that count as a species: each gets its own BAGS grade, and two
+#: different ones in a BIN make it discordant (grade E).
+SPECIES_LEVEL_STATUSES = frozenset({NAME_SPECIES, NAME_INTERIM})
+
+#: Columns any one of which, holding a value, makes a record identified at
+#: some rank even with an empty ``species``.
+_HIGHER_RANK_COLUMNS = ("identification", "genus", "subfamily", "family",
+                        "order", "class", "phylum")
+
+
+def name_status(
+    frame: pd.DataFrame,
+    *,
+    species_column: str = "species",
+    rank_column: str = "identification_rank",
+) -> pd.Series:
+    """What kind of name each record carries -- see the ``NAME_*`` values.
+
+    The ``species`` field is read as BOLD has it, so this is where an interim
+    name recorded at species rank is told apart from a genus-level record
+    written as ``Genus sp.``: BOLD's ``identification_rank`` decides.
+
+    ==========================================  ============================
+    ``species`` / ``identification_rank``       status
+    ==========================================  ============================
+    empty                                       higher rank (unidentified if
+                                                no taxonomy at all)
+    any name, rank present and not species      higher rank
+    one word (``Danaus``)                       higher rank
+    binomial passing the species rule           species
+    binomial failing it, species rank           interim species
+    binomial failing it, rank not recorded      higher rank
+    ==========================================  ============================
+
+    A species or subspecies rank counts as species rank. A missing rank is
+    not evidence against a valid name (a snapshot without the column still
+    grades), but an interim name needs BOLD to say it is a species-rank
+    identification before it is treated as one.
+    """
+    name = to_text(column_or_missing(frame, species_column)).str.strip()
+    named = ~is_empty_text(name)
+    binomial = matches_text(name, _BINOMIAL_RE, named)
+    valid = named & ~matches_text(name, _INVALID_SPECIES_RE, named)
+    if rank_column in frame.columns:
+        rank = to_text(frame[rank_column]).str.strip().str.lower()
+        rank_known = ~is_empty_text(rank)
+        species_rank = rank_known & rank.isin(SPECIES_LEVEL_RANKS)
+    else:
+        rank_known = species_rank = pd.Series(False, index=frame.index)
+
+    identified = named.copy()
+    for column in _HIGHER_RANK_COLUMNS:
+        if column in frame.columns:
+            identified |= ~is_empty(frame[column])
+
+    status = np.select(
+        [~named.to_numpy(),
+         (rank_known & ~species_rank).to_numpy(),
+         ~binomial.to_numpy(),
+         valid.to_numpy(),
+         species_rank.to_numpy()],
+        [np.where(identified.to_numpy(), NAME_HIGHER, NAME_NONE),
+         NAME_HIGHER, NAME_HIGHER, NAME_SPECIES, NAME_INTERIM],
+        default=NAME_HIGHER,
+    )
+    return pd.Series(status, index=frame.index, dtype=object)
+
+
 def is_species_level(
     frame: pd.DataFrame,
     *,
     species_column: str = "species",
     rank_column: str = "identification_rank",
 ) -> pd.Series:
-    """Rows usable as a species-level identification.
+    """Rows whose name counts as a species: a resolved species or an interim
+    species (see :func:`name_status`).
 
-    Requires a valid binomial species name and, **where the column exists**, an
-    ``identification_rank`` of species or subspecies.  R tolerates the column's
-    absence in ``calculate_bags_grade`` but requires it in the grade tabs; the
-    tolerant reading is used here so a snapshot without the column still grades.
+    Uses the frame's own ``name_status`` column when it has one (every frame
+    that has been through ``core.pipeline.process_specimen_data``), so the
+    classification is computed once per record.
     """
-    species = column_or_missing(frame, species_column)
-    ok = is_valid_species_name(species) & is_binomial(species)
-    if rank_column in frame.columns:
-        rank = to_text(frame[rank_column]).str.strip().str.lower()
-        # A missing rank is not evidence against; only a present, non-species
-        # rank disqualifies.
-        present = ~is_empty(frame[rank_column])
-        ok = ok & (~present | rank.isin(SPECIES_LEVEL_RANKS))
-    return ok
+    if species_column == "species" and "name_status" in frame.columns:
+        return frame["name_status"].isin(SPECIES_LEVEL_STATUSES)
+    return name_status(frame, species_column=species_column,
+                       rank_column=rank_column).isin(SPECIES_LEVEL_STATUSES)
 
 
 def normalise_species(values: pd.Series) -> pd.Series:
-    """Trim, and blank out invalid names -- R's destructive pass, unified.
+    """Trim, and turn the missing tokens (``None``, ``NA``, blank) into NA.
 
-    ``process_specimen_data`` (``mod_data_import_utils.R:152-214``) does this to
-    ``species`` before anything downstream sees it, so an invalid name cannot be
-    counted as a species by BAGS or by auto-selection.
+    **Nothing else.** An interim or otherwise invalid name is kept exactly as
+    BOLD has it -- the curator sees the original data, and :func:`name_status`
+    records what kind of name it is. (R's destructive pass,
+    ``mod_data_import_utils.R:152-214``, blanked invalid names instead, so the
+    original value was lost from every screen and export.)
     """
     text = to_text(values).str.strip()
     # The full emptiness test, not a bare == "" -- otherwise the literal
-    # strings "None" and "NA" survive as species names and are counted by BAGS
-    # as species in their own right, which is what R does today.
-    empty = is_empty(values)
-    invalid = empty | matches_text(text, _INVALID_SPECIES_RE, ~empty)
-    return text.mask(invalid, pd.NA)
+    # strings "None" and "NA" survive as species names.
+    return text.mask(is_empty(values), pd.NA)

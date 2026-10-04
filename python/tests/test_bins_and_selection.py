@@ -130,3 +130,35 @@ def test_fill_gaps_selects_only_groups_with_no_selected_record():
 
     covered = {"P2": {}, "P3": {}}
     assert auto_select_best_specimens(frame, existing=covered, fill_gaps=True) is covered
+
+
+def _bin_rows(*rows):
+    """(species, identification_rank, genus) per record, all in BOLD:A."""
+    return _f([{"processid": f"P{i}", "bin_uri": "BOLD:A", "species": sp,
+                "identification_rank": rank, "genus": genus, "family": "Nymphalidae"}
+               for i, (sp, rank, genus) in enumerate(rows)])
+
+
+def test_an_interim_species_beside_a_species_is_discordant():
+    frame = _bin_rows(("Danaus plexippus", "species", "Danaus"),
+                      ("Danaus cf. plexippus", "species", "Danaus"))
+    assert not check_taxonomic_concordance(frame)
+    content = analyse_bins(frame)["content"].iloc[0]
+    assert content["concordance"] == "Discordant"
+    assert content["species_list"] == "Danaus cf. plexippus; Danaus plexippus"
+
+
+def test_a_record_of_another_genus_makes_a_bin_discordant():
+    frame = _bin_rows(("Danaus plexippus", "species", "Danaus"),
+                      (None, "genus", "Pieris"))
+    assert not check_taxonomic_concordance(frame)
+    assert analyse_bins(frame)["content"].iloc[0]["concordance"] == "Discordant"
+
+
+def test_a_genus_rank_record_of_the_same_genus_changes_nothing():
+    frame = _bin_rows(("Danaus plexippus", "species", "Danaus"),
+                      ("Danaus sp.", "genus", "Danaus"))
+    assert check_taxonomic_concordance(frame)
+    content = analyse_bins(frame)["content"].iloc[0]
+    assert content["concordance"] == "Concordant"
+    assert content["species_list"] == "Danaus plexippus"

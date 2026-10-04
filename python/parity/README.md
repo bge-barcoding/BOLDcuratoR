@@ -79,6 +79,10 @@ ladder.
 | `RANK2_IMAGE_REMOVED` | R rank 3 where Python gives rank 2 — R's `RANK_2` needs an image |
 | `CF_AFF_CONCORDANCE` | R's `cf\.|aff\.<Reference>` alternation means any `cf.` record passes, whatever the reference species |
 | `R_ROW_ERROR_ZEROES_SCORE` | An unparseable `nuc_basecount` makes `as.numeric()` return `NA`; `if (NA >= 500)` then throws and R's per-row handler discards the **whole** row's score, including a `SPECIES_ID` that had passed. The snapshot builder `TRY_CAST`s the column, so neither implementation meets this in practice |
+| `SPECIES_KEPT_VERBATIM` | R blanks a species name its rule rejects; Python keeps the field as BOLD has it and records `name_status` |
+| `INTERIM_SPECIES_GRADED` | An interim species name at species rank (`Genus cf. species`, `Genus sp. 1`) is graded as a species of its own and, strictly, makes a BIN it shares with any other species-level name grade E; R blanks it. This also supersedes `CF_AFF_CONCORDANCE` for species-rank records |
+| `RANK_DECIDES_SPECIES_LEVEL` | A valid binomial at a non-species rank is not a species anywhere; R's BIN species list ignores the rank |
+| `GENUS_CONFLICT_DISCORDANT` | A BIN with records from more than one genus, family or order is discordant (grade E) whatever their rank; R let one species name decide. No fixture case yet -- adding one needs R to regenerate the reference |
 | `BIN_LESS_EXCLUDED_FROM_BAGS` | A species-level record with no BIN is excluded from BAGS here (the project owner's decision); R counts it. A species with no BIN-assigned records gets no grade at all. Recognised from the fixture itself, since the committed R reference predates the decision |
 
 Adding a divergence means adding it to `EXPLANATIONS` in `compare.py` **and**

@@ -70,9 +70,9 @@ CONCORDANCE_COLOURS = {"Concordant": "#28a745", "Discordant": "#dc3545"}
 
 GAP_STATUS_COLOURS = {"Found": "#28a745", "Missing": "#dc3545"}
 
-#: The interim-name BINs screen (``core.grouping.INTERIM``): not a grade, so
-#: not one of the grade colours.
-INTERIM_COLOUR = "#5a6f8a"
+#: The unnamed-BINs screen (``core.grouping.UNNAMED``): not a grade, so not
+#: one of the grade colours.
+UNNAMED_COLOUR = "#5a6f8a"
 
 #: The columns a curator works with, in the order the R app shows them:
 #: annotations first, because that is what they are here to change.
@@ -81,7 +81,8 @@ INTERIM_COLOUR = "#5a6f8a"
 GROUP_COLUMNS = [
     "selected", "checked", "flag", "updated_id", "curator_notes",
     "rank", "quality_score", "processid", "bin_uri",
-    "species", "bags_grade", "identification", "identified_by", "country.ocean",
+    "species", "name_status", "identification_rank", "bags_grade",
+    "identification", "identified_by", "country.ocean",
 ]
 
 #: Headers for ``GROUP_COLUMNS`` (and the columns of the same names among the
@@ -93,7 +94,8 @@ GROUP_LABELS = {
     "selected": "Rep.", "checked": "Check", "flag": "Flag",
     "updated_id": "Updated ID", "curator_notes": "Notes", "rank": "Rank",
     "quality_score": "Score", "processid": "Process ID", "bin_uri": "BIN",
-    "species": "Species", "bags_grade": "BAGS", "identification": "ID",
+    "species": "Species", "name_status": "Name status",
+    "identification_rank": "ID rank", "bags_grade": "BAGS", "identification": "ID",
     "identified_by": "Identified by", "country.ocean": "Country/Ocean",
     "inst": "Institution",
 }
@@ -103,7 +105,8 @@ GROUP_LABELS = {
 #: on-screen checklist and the xlsx export as noise nobody asked to see, not
 #: from the underlying data (other callers, e.g. tests, still get it).
 CHECKLIST_LABELS = {
-    "species": "Species", "specimen_count": "Specimens", "bin_count": "BINs",
+    "species": "Species", "name_status": "Name", "specimen_count": "Specimens",
+    "bin_count": "BINs",
     "bin_uris": "BIN URIs", "bags_grade": "BAGS", "countries": "Countries",
 }
 

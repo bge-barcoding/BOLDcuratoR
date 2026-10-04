@@ -84,22 +84,46 @@ def test_danaus_sp_is_invalid_here_unlike_r():
     assert not sp.is_valid_species_name(pd.Series(["Danaus sp."])).iloc[0]
 
 
-def test_normalise_blanks_invalid_and_missing_tokens():
+def test_normalise_keeps_invalid_names_and_blanks_only_missing_tokens():
+    """The original value is what a curator sees; nothing but the missing
+    tokens is blanked."""
     out = sp.normalise_species(
         pd.Series(["  Pieris rapae  ", "Danaus sp.", "None", "NA", ""])
     )
-    assert list(out.isna()) == [False, True, True, True, True]
-    assert out.iloc[0] == "Pieris rapae"
+    assert list(out.isna()) == [False, False, True, True, True]
+    assert list(out[:2]) == ["Pieris rapae", "Danaus sp."]
 
 
-def test_species_level_requires_binomial_and_rank():
+@pytest.mark.parametrize("name,rank,genus,status", [
+    ("Danaus plexippus", "species", "", sp.NAME_SPECIES),
+    ("Danaus plexippus", "subspecies", "", sp.NAME_SPECIES),
+    ("Danaus plexippus", "", "", sp.NAME_SPECIES),          # rank not recorded
+    ("Danaus plexippus", "genus", "", sp.NAME_HIGHER),      # rank says genus
+    ("Danaus cf. plexippus", "species", "", sp.NAME_INTERIM),
+    ("Danaus cf plexippus", "Species", "", sp.NAME_INTERIM),
+    ("Danaus sp. 1", "species", "", sp.NAME_INTERIM),
+    ("Danaus sp.", "species", "", sp.NAME_INTERIM),         # species rank: interim
+    ("Danaus sp.", "genus", "", sp.NAME_HIGHER),            # genus rank: higher
+    ("Danaus sp. 1", "", "", sp.NAME_HIGHER),               # interim needs the rank
+    ("Danaus", "species", "", sp.NAME_HIGHER),              # one word
+    ("", "genus", "Danaus", sp.NAME_HIGHER),
+    ("", "", "", sp.NAME_NONE),
+])
+def test_name_status(name, rank, genus, status):
+    frame = pd.DataFrame({"species": [name], "identification_rank": [rank],
+                          "genus": [genus]})
+    assert sp.name_status(frame).iloc[0] == status
+
+
+def test_species_level_is_species_or_interim_species():
     frame = pd.DataFrame(
         {
-            "species": ["Danaus plexippus", "Danaus plexippus", "Danaus", "Danaus sp."],
-            "identification_rank": ["species", "genus", "species", "species"],
+            "species": ["Danaus plexippus", "Danaus plexippus", "Danaus",
+                        "Danaus sp.", "Danaus cf. plexippus"],
+            "identification_rank": ["species", "genus", "species", "genus", "species"],
         }
     )
-    assert list(sp.is_species_level(frame)) == [True, False, False, False]
+    assert list(sp.is_species_level(frame)) == [True, False, False, False, True]
 
 
 def test_species_level_tolerates_missing_rank_column():

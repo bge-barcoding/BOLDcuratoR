@@ -92,7 +92,9 @@ def _compile(pattern: str | None) -> re.Pattern[str] | None:
 #: which missed every form above without a full stop, ``nr.``, ``gr.``,
 #: ``?``, ``complex`` and ``indet.``, and wrongly caught ``ssp.``. BOLD
 #: records interim names like these with an identification rank of
-#: "species", so the rank alone cannot be trusted to say a name is resolved.
+#: "species", so the rank alone cannot say a name is resolved; together they
+#: decide ``core.species.name_status`` (resolved, interim species, or higher
+#: rank).
 INVALID_SPECIES_PATTERN = (
     r"\bspp?\b"
     r"|\b(?:cf|aff|nr|gr|grp|agg|indet)\b"

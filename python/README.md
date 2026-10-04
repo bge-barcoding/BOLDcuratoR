@@ -33,10 +33,27 @@ first-run setup screen until it has a snapshot, then shows these tabs:
 | **Data** | The snapshot in use and others in the data folder; download the latest from Zenodo, check for an update, or add your own file/URL. Sessions: save, load, delete, autosave every 60 s |
 | **Search** | Taxa (one per line, synonyms after commas), countries, continents (a union with countries), dataset and project codes. **Check size** estimates records and BINs without fetching anything; results are BIN-expanded past the geographic filter |
 | **Gap analysis** | Each typed taxon, found or missing |
-| **Species** | Grade counts and a species checklist |
+| **Species** | Grade counts, unnamed-BIN counts (discordant / concordant) and a species checklist |
 | **BINs** | Concordant / discordant / shared BINs and a BIN content table |
 | **BAGS A-E** | One screen per grade, worked one problem at a time: per species (A, B, D), per species x BIN (C), per shared BIN (E). E and C are marked "work here first" |
-| **Interim names** | One screen per BIN whose records carry only interim names (`Genus cf. species`, `Genus sp. 1`, `nr.`, `aff.`...) and no resolved species, so no BAGS grade covers it. Interim names are never counted as species, whatever BOLD's identification rank says |
+| **Unnamed BINs** | One group per BIN with no species-level name (every record identified to genus or higher), so no BAGS grade covers it. Discordant BINs (more than one genus, family or order) first |
+
+**How names are read.** The species field is shown and exported exactly as
+BOLD has it; a `name_status` column says what kind of name it is, using
+BOLD's `identification_rank`:
+
+| `name_status` | When | In BAGS |
+|---|---|---|
+| species | a binomial passing the species rule (`config.constants.INVALID_SPECIES_PATTERN`) | graded |
+| interim species | a binomial failing it (`Genus cf. species`, `Genus sp. 1`, a bare `Genus sp.`) at species or subspecies rank | graded as a species of its own |
+| higher rank | rank genus or above, a one-word name, or an interim-looking name with no rank recorded | not graded; rides along with the BIN's species |
+| unidentified | no name at any rank | not graded |
+
+A BIN is discordant (grade E for every species in it; Discordant on the
+BINs tab) when it holds two different species-level names -- strictly, so
+*D. cf. plexippus* beside *D. plexippus* counts -- or records from more than
+one genus, family or order, whatever rank they were identified to. A
+record identified only to the BIN's own genus changes nothing.
 | **Phylogeny** | Neighbour-joining tree (K2P, reference-anchored alignment) of one representative per selected BIN x country, with monophyly badges for grade-C species; warns above 500 tips, refuses above 1,000 |
 | **Specimens** | Every record, server-side paged and sortable |
 
