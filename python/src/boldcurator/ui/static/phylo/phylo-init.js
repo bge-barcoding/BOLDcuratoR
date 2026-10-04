@@ -373,7 +373,13 @@
       ...(meta.flags || []).map((f) => `\u26a0 ${f}`),
       canReroot ? "Right-click to reroot here" : null,
     ].filter(Boolean);
-    state.tooltip.innerHTML = lines.map((l) => `<div>${l}</div>`).join("");
+    // textContent, never innerHTML: species, BIN and flags come from the
+    // snapshot file, so a crafted value must render as text, not markup.
+    state.tooltip.replaceChildren(...lines.map((l) => {
+      const div = document.createElement("div");
+      div.textContent = String(l);
+      return div;
+    }));
     state.tooltip.style.display = "block";
     state.tooltip.style.left = `${evt.clientX + 12}px`;
     state.tooltip.style.top = `${evt.clientY + 12}px`;

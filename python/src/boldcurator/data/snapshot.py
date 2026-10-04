@@ -3,6 +3,16 @@
 The snapshot is opened **read-only**, always.  Nothing may ever open the
 serving file read-write: DuckDB takes an exclusive cross-process lock for a
 read-write handle, so a single stray writer locks every reader out.
+
+A snapshot is also **untrusted input**: it is downloaded from Zenodo, or
+picked from anywhere on disk, and a ``.duckdb`` file can carry more than
+data. A view or macro is SQL that runs when the app queries it, and could
+read local files or make DuckDB fetch an extension over the network. So
+every snapshot is opened through :func:`connect_snapshot`, which switches
+off file and network access and extension loading, then locks that
+configuration so nothing inside the session can switch it back on, and
+refuses any file that holds a view or macro (the builder only ever writes
+plain tables).
 """
 
 from __future__ import annotations
@@ -17,6 +27,59 @@ from . import schema as S
 
 class SnapshotError(RuntimeError):
     pass
+
+
+#: DuckDB settings for opening a snapshot. ``enable_external_access`` blocks
+#: file reads/writes, ``ATTACH`` and network access from SQL;
+#: the two extension settings stop a query from installing or loading an
+#: extension; ``lock_configuration`` makes all of it unchangeable from inside
+#: the session (``SET enable_external_access = true`` is refused).
+HARDENED_CONFIG: dict[str, object] = {
+    "enable_external_access": False,
+    "autoinstall_known_extensions": False,
+    "autoload_known_extensions": False,
+    "lock_configuration": True,
+}
+
+
+def unexpected_objects(con: duckdb.DuckDBPyConnection) -> list[str]:
+    """User-defined views and macros in ``con``'s catalogs, as ``kind name``.
+
+    The snapshot builder only creates plain tables, so anything listed here
+    did not come from it.
+    """
+    views = con.execute(
+        "SELECT schema_name, view_name FROM duckdb_views() WHERE NOT internal"
+    ).fetchall()
+    macros = con.execute(
+        "SELECT DISTINCT function_type, schema_name, function_name "
+        "FROM duckdb_functions() WHERE NOT internal "
+        "AND function_type IN ('macro', 'table_macro')"
+    ).fetchall()
+    return ([f"view {s}.{n}" for s, n in views]
+            + [f"{t.replace('_', ' ')} {s}.{n}" for t, s, n in macros])
+
+
+def connect_snapshot(path: str | Path) -> duckdb.DuckDBPyConnection:
+    """Open a snapshot read-only with :data:`HARDENED_CONFIG`.
+
+    Raises :class:`SnapshotError` if the file holds a view or macro. Every
+    other DuckDB error is left to the caller.
+    """
+    con = duckdb.connect(str(path), read_only=True, config=HARDENED_CONFIG)
+    try:
+        found = unexpected_objects(con)
+    except BaseException:
+        con.close()
+        raise
+    if found:
+        con.close()
+        raise SnapshotError(
+            f"{path} is not a BOLDcurator snapshot: it contains "
+            f"{', '.join(found)}. Snapshots hold plain tables only, so this "
+            "file was not made by the snapshot builder and will not be opened."
+        )
+    return con
 
 
 @dataclass(frozen=True)
@@ -79,7 +142,9 @@ class SnapshotStore:
                 "opened read-only. Rebuild or checkpoint it."
             )
         try:
-            self._con = duckdb.connect(str(self.path), read_only=True)
+            self._con = connect_snapshot(self.path)
+        except SnapshotError:
+            raise
         except Exception as exc:  # noqa: BLE001
             raise SnapshotError(f"Cannot open {self.path} read-only: {exc}") from exc
         self._meta: dict[str, str] | None = None

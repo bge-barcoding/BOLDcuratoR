@@ -2551,7 +2551,7 @@ def _header_cell(column: str, labels: dict[str, str], *, sort_input: str | None,
         arrow = " ▼" if sort_state[0] == column and sort_state[1] else \
                 (" ▲" if sort_state[0] == column else "")
         attrs = (f" class='{SORT_HEADER_CLASS}' data-sort-input='{sort_input}' "
-                f"data-sort-col='{_escape(column)}'{attrs} title='Click to sort'")
+                f"data-sort-col='{_escape_attr(column)}'{attrs} title='Click to sort'")
         label += arrow
     return f"<th{attrs}>{label}</th>"
 
@@ -2640,7 +2640,7 @@ def _link_cell(value: object, url: str) -> str:
     itself built (not a user-typed URL) should still not hand the opened tab
     a live ``window.opener`` back into the app.
     """
-    return (f"<td><a href='{_escape(url)}' target='_blank' "
+    return (f"<td><a href='{_escape_attr(url)}' target='_blank' "
             f"rel='noopener noreferrer'>{_escape(value)}</a></td>")
 
 
@@ -2703,9 +2703,9 @@ ROW_CHECK_CLASS = "bc-row-check"
 
 def _checkbox_cell(pid: object, checked: bool, css_class: str, *,
                    title: str = "") -> str:
-    pid = _escape(pid)
+    pid = _escape_attr(pid)
     mark = "checked" if checked else ""
-    attr = f" title='{_escape(title)}'" if title else ""
+    attr = f" title='{_escape_attr(title)}'" if title else ""
     return (f"<td><input type='checkbox' class='{css_class}'{attr} "
             f"data-pid='{pid}' {mark}></td>")
 

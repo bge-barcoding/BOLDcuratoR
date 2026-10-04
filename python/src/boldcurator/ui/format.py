@@ -39,8 +39,12 @@ def bold_bin_url(bin_uri: str) -> str:
 
     The query syntax itself (``:``, ``[bin]``) is not percent-encoded --
     matching the portal's own URLs exactly, which do not encode it either.
+    Everything else in the BIN is: it comes from the snapshot file, and an
+    unencoded quote or space would let a crafted value break out of the
+    link's ``href``. A real BIN (``BOLD:`` plus letters and digits) comes
+    out unchanged.
     """
-    return f"{BOLD_PORTAL}/result?query={bin_uri}[bin]"
+    return f"{BOLD_PORTAL}/result?query={quote(str(bin_uri), safe=':')}[bin]"
 
 
 def bold_species_url(species: str) -> str:

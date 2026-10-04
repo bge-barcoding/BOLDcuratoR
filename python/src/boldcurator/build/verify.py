@@ -15,9 +15,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-import duckdb
-
 from ..data import schema as S
+from ..data.snapshot import connect_snapshot
 
 
 @dataclass
@@ -53,7 +52,7 @@ def verify(snapshot: Path, *, previous_rows: int | None = None) -> list[Check]:
                       f"{wal} exists; the file cannot be opened read-only")]
 
     try:
-        con = duckdb.connect(str(snapshot), read_only=True)
+        con = connect_snapshot(snapshot)
     except Exception as exc:  # noqa: BLE001 - we want to report anything here
         return [Check("opens read-only in a fresh process", False, str(exc))]
 
