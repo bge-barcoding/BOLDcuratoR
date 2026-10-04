@@ -19,6 +19,14 @@ def test_the_app_object_builds(fixture_snapshot):
     assert isinstance(app, shiny.App)
 
 
+def test_the_interim_names_screen_is_in_the_nav(fixture_snapshot):
+    from boldcurator.ui.app import create_app
+
+    html = create_app(fixture_snapshot).ui["html"]
+    assert "Interim names" in html
+    assert "grade_U_body" in html
+
+
 def test_the_cc_by_sa_attribution_is_on_the_page(fixture_snapshot):
     """Plan item 0.3: the CC BY-SA 4.0 requirement goes in the app's about
 

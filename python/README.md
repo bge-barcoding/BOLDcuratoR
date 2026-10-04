@@ -36,6 +36,7 @@ first-run setup screen until it has a snapshot, then shows these tabs:
 | **Species** | Grade counts and a species checklist |
 | **BINs** | Concordant / discordant / shared BINs and a BIN content table |
 | **BAGS A-E** | One screen per grade, worked one problem at a time: per species (A, B, D), per species x BIN (C), per shared BIN (E). E and C are marked "work here first" |
+| **Interim names** | One screen per BIN whose records carry only interim names (`Genus cf. species`, `Genus sp. 1`, `nr.`, `aff.`...) and no resolved species, so no BAGS grade covers it. Interim names are never counted as species, whatever BOLD's identification rank says |
 | **Phylogeny** | Neighbour-joining tree (K2P, reference-anchored alignment) of one representative per selected BIN x country, with monophyly badges for grade-C species; warns above 500 tips, refuses above 1,000 |
 | **Specimens** | Every record, server-side paged and sortable |
 

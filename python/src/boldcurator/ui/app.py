@@ -44,6 +44,8 @@ from ..config.constants import (
 from ..core.grouping import (
     GRADE_DESCRIPTIONS,
     GRADES,
+    INTERIM,
+    INTERIM_DESCRIPTION,
     PRIORITY_GRADES,
     SPECIES_GRADES,
 )
@@ -65,6 +67,7 @@ from .format import (
     GRADE_COLOURS,
     GROUP_COLUMNS,
     GROUP_LABELS,
+    INTERIM_COLOUR,
     bold_bin_url,
     bold_record_url,
     bold_species_url,
@@ -314,6 +317,27 @@ def _grade_panel(grade: str) -> ui.Tag:
         ),
         ui.div(ui.output_ui(f"grade_{grade}_body"), class_="bc-fill-output"),
         value=f"grade_{grade}",
+    )
+
+
+#: Every screen built from ``core.grouping`` groups: the five BAGS grades,
+#: then the interim-name BINs that no grade covers.
+GROUP_SCREENS = (*GRADES, INTERIM)
+
+
+def _interim_panel() -> ui.Tag:
+    """The interim-name BINs screen. Same body as a grade's
+    (``grade_U_body``), but labelled as what it is: not a BAGS grade."""
+    return ui.nav_panel(
+        "Interim names",
+        ui.div(
+            ui.tags.strong("Interim-name BINs"),
+            ui.tags.span(f" — {INTERIM_DESCRIPTION}", style="opacity:.9;"),
+            style=f"background:{INTERIM_COLOUR};color:#fff;padding:8px 14px;"
+                  "border-radius:5px;margin-bottom:10px;",
+        ),
+        ui.div(ui.output_ui(f"grade_{INTERIM}_body"), class_="bc-fill-output"),
+        value=f"grade_{INTERIM}",
     )
 
 
@@ -772,6 +796,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                         ui.div(ui.output_ui("bins_body"), class_="bc-fill-output"),
                         value="bins"),
             *[_grade_panel(g) for g in GRADES],
+            _interim_panel(),
             ui.nav_panel("Phylogeny",
                         ui.div(ui.output_ui("phylogeny_body"), class_="bc-fill-output"),
                         value="phylogeny"),
@@ -800,7 +825,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         offset = reactive.Value(0)
         estimate: reactive.Value = reactive.Value({})
         group_index: dict[str, reactive.Value] = {
-            g: reactive.Value(0) for g in GRADES
+            g: reactive.Value(0) for g in GROUP_SCREENS
         }
         #: Click-a-header sort state for the in-memory tables (species
         #: checklist, gap analysis, BIN dashboard, one BAGS group at a time)
@@ -1556,6 +1581,8 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     ui.div(
                         *[value_box(f"{counts.get(g, 0):,}", f"Grade {g}",
                                     GRADE_COLOURS[g]) for g in GRADES],
+                        value_box(f"{len(search.groups(store, INTERIM)):,}",
+                                  "Interim-name BINs", INTERIM_COLOUR),
                         style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap;",
                     ),
                     ui.download_button("dl_species_analysis",
@@ -1599,8 +1626,11 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             def body(search):
                 groups = search.groups(store, grade)
                 if not groups:
-                    return ui.div(f"No species graded {grade} in this result.",
-                                  class_="text-muted")
+                    return ui.div(
+                        "No BINs named only with interim names in this result."
+                        if grade == INTERIM else
+                        f"No species graded {grade} in this result.",
+                        class_="text-muted")
                 index = min(group_index[grade].get(), len(groups) - 1)
                 group = groups[index]
                 rows = _sorted_by(
@@ -1774,7 +1804,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 return None
             return groups[min(group_index[grade].get(), len(groups) - 1)]
 
-        for _grade in GRADES:
+        for _grade in GROUP_SCREENS:
             _register_grade(_grade)
 
         # -- phylogeny -------------------------------------------------------

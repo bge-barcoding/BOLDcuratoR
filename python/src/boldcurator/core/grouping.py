@@ -24,6 +24,12 @@ see it -- it may be the misidentification, or the evidence that the BIN is fine.
 Ported from ``organize_grade_specimens`` (``mod_bags_grading_utils.R:32-149``)
 and the filter at ``mod_bags_grading_server.R:54-87``, with the unified species
 rule (``core.species``) in place of R's five.
+
+**Interim-name BINs (screen ``INTERIM``, not a BAGS grade).**  Riding along
+needs a graded BIN to ride in. A BIN whose records carry only interim names
+(``Danaus cf. plexippus``, ``Danaus sp. 1``) and no species-level name has
+no grade, so it appeared on no BAGS screen at all. :func:`interim_bin_groups`
+gives each such BIN its own group so it can be curated like the rest.
 """
 
 from __future__ import annotations
@@ -34,9 +40,27 @@ from typing import Callable
 import pandas as pd
 
 from .bags import shared_bins as compute_shared_bins
-from .species import column_or_missing, is_species_level, to_text
+from .species import (
+    column_or_missing,
+    is_binomial,
+    is_species_level,
+    is_valid_species_name,
+    to_text,
+)
 
 GRADES = ("A", "B", "C", "D", "E")
+
+#: The screen key for interim-name BINs. Shares the grade screens' machinery
+#: (``group_specimens``, the app's group navigator) but is not a BAGS grade,
+#: so it is deliberately not in ``GRADES``.
+INTERIM = "U"
+
+INTERIM_DESCRIPTION = ("BINs named only with interim names (cf., aff., sp. "
+                       "...), so no BAGS grade covers them")
+
+#: How many distinct interim names an interim-BIN caption lists before
+#: summarising the rest as "+N more".
+_CAPTION_NAMES = 3
 
 #: What each grade means, in the words the screen shows.  A, B and D read as
 #: descriptions; C and E read as problems, which is what they are.
@@ -143,6 +167,8 @@ def group_specimens(specimens: pd.DataFrame, grades: pd.DataFrame,
     ``shared_bins`` and ``fetch_bin`` matter only for grade E -- see
     :func:`_shared_bin_groups`.
     """
+    if grade == INTERIM:
+        return interim_bin_groups(specimens)
     if grade not in GRADES:
         raise ValueError(f"Unknown BAGS grade {grade!r}; expected one of {GRADES}")
 
@@ -172,6 +198,56 @@ def _sorted(frame: pd.DataFrame) -> pd.DataFrame:
                          index=frame.index)
     order = order.sort_values(["s", "p"], ascending=[False, True], kind="stable")
     return frame.loc[order.index].reset_index(drop=True)
+
+
+def has_interim_name(frame: pd.DataFrame) -> pd.Series:
+    """Records identified with an interim species name.
+
+    The ``identification`` (BOLD's name at the record's lowest rank, which
+    ``core.pipeline.process_specimen_data`` leaves alone when it blanks an
+    invalid ``species``) is binomial-shaped but fails the species rule:
+    ``Danaus cf. plexippus``, ``Danaus sp. 1``, ``Danaus sp.``. A plain genus
+    (``Danaus``) is not an interim name.
+    """
+    ident = column_or_missing(frame, "identification")
+    return (is_binomial(ident) & ~is_valid_species_name(ident)).fillna(False)
+
+
+def interim_bin_groups(specimens: pd.DataFrame) -> list[SpecimenGroup]:
+    """One group per BIN that holds an interim-named record and no
+    species-level record, with every record of that BIN in the result.
+
+    A BIN with any species-level record is left out: that species is graded,
+    so the BIN is already on a BAGS screen with its interim records riding
+    along.
+    """
+    if specimens is None or len(specimens) == 0:
+        return []
+    frame = specimens.reset_index(drop=True)
+    bins = _text(frame, "bin_uri")
+    has_bin = bins != ""
+    level = pd.Series(is_species_level(frame).to_numpy(), index=frame.index)
+    interim = pd.Series(has_interim_name(frame).to_numpy(), index=frame.index)
+
+    wanted = set(bins[interim & has_bin]) - set(bins[level & has_bin])
+    if not wanted:
+        return []
+    ident = _text(frame, "identification")
+    in_wanted = bins.isin(wanted)
+
+    groups: list[SpecimenGroup] = []
+    for bin_uri, members in frame[in_wanted].groupby(bins[in_wanted], sort=True):
+        names = sorted(set(ident[members.index][interim[members.index]]))
+        shown = ", ".join(names[:_CAPTION_NAMES])
+        if len(names) > _CAPTION_NAMES:
+            shown += f" +{len(names) - _CAPTION_NAMES} more"
+        groups.append(SpecimenGroup(
+            key=f"{INTERIM}|{bin_uri}",
+            caption=f"BIN: {bin_uri} — {shown}",
+            specimens=_sorted(members),
+            bins=(bin_uri,),
+        ))
+    return groups
 
 
 def _species_groups(frame, species, bins, named, grade) -> list[SpecimenGroup]:

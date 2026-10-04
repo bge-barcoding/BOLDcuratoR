@@ -70,6 +70,10 @@ CONCORDANCE_COLOURS = {"Concordant": "#28a745", "Discordant": "#dc3545"}
 
 GAP_STATUS_COLOURS = {"Found": "#28a745", "Missing": "#dc3545"}
 
+#: The interim-name BINs screen (``core.grouping.INTERIM``): not a grade, so
+#: not one of the grade colours.
+INTERIM_COLOUR = "#5a6f8a"
+
 #: The columns a curator works with, in the order the R app shows them:
 #: annotations first, because that is what they are here to change.
 #: ``selected`` and ``checked`` are two different checkboxes -- see

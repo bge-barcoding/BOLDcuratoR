@@ -75,13 +75,39 @@ def _compile(pattern: str | None) -> re.Pattern[str] | None:
     return _CACHE[pattern]
 
 
+#: The one "not a resolved species name" rule (``core.species``), also the
+#: SPECIES_ID criterion's negative pattern. Case-insensitive. A name fails if
+#: it holds, as a word:
+#:
+#: - ``sp``/``spp`` with or without the full stop (``Danaus sp.``,
+#:   ``Danaus sp``, ``Danaus n. sp.``), but not inside ``ssp.``, so a
+#:   subspecies written ``Danaus plexippus ssp. plexippus`` keeps its species;
+#: - an open-nomenclature qualifier with or without the full stop: ``cf``,
+#:   ``aff``, ``nr``, ``gr``/``grp`` (species group), ``agg``, ``indet``;
+#: - ``complex``;
+#:
+#: or any ``?`` or digit (``Danaus sp. 1``, ``Danaus plexippusDHJ02``).
+#:
+#: R's ``SPECIES_ID`` (``constants.R:52``) is ``sp\.|spp\.|[0-9]|^sp$|aff\.|cf\.| nr ``,
+#: which missed every form above without a full stop, ``nr.``, ``gr.``,
+#: ``?``, ``complex`` and ``indet.``, and wrongly caught ``ssp.``. BOLD
+#: records interim names like these with an identification rank of
+#: "species", so the rank alone cannot be trusted to say a name is resolved.
+INVALID_SPECIES_PATTERN = (
+    r"\bspp?\b"
+    r"|\b(?:cf|aff|nr|gr|grp|agg|indet)\b"
+    r"|\bcomplex\b"
+    r"|\?"
+    r"|[0-9]"
+)
+
 #: Declaration order is significant: it is the order names appear in
 #: ``criteria_met``.
 SPECIMEN_SCORING_CRITERIA: tuple[Criterion, ...] = (
     Criterion(
         "SPECIES_ID",
         ("species",),
-        negative_pattern=r"sp\.|spp\.|[0-9]|^sp$|aff\.|cf\.| nr ",
+        negative_pattern=INVALID_SPECIES_PATTERN,
     ),
     Criterion(
         "TYPE_SPECIMEN",

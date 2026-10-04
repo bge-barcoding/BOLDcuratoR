@@ -13,8 +13,10 @@ Location                                             Pattern                    
 ``bin_analysis_utils.R:114`` (species list)          ``sp\\.|spp\\.``                                        no
 ===================================================  ======================================================  ==========
 
-This module defines **one** rule, used everywhere, taken from the most complete
-and most carefully specified of the five (``SPECIES_ID``).
+This module defines **one** rule, used everywhere. It started as the most
+complete of the five (``SPECIES_ID``) and has since been widened to catch the
+interim names BOLD records at species rank -- see
+``config.constants.INVALID_SPECIES_PATTERN`` for exactly what it rejects.
 
 Two consequences are worth stating plainly, because the parity harness will
 report them and they are not bugs in this code:
@@ -38,9 +40,8 @@ import re
 import numpy as np
 import pandas as pd
 
-#: The unified invalid-species-name pattern.  Case-insensitive, as
-#: ``SPECIES_ID`` is in R.
-INVALID_SPECIES_PATTERN = r"sp\.|spp\.|[0-9]|^sp$|aff\.|cf\.| nr "
+from ..config.constants import INVALID_SPECIES_PATTERN
+
 _INVALID_SPECIES_RE = re.compile(INVALID_SPECIES_PATTERN, re.IGNORECASE)
 
 #: A name must look like a binomial to be species-level.  Ported unchanged from

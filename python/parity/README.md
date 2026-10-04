@@ -75,7 +75,7 @@ ladder.
 
 | Tag | Why |
 |---|---|
-| `UNIFIED_SPECIES_RULE` | R's destructive pass anchors `^sp\.`, omits `" nr "`, and tests only `== ""` for emptiness, so `"Danaus sp."`, `"Apis nr mellifera"`, `"None"` and `"NA"` all survive as species names. Everything downstream of the name follows |
+| `UNIFIED_SPECIES_RULE` | R's destructive pass anchors `^sp\.`, omits `" nr "`, and tests only `== ""` for emptiness, so `"Danaus sp."`, `"Apis nr mellifera"`, `"None"` and `"NA"` all survive as species names. The rule here is also wider than any of R's (`config.constants.INVALID_SPECIES_PATTERN`): interim names without a full stop (`cf`, `aff`, `sp`), `nr.`, `gr.`, `agg.`, `complex`, `indet.` and `?` are rejected, and `ssp.` is no longer mistaken for `sp.`. Everything downstream of the name follows |
 | `RANK2_IMAGE_REMOVED` | R rank 3 where Python gives rank 2 — R's `RANK_2` needs an image |
 | `CF_AFF_CONCORDANCE` | R's `cf\.|aff\.<Reference>` alternation means any `cf.` record passes, whatever the reference species |
 | `R_ROW_ERROR_ZEROES_SCORE` | An unparseable `nuc_basecount` makes `as.numeric()` return `NA`; `if (NA >= 500)` then throws and R's per-row handler discards the **whole** row's score, including a `SPECIES_ID` that had passed. The snapshot builder `TRY_CAST`s the column, so neither implementation meets this in practice |

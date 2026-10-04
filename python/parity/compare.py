@@ -47,6 +47,9 @@ EXPLANATIONS = {
         "pass (mod_data_import_utils.R:180) anchors the pattern as ^sp\\. so "
         "'Danaus sp.' survives it, omits ' nr ', and tests only == \"\" for "
         "emptiness so the literals 'None' and 'NA' survive as species names. "
+        "The rule here is also wider than any of R's: interim names without a "
+        "full stop (cf, aff, sp), nr., gr., agg., complex, indet. and ? are "
+        "rejected, and ssp. is no longer mistaken for sp. "
         "Everything downstream of the name follows: SPECIES_ID, quality_score, "
         "rank, BAGS eligibility and auto-selection candidacy."
     ),

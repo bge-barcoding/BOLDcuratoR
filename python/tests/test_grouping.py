@@ -9,8 +9,10 @@ from boldcurator.core.bags import calculate_bags_grades, shared_bins
 from boldcurator.core.grouping import (
     GRADE_DESCRIPTIONS,
     GRADES,
+    INTERIM,
     PRIORITY_GRADES,
     group_specimens,
+    has_interim_name,
     specimens_for_grade,
 )
 from boldcurator.core.summaries import build_species_checklist
@@ -312,3 +314,64 @@ def test_the_checklist_is_sorted_and_empty_input_keeps_its_columns():
     empty = build_species_checklist(SPECIMENS.iloc[:0])
     assert len(empty) == 0
     assert "mean_quality_score" in empty.columns
+
+
+# -- interim-name BINs --------------------------------------------------------
+
+
+def _interim_frame():
+    from boldcurator.core.pipeline import process_specimen_data
+
+    rows = []
+
+    def add(prefix, name, bin_uri, n, *, identification=None):
+        for i in range(n):
+            rows.append({"processid": f"{prefix}{i}", "species": name,
+                         "identification": identification or name,
+                         "identification_rank": "species", "bin_uri": bin_uri,
+                         "quality_score": i, "country.ocean": "Kenya"})
+
+    add("PLX", "Danaus plexippus", "BOLD:A", 3)
+    add("CFA", "Danaus cf. plexippus", "BOLD:A", 2)       # rides along in A's grade
+    add("CFB", "Danaus cf. plexippus", "BOLD:B", 2)       # interim only
+    add("SPB", "Danaus sp. 1", "BOLD:B", 1)
+    add("GNB", None, "BOLD:B", 1, identification="Danaus")  # genus-only, same BIN
+    add("GND", None, "BOLD:D", 2, identification="Danaus")  # genus-only BIN
+    add("NOB", "Danaus cf. plexippus", None, 1)            # no BIN
+    add("CFE", "Danaus cf plexippus", "BOLD:E", 1)        # no full stop
+    # process_specimen_data blanks the invalid species names, as in the app.
+    return process_specimen_data(pd.DataFrame(rows))
+
+
+def test_interim_name_needs_a_binomial_that_fails_the_species_rule():
+    frame = pd.DataFrame({"identification": [
+        "Danaus cf. plexippus", "Danaus sp.", "Danaus plexippus", "Danaus", "", None]})
+    assert list(has_interim_name(frame)) == [True, True, False, False, False, False]
+
+
+def test_a_bin_with_only_interim_names_gets_its_own_group():
+    """Riding along needs a graded BIN. A cf.-only BIN used to appear on no
+    BAGS screen at all."""
+    groups = group_specimens(_interim_frame(), pd.DataFrame(), INTERIM)
+
+    assert [g.bins for g in groups] == [("BOLD:B",), ("BOLD:E",)]
+    b = groups[0]
+    assert b.key == "U|BOLD:B"
+    assert b.caption == "BIN: BOLD:B — Danaus cf. plexippus, Danaus sp. 1"
+    assert set(b.specimens["processid"]) == {"CFB0", "CFB1", "SPB0", "GNB0"}, (
+        "every record of the BIN, the genus-only one included")
+    assert list(b.specimens["processid"])[0] == "CFB1", "best score first"
+
+
+def test_interim_screen_is_not_a_bags_grade():
+    assert INTERIM not in GRADES
+    grades = calculate_bags_grades(_interim_frame())
+    assert set(grades["species"]) == {"Danaus plexippus"}
+
+
+def test_an_interim_caption_summarises_many_names():
+    frame = pd.DataFrame([
+        {"processid": f"P{i}", "species": None, "bin_uri": "BOLD:X",
+         "identification": f"Danaus sp. {i}"} for i in range(5)])
+    (group,) = group_specimens(frame, pd.DataFrame(), INTERIM)
+    assert group.caption.endswith("Danaus sp. 0, Danaus sp. 1, Danaus sp. 2 +2 more")

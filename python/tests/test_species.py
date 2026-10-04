@@ -35,10 +35,44 @@ def test_is_empty_matches_r_is_empty_value(value, expected):
         ("sp", False),
         ("", False),
         ("None", False),
+        # Interim names R's pattern let through (no full stop, other
+        # qualifiers), all of which BOLD can record at species rank.
+        ("Danaus cf plexippus", False),
+        ("Danaus Cf. plexippus", False),
+        ("Danaus cf.plexippus", False),
+        ("Danaus aff plexippus", False),
+        ("Danaus nr. plexippus", False),
+        ("Danaus sp", False),
+        ("Danaus spp", False),
+        ("Danaus n.sp.", False),
+        ("Danaus gr. plexippus", False),
+        ("Danaus plexippus grp", False),
+        ("Danaus plexippus agg.", False),
+        ("Danaus ?plexippus", False),
+        ("Danaus plexippus complex", False),
+        ("Danaus indet.", False),
+        # Whole words only: real names that merely contain the letters.
+        ("Danaus affinis", True),
+        ("Grapholita spectrana", True),
+        ("Spodoptera exigua", True),
+        ("Agriphila straminella", True),
+        # "ssp." is a subspecies, not "sp.": R's pattern wrongly caught it.
+        ("Danaus plexippus ssp. plexippus", True),
     ],
 )
 def test_unified_species_rule(name, valid):
     assert bool(sp.is_valid_species_name(pd.Series([name])).iloc[0]) is valid
+
+
+def test_scoring_uses_the_same_rule():
+    """SPECIES_ID and the species rule used to be two copies of one regex."""
+    from boldcurator.config.constants import (
+        INVALID_SPECIES_PATTERN,
+        SPECIMEN_SCORING_CRITERIA,
+    )
+
+    species_id = next(c for c in SPECIMEN_SCORING_CRITERIA if c.name == "SPECIES_ID")
+    assert species_id.negative_pattern == INVALID_SPECIES_PATTERN == sp.INVALID_SPECIES_PATTERN
 
 
 def test_danaus_sp_is_invalid_here_unlike_r():
