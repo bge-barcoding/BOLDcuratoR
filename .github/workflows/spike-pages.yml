@@ -57,7 +57,7 @@ jobs:
         run: Rscript build_fixture.R --synthetic --rows "$ROWS"
 
       - name: Set up Emscripten (file_packager)
-        uses: mymindstorm/setup-emsdk@6ab9eb1bda2574c4ddb79809fc9247783eaf9021 # v14
+        uses: mymindstorm/setup-emsdk@4528d102f7230f0e7b276855c01ea1159be0e984 # v16
 
       # The image is NOT staged into app/: shinylive bundles everything under the
       # app directory into its payload, which breaks the app outright above
