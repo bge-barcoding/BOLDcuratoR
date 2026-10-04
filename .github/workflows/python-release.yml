@@ -547,6 +547,11 @@ jobs:
         # extra) plus PyInstaller, whose bootloader ships inside every
         # executable. Platform-specific packages (pythonnet on Windows,
         # pyobjc on macOS...) are listed with their environment markers.
+        #
+        # Not --output-reproducible: that drops the BOM's serialNumber, and
+        # actions/attest refuses a CycloneDX SBOM without one (v3.5.4's
+        # publish job failed on exactly that). The check after it fails
+        # here, on every run, rather than only when a release publishes.
         working-directory: python
         run: |
           set -euo pipefail
@@ -554,10 +559,17 @@ jobs:
             --format requirements-txt -o requirements-release.txt
           uvx --from 'cyclonedx-bom==7.5.0' cyclonedx-py requirements \
             --pyproject pyproject.toml --mc-type application \
-            --output-reproducible --of JSON \
+            --of JSON \
             -o "../release/boldcurator-$VERSION.cdx.json" requirements-release.txt
-          python -c "import json,sys; d=json.load(open(sys.argv[1])); print(len(d['components']), 'components')" \
-            "../release/boldcurator-$VERSION.cdx.json"
+          python - "../release/boldcurator-$VERSION.cdx.json" <<'PY'
+          import json, sys
+          bom = json.load(open(sys.argv[1]))
+          # The fields actions/attest checks before it will attest an SBOM.
+          missing = [k for k in ("bomFormat", "specVersion", "serialNumber") if not bom.get(k)]
+          if missing:
+              sys.exit(f"::error::SBOM lacks {', '.join(missing)}; actions/attest would refuse it")
+          print(len(bom["components"]), "components;", bom["serialNumber"])
+          PY
 
       - name: SHA-256 checksums
         working-directory: release
@@ -610,7 +622,9 @@ jobs:
             release/*.cdx.json
 
       - name: Tie the SBOM to each executable it describes
-        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        # actions/attest, not attest-sbom: attest-sbom is deprecated and is
+        # now only a wrapper around it, with the same inputs.
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: |
             release/*.zip

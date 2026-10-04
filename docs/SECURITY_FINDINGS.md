@@ -262,7 +262,7 @@ Security tab, and on the badge, after the first run following the merge.
 - `python-release.yml`: a new `package` job builds a CycloneDX SBOM
   (`boldcurator-<version>.cdx.json`) from the lock and a `SHA256SUMS.txt`
   on every run. `publish` adds `attest-build-provenance` for every asset
-  and `attest-sbom` for each executable.
+  and an SBOM attestation (`actions/attest`) for each executable.
 - `python-pypi.yml` now states `attestations: true` explicitly (PEP 740).
   A new `github-release` job attaches the same sdist and wheel to the
   GitHub release with provenance, and merges their lines into
