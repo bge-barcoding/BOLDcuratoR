@@ -40,9 +40,9 @@ from ..config.constants import (
     DEFAULT_SNAPSHOT_ZENODO_DOI,
 )
 from ..data.snapshot import SnapshotError, SnapshotStore
+from .format import INLINE_INPUT_CSS
 
-#: Where a download lands when the user gives a URL/manifest/record rather
-#: than an existing file -- next to the session store and config file this
+#: Where the first-run download lands -- next to the session store and config file this
 #: module's caller already uses, not next to whatever the app is installed
 #: into (which may not be writable).
 DEFAULT_DOWNLOAD_PATH = DEFAULT_SNAPSHOT_DIR / "snapshot.duckdb"
@@ -110,20 +110,9 @@ def _pick_snapshot_file() -> str | None:
         return None
 
 
-def _looks_like_a_manifest(text: str) -> bool:
-    """A plain heuristic for one text field covering three input shapes.
-
-    A dedicated manifest.json always ends in ``.json``; anything else that
-    starts with a scheme is a direct file URL; anything else again is taken
-    as a Zenodo record or concept id. Good enough for a first-run screen --
-    getting it wrong just means picking "Download" a second time with the
-    right kind of text.
-    """
-    return text.startswith(("http://", "https://")) and text.rstrip("/").endswith(".json")
-
-
 def create_setup_app(resolved: "queue.Queue[Path | None]") -> App:
     app_ui = ui.page_fluid(
+        ui.tags.style(INLINE_INPUT_CSS),
         ui.tags.h3("Set up BOLDcurator"),
         ui.tags.span(f"v{__version__}", class_="text-muted small"),
         ui.p("This app works from a local snapshot of BOLD's public data "
@@ -131,13 +120,17 @@ def create_setup_app(resolved: "queue.Queue[Path | None]") -> App:
         ui.navset_tab(
             ui.nav_panel(
                 "I already have a snapshot file",
+                # Round 8, item 1.2: the label sits above the row, so the
+                # field and Browse… line up on their own centres (a labelled
+                # input's label and margin used to push it off the button).
+                ui.tags.label("Path to a .duckdb snapshot file", for_="path",
+                              class_="form-label mt-3"),
                 ui.div(
-                    ui.input_text("path", "Path to a .duckdb snapshot file",
-                                  width="100%",
+                    ui.input_text("path", None, width="100%",
                                   placeholder="/path/to/bold_snapshot.duckdb"),
                     ui.input_action_button("browse", "Browse…",
-                                           class_="btn-outline-secondary mt-4"),
-                    style="display:flex;align-items:start;gap:8px;",
+                                           class_="btn-sm btn-outline-secondary"),
+                    style="display:flex;align-items:center;gap:8px;",
                 ),
                 ui.input_action_button("use_path", "Use this file",
                                        class_="btn-primary mt-2"),
@@ -157,16 +150,6 @@ def create_setup_app(resolved: "queue.Queue[Path | None]") -> App:
                     style="background:#f8f9fa;border:1px solid #dee2e6;"
                           "border-radius:5px;padding:10px 14px;"
                           "margin-bottom:14px;",
-                ),
-                ui.tags.details(
-                    ui.tags.summary("Or provide your own source",
-                                    class_="small text-muted"),
-                    ui.input_text(
-                        "source", "A direct URL, a manifest.json URL, or a "
-                        "Zenodo record/concept id/DOI", width="100%"),
-                    ui.input_action_button("download", "Download",
-                                           class_="btn-primary mt-2"),
-                    style="margin-top:8px;",
                 ),
                 ui.output_ui("download_status"),
             ),
@@ -230,10 +213,11 @@ def create_setup_app(resolved: "queue.Queue[Path | None]") -> App:
             return ui.div(text, class_="small mt-2") if text else ui.div()
 
         def _run_download(resolve_source):
-            """``resolve_source`` is a zero-arg callable returning a
-            ``fs.Source`` -- shared by the one-click default download and
-            the free-form "provide your own source" field, which differ
-            only in how the source gets resolved."""
+            """``resolve_source`` takes the ``fetch_snapshot`` module and
+            returns the ``fs.Source`` to download. (Round 8, item 5.1: the
+            free-form URL/manifest field is gone; the public Zenodo snapshot
+            or an existing file are the two ways in. ``boldcurator fetch``
+            still takes any source, for developers.)"""
             from ..build import fetch_snapshot as fs
 
             try:
@@ -263,22 +247,6 @@ def create_setup_app(resolved: "queue.Queue[Path | None]") -> App:
         @reactive.event(input.download_default)
         def _start_default_download():
             _start(lambda fs: fs.resolve_zenodo_record(DEFAULT_SNAPSHOT_ZENODO_DOI))
-
-        @reactive.effect
-        @reactive.event(input.download)
-        def _start_download():
-            source_text = (input.source() or "").strip()
-            if not source_text:
-                return
-
-            def resolve(fs):
-                if _looks_like_a_manifest(source_text):
-                    return fs.resolve_manifest(source_text)
-                if source_text.startswith(("http://", "https://")):
-                    return fs.Source(url=source_text)
-                return fs.resolve_zenodo_record(source_text)
-
-            _start(resolve)
 
         @output
         @render.ui

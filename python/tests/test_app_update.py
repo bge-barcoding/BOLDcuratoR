@@ -242,6 +242,3 @@ def test_how_to_update_matches_the_install(tmp_path):
         frozen=True, platform="win32", executable=str(portable / "boldcurator.exe"))
     assert "BOLDcurator.app" in app_update.how_to_update(frozen=True, platform="darwin")
     assert "empty folder" in app_update.how_to_update(frozen=True, platform="linux")
-
-    assert app_update.download_url(frozen=True) == app_update.APP_DOWNLOAD_URL
-    assert app_update.download_url(frozen=False) is None

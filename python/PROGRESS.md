@@ -15,17 +15,17 @@ similar bug resurfaces and you want to see how it was fixed last time.
 Ticked as each item lands; the note says what changed.
 
 - [ ] 1.1 App unresponsive after idle (buttons dead, downloads return JSON)
-- [ ] 1.2 Text boxes and buttons don't line up across the app
+- [x] 1.2 Text boxes and buttons don't line up across the app -- `INLINE_INPUT_CSS` (`ui/format.py`) is used by both the app and the first-run setup screen; see 4.1. On the setup screen the path label now sits above the row. Measured: the Data-tab and setup rows share one centre.
 - [x] 2.1 Species tab: summary blocks narrower, all on one row -- `value_box(..., compact=True)` (`ui/format.py`): the tiles share the row equally, `flex-wrap:nowrap`, and a long label wraps onto a second line.
 - [x] 3.1 BAGS A/B/D: drop the "(>10 specimens, single BIN)" qualifier from group labels -- captions are now `Species: X (n)` (`core/grouping.py:_species_groups`).
 - [x] 4.1 BAGS/Specimens toolbars: inputs sit higher than buttons (same as 1.2) -- cause: Shiny's `.form-group` `margin-bottom:1rem` is centred along with the input, and the inputs were taller than the `btn-sm` buttons. App-wide CSS now gives every label-less input no margin and `btn-sm` height. Measured in Chromium: every control in each toolbar row has the same centre and is 31px tall.
 - [x] 4.2 "Corrected identification" -> "Correct ID", box 1.5x wider -- 150px -> 225px (`_annotation_controls`).
 - [x] 4.3 Flag list: replace "id_uncertain" with "contamination" -- `FLAG_OPTIONS` (Python app only). An old session's `id_uncertain` loads unchanged (`LEGACY_FLAGS`) but can't be set again. The dropdown now shows labels ("Contamination"), not raw keys.
-- [ ] 5.1 Data page: remove download-from-URL; keep Zenodo download and existing file
-- [ ] 5.2 Data page: use the width, trim text
-- [ ] 5.3 Data page: delete an old snapshot once a newer one is downloaded
-- [ ] 5.4 Newer app version: link to the download page
-- [ ] 5.5 Data page: remove the BOLD attribution footer (header link stays)
+- [x] 5.1 Data page: remove download-from-URL; keep Zenodo download and existing file -- removed from the Data tab and the first-run setup screen. `boldcurator fetch` (CLI) still takes any source, for developers.
+- [x] 5.2 Data page: use the width, trim text -- two columns (`.bc-data-grid`, 3:2): snapshot on the left, session and app on the right, one column below 1100px. Every help text is down to one short line.
+- [x] 5.3 Data page: delete an old snapshot once a newer one is downloaded -- root cause: a download never became the snapshot in use (the config kept the old path, and "Restart to switch" was untrue), so the old file stayed in use and couldn't be deleted. Now a newer download or copy is used from the next start (`_use_next_start_if_newer`). Each listed file says whether it is newer or older than the file in use and has **Use this one** and Delete buttons. "Keep using this one" undoes a switch. Deleting the next-start file falls back to the file in use.
+- [x] 5.4 Newer app version: link to the download page -- the banner already existed but linked the download page only for frozen builds. Now both the banner and the Data tab's manual check link the website's download section whenever a newer version is out.
+- [x] 5.5 Data page: remove the BOLD attribution footer (header link stays) -- removed. The setup screen and every export keep it.
 - [ ] 6.1 Website: EULA / no-warranty notice for downloads
 - [x] 7.1 BAGS E: group label doesn't name every species in the BIN -- the table was complete; the caption named only the C+E species. It now lists every species, C+E ones first and marked `[C+E]`, e.g. `Shared BIN: BOLD:AAG9765 (2 species) — Sialis concava [C+E], Sialis velata (64)`.
 - [x] 8.1 BAGS C+E: sharing species' records missing from the group -- `split_shared_groups` kept only the species' own records and higher-rank riders, by design. **Reversed:** it now also shows the other species in the species' shared BINs (own records, then sharers, then riders). The curator's Sialis concava group now has all 68 records, not 53. Regression tests use the same shape (`tests/test_grouping.py`, `_sialis_frame`).

@@ -150,3 +150,31 @@ def present(frame: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
     an optional column should still render every screen.
     """
     return frame[[c for c in columns if c in frame.columns]]
+
+
+#: Round 8, items 1.2 / 4.1, shared by the app and the first-run setup
+#: screen: label-less (toolbar) inputs line up with the buttons beside them.
+INLINE_INPUT_CSS = """
+/* Round 8, items 1.2 / 4.1: toolbar inputs sat about half a
+   rem above the buttons beside them. Shiny wraps every input in
+   a .form-group with margin-bottom:1rem, and a flex row's
+   align-items:center centres the box *with* that margin; the
+   inputs were also full-height next to btn-sm buttons. Every
+   label-less input is a toolbar one (a labelled input stacks
+   its label above it and keeps the spacing), so: no margin, and
+   btn-sm's height. The attribute selector is the fallback for a
+   webview without :has(). */
+.shiny-input-container:has(> .shiny-label-null),
+[style*="display:flex"] > .shiny-input-container {
+    margin-bottom: 0;
+}
+.shiny-input-container:has(> .shiny-label-null) .form-control,
+.shiny-input-container:has(> .shiny-label-null) .form-select,
+[style*="display:flex"] > .shiny-input-container .form-control,
+[style*="display:flex"] > .shiny-input-container .form-select {
+    padding-top: .25rem; padding-bottom: .25rem;
+    padding-left: .5rem; font-size: .875rem;
+    min-height: calc(1.5em + .5rem + 2px);
+    border-radius: var(--bs-border-radius-sm, .25rem);
+}
+"""

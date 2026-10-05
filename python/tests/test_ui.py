@@ -658,6 +658,83 @@ def test_only_listed_snapshots_can_be_deleted(tmp_path):
     assert not _is_listed_snapshot(data / "sub" / "x.duckdb", directory=data)
 
 
+def test_snapshots_compare_by_their_bold_package_date():
+    from boldcurator.ui.app import _compare_snapshots
+
+    assert _compare_snapshots("2026-10-02", "2026-09-18") == "newer"
+    assert _compare_snapshots("2026-09-11", "2026-09-18") == "older"
+    assert _compare_snapshots("2026-09-18", "2026-09-18") == "same"
+    assert _compare_snapshots("", "2026-09-18") == ""
+    assert _compare_snapshots("22849516", "2026-09-18") == ""
+
+
+def test_a_newer_download_is_used_from_the_next_start(tmp_path):
+    """Round 8, item 5.3: a downloaded newer snapshot was never used -- the
+    config kept naming the old file, which stayed in use and undeletable."""
+    import json
+
+    from boldcurator.desktop import load_snapshot_path
+    from boldcurator.ui.app import _use_next_start_if_newer
+
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"snapshot_path": "old", "check_for_updates": False}))
+    newer = tmp_path / "bold_snapshot_2026-10-02.duckdb"
+    newer.write_bytes(b"")
+
+    assert not _use_next_start_if_newer(newer, "2026-09-11", "2026-09-18",
+                                        config_path=config)
+    assert json.loads(config.read_text())["snapshot_path"] == "old"
+    assert _use_next_start_if_newer(newer, "2026-10-02", "2026-09-18",
+                                    config_path=config)
+    assert load_snapshot_path(config) == newer
+    assert json.loads(config.read_text())["check_for_updates"] is False, \
+        "the rest of the config is kept"
+
+
+def test_a_snapshot_id_comes_from_the_sidecar_or_the_file(tmp_path, fixture_snapshot):
+    import json
+    import shutil
+
+    from boldcurator.data.snapshot import SnapshotStore
+    from boldcurator.ui.app import _provenance_path, _snapshot_id_of
+
+    with_sidecar = tmp_path / "a.duckdb"
+    with_sidecar.write_bytes(b"")
+    _provenance_path(with_sidecar).write_text(json.dumps({"snapshot_id": "2026-09-18"}))
+    assert _snapshot_id_of(with_sidecar) == "2026-09-18"
+
+    copy = tmp_path / "b.duckdb"
+    shutil.copy(fixture_snapshot, copy)
+    with SnapshotStore(fixture_snapshot) as original:
+        assert _snapshot_id_of(copy) == original.info().snapshot_id
+
+    junk = tmp_path / "c.duckdb"
+    junk.write_bytes(b"not a database")
+    assert _snapshot_id_of(junk) == ""
+
+
+def test_the_data_tab_has_no_download_from_url_or_attribution_footer(fixture_snapshot):
+    """Round 8, items 5.1 and 5.5."""
+    from boldcurator.ui.app import create_app
+
+    html = str(create_app(fixture_snapshot).ui["html"])
+    assert 'id="snap_source"' not in html and "provide your own source" not in html
+    assert 'id="snap_download_default"' in html and 'id="snap_path"' in html
+    assert html.count("Full licence text") == 0
+
+
+def test_the_annotation_toolbar_says_correct_id_and_offers_contamination():
+    """Round 8, items 4.2 and 4.3."""
+    from htmltools import TagList
+
+    from boldcurator.ui.app import _annotation_controls
+
+    html = str(TagList(*_annotation_controls("sp")))
+    assert 'placeholder="Correct ID"' in html and "width:225px" in html
+    assert '<option value="contamination">Contamination</option>' in html
+    assert "id_uncertain" not in html
+
+
 def test_a_broader_second_search_gets_representatives_for_its_new_bins(store):
     """Pieris, then Lepidoptera: the second result contains the first one's
     picks, which used to make auto-selection skip it entirely, leaving every
