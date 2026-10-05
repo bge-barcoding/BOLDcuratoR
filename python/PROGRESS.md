@@ -16,11 +16,11 @@ Ticked as each item lands; the note says what changed.
 
 - [ ] 1.1 App unresponsive after idle (buttons dead, downloads return JSON)
 - [ ] 1.2 Text boxes and buttons don't line up across the app
-- [ ] 2.1 Species tab: summary blocks narrower, all on one row
+- [x] 2.1 Species tab: summary blocks narrower, all on one row -- `value_box(..., compact=True)` (`ui/format.py`): the tiles share the row equally, `flex-wrap:nowrap`, and a long label wraps onto a second line.
 - [x] 3.1 BAGS A/B/D: drop the "(>10 specimens, single BIN)" qualifier from group labels -- captions are now `Species: X (n)` (`core/grouping.py:_species_groups`).
-- [ ] 4.1 BAGS/Specimens toolbars: inputs sit higher than buttons (same as 1.2)
-- [ ] 4.2 "Corrected identification" -> "Correct ID", box 1.5x wider
-- [ ] 4.3 Flag list: replace "id_uncertain" with "contamination"
+- [x] 4.1 BAGS/Specimens toolbars: inputs sit higher than buttons (same as 1.2) -- cause: Shiny's `.form-group` `margin-bottom:1rem` is centred along with the input, and the inputs were taller than the `btn-sm` buttons. App-wide CSS now gives every label-less input no margin and `btn-sm` height. Measured in Chromium: every control in each toolbar row has the same centre and is 31px tall.
+- [x] 4.2 "Corrected identification" -> "Correct ID", box 1.5x wider -- 150px -> 225px (`_annotation_controls`).
+- [x] 4.3 Flag list: replace "id_uncertain" with "contamination" -- `FLAG_OPTIONS` (Python app only). An old session's `id_uncertain` loads unchanged (`LEGACY_FLAGS`) but can't be set again. The dropdown now shows labels ("Contamination"), not raw keys.
 - [ ] 5.1 Data page: remove download-from-URL; keep Zenodo download and existing file
 - [ ] 5.2 Data page: use the width, trim text
 - [ ] 5.3 Data page: delete an old snapshot once a newer one is downloaded

@@ -128,7 +128,7 @@ def test_export_all_writes_everything_and_says_what_it_skipped(store, tmp_path):
     result = run_search(store, taxa_text="Danaus plexippus")
     a = Annotations()
     first = str(result.specimens["processid"].iloc[0])
-    a.set_flag(first, "id_uncertain", user="tester")
+    a.set_flag(first, "contamination", user="tester")
 
     out = exports.export_all(result, tmp_path, annotations=a, store=store)
     assert {"all", "annotated", "curation_report", "search_results",

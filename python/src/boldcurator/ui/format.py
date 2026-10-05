@@ -124,7 +124,17 @@ GAP_LABELS = {
 }
 
 
-def value_box(value: str, label: str, colour: str) -> ui.Tag:
+def value_box(value: str, label: str, colour: str, *, compact: bool = False) -> ui.Tag:
+    """A coloured count tile. ``compact`` tiles share their row equally and
+    shrink to fit it -- round 8, item 2.1: the Species tab's eight tiles on
+    one row -- wrapping a long label onto a second line rather than widening."""
+    if compact:
+        return ui.div(
+            ui.div(value, style="font-size:22px;font-weight:700;line-height:1.1;"),
+            ui.div(label, style="font-size:12px;opacity:.9;line-height:1.2;"),
+            style=f"background:{colour};color:#fff;border-radius:6px;"
+                  "padding:6px 10px;flex:1 1 0;min-width:0;max-width:170px;",
+        )
     return ui.div(
         ui.div(value, style="font-size:30px;font-weight:700;line-height:1.1;"),
         ui.div(label, style="font-size:13px;opacity:.9;"),

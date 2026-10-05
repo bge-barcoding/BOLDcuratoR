@@ -119,7 +119,7 @@ def test_sorting_by_checked_reaches_rows_never_rendered(table):
 
 def test_sorting_by_flag_groups_the_flagged_records_together(table):
     ids = table.page_processids(0)[:3]
-    table.apply_flag("id_uncertain", ids)
+    table.apply_flag("contamination", ids)
     table.sort_by("flag", descending=True)  # non-empty strings sort after ""
     top = {str(p) for p in table.page(0).rows["processid"].iloc[:3]}
     assert top == set(ids)
@@ -186,15 +186,15 @@ def test_clearing_checked_leaves_the_representative_pick_alone(table):
 
 def test_bulk_flag_applies_to_the_checked_set_not_the_page(table):
     table.check_all()
-    changed = table.apply_flag("id_uncertain")
+    changed = table.apply_flag("contamination")
     assert changed == table.total_rows
     page = table.page(table.page_size)      # a page never rendered before
-    assert (page.rows["flag"] == "id_uncertain").all()
+    assert (page.rows["flag"] == "contamination").all()
 
 
 def test_an_empty_flag_clears_it(table):
     table.check_page(0)
-    table.apply_flag("id_uncertain")
+    table.apply_flag("contamination")
     table.apply_flag("")
     assert (table.page(0).rows["flag"] == "").all()
 

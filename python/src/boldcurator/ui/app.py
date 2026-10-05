@@ -38,7 +38,7 @@ from ..config.constants import (
     DEFAULT_SNAPSHOT_DIR,
     DEFAULT_SNAPSHOT_ZENODO_DOI,
     DOWNLOAD_LIMITS,
-    FLAG_OPTIONS,
+    FLAG_CHOICES,
     PHYLOGENY_LIMITS,
 )
 from ..core.grouping import (
@@ -282,13 +282,15 @@ def _annotation_controls(prefix: str) -> list:
         ui.div(
             ui.tags.span("Flag", class_="small text-muted"),
             ui.input_select(f"{prefix}_flag", None,
-                            choices=sorted(FLAG_OPTIONS), width="115px"),
+                            choices=FLAG_CHOICES, width="140px"),
             style="display:flex;align-items:center;gap:6px;",
         ),
         ui.input_text(f"{prefix}_note", None, placeholder="Curator note",
                      width="170px"),
+        # Round 8, item 4.2: "Correct ID", 1.5x the old 150px so a full
+        # binomial fits.
         ui.input_text(f"{prefix}_updated_id", None,
-                     placeholder="Corrected identification", width="150px"),
+                     placeholder="Correct ID", width="225px"),
         ui.input_action_button(f"{prefix}_apply", "Apply to checked",
                                class_="btn-primary btn-sm"),
     ]
@@ -544,6 +546,28 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                cell renderer). */
             .bc-scroll td {
                 max-width: 280px; overflow: hidden; text-overflow: ellipsis;
+            }
+            /* Round 8, items 1.2 / 4.1: toolbar inputs sat about half a
+               rem above the buttons beside them. Shiny wraps every input in
+               a .form-group with margin-bottom:1rem, and a flex row's
+               align-items:center centres the box *with* that margin; the
+               inputs were also full-height next to btn-sm buttons. Every
+               label-less input is a toolbar one (a labelled input stacks
+               its label above it and keeps the spacing), so: no margin, and
+               btn-sm's height. The attribute selector is the fallback for a
+               webview without :has(). */
+            .shiny-input-container:has(> .shiny-label-null),
+            [style*="display:flex"] > .shiny-input-container {
+                margin-bottom: 0;
+            }
+            .shiny-input-container:has(> .shiny-label-null) .form-control,
+            .shiny-input-container:has(> .shiny-label-null) .form-select,
+            [style*="display:flex"] > .shiny-input-container .form-control,
+            [style*="display:flex"] > .shiny-input-container .form-select {
+                padding-top: .25rem; padding-bottom: .25rem;
+                padding-left: .5rem; font-size: .875rem;
+                min-height: calc(1.5em + .5rem + 2px);
+                border-radius: var(--bs-border-radius-sm, .25rem);
             }
             /* Round 5, item 12: a download click's own visible
                acknowledgement -- see the click listener below. */
@@ -1657,13 +1681,16 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 return ui.div(
                     ui.div(
                         *[value_box(f"{counts.get(g, 0):,}", f"Grade {g}",
-                                    GRADE_COLOURS[g]) for g in GRADES],
+                                    GRADE_COLOURS[g], compact=True) for g in GRADES],
                         value_box(f"{len(search.groups(store, SPLIT_SHARED)):,}",
-                                  "C+E (of grade E)", GRADE_COLOURS["E"]),
-                        *[value_box(f"{n:,}", f"Unnamed BINs, {label}", colour)
+                                  "C+E (of grade E)", GRADE_COLOURS["E"],
+                                  compact=True),
+                        *[value_box(f"{n:,}", f"Unnamed BINs, {label}", colour,
+                                    compact=True)
                           for n, label, colour in _unnamed_counts(
                               search.groups(store, UNNAMED))],
-                        style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap;",
+                        # Round 8, item 2.1: one row, however narrow.
+                        style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:nowrap;",
                     ),
                     ui.download_button("dl_species_analysis",
                                        "Download species analysis (xlsx)",

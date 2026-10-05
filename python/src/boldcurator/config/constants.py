@@ -257,14 +257,29 @@ PREFERRED_COLUMN_ORDER: tuple[str, ...] = (
 # --------------------------------------------------------------------------
 
 #: ``get_flag_options()`` (R/utils/annotation_utils.R:43).  Keys are stored,
-#: values displayed.
+#: values displayed.  Round 8, item 4.3: ``id_uncertain`` replaced by
+#: ``contamination`` (Python app only; the R app keeps its own list).
 FLAG_OPTIONS: dict[str, str] = {
     "": "None",
     "misidentification": "Misidentification",
     "synonym": "Synonym",
-    "id_uncertain": "ID Uncertain",
+    "contamination": "Contamination",
     "data_issue": "Data Issue",
     "other_issue": "Other Issue",
+}
+
+#: Flags that can no longer be chosen but may still be on records in a saved
+#: session from before they were retired. Loading leaves them as they are
+#: (shown and exported unchanged) -- never silently rewritten to something
+#: the curator didn't pick.
+LEGACY_FLAGS: dict[str, str] = {
+    "id_uncertain": "ID Uncertain",
+}
+
+#: The toolbar dropdown: labels shown, keys stored. Blank first, because
+#: applying a blank flag clears it (``Annotations.set_flag``).
+FLAG_CHOICES: dict[str, str] = {
+    key: ("" if key == "" else label) for key, label in FLAG_OPTIONS.items()
 }
 
 # --------------------------------------------------------------------------
