@@ -24,21 +24,36 @@ def _mutate(rng, seq, rate):
 # -- tip_label ---------------------------------------------------------
 
 
-def test_tip_label_uses_species_and_country():
+def test_tip_label_leads_with_the_bin():
     row = pd.Series({"processid": "ABC123", "species": "Danaus plexippus",
-                     "identification": "Danaus plexippus",
+                     "identification": "Danaus plexippus", "bin_uri": "BOLD:AAA0001",
                      "country.ocean": "Kenya"})
-    assert phylo.tip_label(row) == "ABC123-Danaus plexippus-Kenya"
+    assert phylo.tip_label(row) == "BOLD:AAA0001-ABC123-Danaus plexippus-Kenya"
 
 
 def test_tip_label_falls_back_to_identification_then_unknown():
     row = pd.Series({"processid": "ABC123", "species": "", "identification": "Danaus sp.",
-                     "country.ocean": ""})
-    assert phylo.tip_label(row) == "ABC123-Danaus sp.-Unknown"
+                     "bin_uri": "", "country.ocean": ""})
+    assert phylo.tip_label(row) == "No BIN-ABC123-Danaus sp.-Unknown"
 
     row2 = pd.Series({"processid": "XYZ999", "species": None, "identification": None,
-                      "country.ocean": None})
-    assert phylo.tip_label(row2) == "XYZ999-Unknown-Unknown"
+                      "bin_uri": None, "country.ocean": None})
+    assert phylo.tip_label(row2) == "No BIN-XYZ999-Unknown-Unknown"
+
+
+def test_a_bin_tip_label_survives_newick():
+    """The colon in BOLD:... is Newick's branch-length separator, so the
+    writer must quote the name for it to come back whole."""
+    from io import StringIO
+
+    from Bio import Phylo
+
+    names = ["BOLD:AAA0001-P1-Danaus plexippus-Kenya",
+             "BOLD:AAA0002-P2-Danaus o'neilli-Peru", "No BIN-P3-Unknown-Unknown"]
+    dist = np.array([[0, .1, .2], [.1, 0, .2], [.2, .2, 0]])
+    newick = phylo.to_newick(phylo.build_tree(names, dist))
+    tree = Phylo.read(StringIO(newick), "newick")
+    assert sorted(t.name for t in tree.get_terminals()) == sorted(names)
 
 
 # -- k2p_distance_matrix ------------------------------------------------
@@ -250,7 +265,7 @@ def test_build_phylogeny_end_to_end_with_fake_sequences(monkeypatch):
     assert not result.warnings
     assert not result.flags
     assert result.monophyly == {"sp_c": True}
-    assert result.reference == "p1-sp_c-Kenya"
+    assert result.reference == "BIN1-p1-sp_c-Kenya"
     assert result.reference_length == 658
 
 
@@ -275,10 +290,10 @@ def test_build_phylogeny_keeps_and_flags_problem_sequences(monkeypatch):
     result = phylo.build_phylogeny(reps, _f([]), store=None, max_tips=100)
     assert result.tip_count == 5, "flagged sequences stay on the tree"
     flags = result.flags
-    assert set(flags) == {"short-sp-X", "junk-sp-X", "flipped-sp-X"}
-    assert any(f.startswith("short:") for f in flags["short-sp-X"])
-    assert any("low identity" in f for f in flags["junk-sp-X"])
-    assert any("reverse-complemented" in f for f in flags["flipped-sp-X"])
+    assert set(flags) == {"B-short-sp-X", "B-junk-sp-X", "B-flipped-sp-X"}
+    assert any(f.startswith("short:") for f in flags["B-short-sp-X"])
+    assert any("low identity" in f for f in flags["B-junk-sp-X"])
+    assert any("reverse-complemented" in f for f in flags["B-flipped-sp-X"])
     assert any("3 tip(s) marked" in w for w in result.warnings)
 
 
@@ -525,7 +540,7 @@ def test_a_representative_with_no_sequence_is_replaced_by_its_group_s_best(
 
     pids = set(result.representatives["processid"])
     assert pids == {"a2", "b1", "c1"}
-    assert any("stand-in for a1" in f for f in result.flags["a2-sp_a-Kenya"])
+    assert any("stand-in for a1" in f for f in result.flags["BA-a2-sp_a-Kenya"])
     assert any("1 representative specimen(s)" in w and "BD" in w
                for w in result.warnings), "d has no sequenced record at all"
 

@@ -717,5 +717,7 @@ def test_tree_tips_survive_a_representative_with_no_species_name():
 
     assert [t["species"] for t in tips] == ["Danaus plexippus", "Danaus", "Danaus sp."]
     assert [t["bin_uri"] for t in tips] == ["BOLD:A", "", "BOLD:C"]
+    assert tips[0]["bin_url"].endswith("query=BOLD:A[bin]"), "tip links to its BIN"
+    assert tips[1]["bin_url"] == "", "no BIN, no link"
     assert [t["bags_grade"] for t in tips] == ["A", "", ""]
     assert tips[0]["monophyletic"] is True and tips[2]["monophyletic"] is None

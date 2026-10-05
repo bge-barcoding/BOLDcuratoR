@@ -76,8 +76,17 @@ class PhylogenyTooLargeToBuild(RuntimeError):
         )
 
 
+#: What a BIN-less record's tip label says in place of a BIN.
+NO_BIN_LABEL = "No BIN"
+
+
 def tip_label(row: pd.Series) -> str:
-    """``{processid}-{species}-{country}``.
+    """``{bin_uri}-{processid}-{species}-{country}``.
+
+    Round 8, item 9.1: the BIN leads, so tips sort and read by BIN; a
+    BIN-less record reads ``No BIN``. ``BOLD:AAG9765`` holds a colon, which
+    Newick only allows in a quoted name -- Biopython's writer quotes it, as it
+    already did for the space in every binomial.
 
     ``species`` already holds the full binomial (BOLD's own convention for
     the species-rank taxonomy field -- nothing else in this app concatenates
@@ -101,7 +110,12 @@ def tip_label(row: pd.Series) -> str:
         country = UNKNOWN_COUNTRY
     else:
         country = str(country).strip()
-    return f"{processid}-{species}-{country}"
+    bin_uri = row.get("bin_uri")
+    if bin_uri is None or pd.isna(bin_uri) or not str(bin_uri).strip():
+        bin_uri = NO_BIN_LABEL
+    else:
+        bin_uri = str(bin_uri).strip()
+    return f"{bin_uri}-{processid}-{species}-{country}"
 
 
 def fetch_representative_sequences(store, representatives: pd.DataFrame

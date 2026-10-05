@@ -259,7 +259,24 @@
           "font-size": 11, fill: flagged ? "#b8860b" : "#212529",
         });
         text.textContent = flagged ? `${label} \u26a0` : label;
-        viewport.appendChild(text);
+        // Round 8, item 9.2: a real tip's name links to its BIN on BOLD.
+        // An SVG <a> with target=_blank opens like the tables' links do (the
+        // desktop window hands those to the system browser). A click that
+        // ends a pan drag is not a click on the name.
+        if (meta && meta.bin_url && !canExpand) {
+          const link = svgEl("a", {
+            href: meta.bin_url, target: "_blank", rel: "noopener noreferrer",
+            class: "bc-phylo-tip-link",
+          });
+          link.addEventListener("click", (evt) => {
+            if (state.dragMoved) evt.preventDefault();
+          });
+          link.addEventListener("dragstart", (evt) => evt.preventDefault());
+          link.appendChild(text);
+          viewport.appendChild(link);
+        } else {
+          viewport.appendChild(text);
+        }
 
         // A 4px-radius circle is far smaller than a pointer -- this
         // invisible, much larger circle at the same centre is the actual
@@ -343,14 +360,20 @@
       apply();
     }, { passive: false });
 
+    let startX = 0;
+    let startY = 0;
     svg.addEventListener("mousedown", (evt) => {
       dragging = true;
-      lastX = evt.clientX;
-      lastY = evt.clientY;
+      state.dragMoved = false;
+      lastX = startX = evt.clientX;
+      lastY = startY = evt.clientY;
       svg.style.cursor = "grabbing";
     });
     global.addEventListener("mousemove", (evt) => {
       if (!dragging) return;
+      if (Math.abs(evt.clientX - startX) + Math.abs(evt.clientY - startY) > 3) {
+        state.dragMoved = true;
+      }
       state.panX += evt.clientX - lastX;
       state.panY += evt.clientY - lastY;
       lastX = evt.clientX;

@@ -29,8 +29,8 @@ Ticked as each item lands; the note says what changed.
 - [ ] 6.1 Website: EULA / no-warranty notice for downloads
 - [x] 7.1 BAGS E: group label doesn't name every species in the BIN -- the table was complete; the caption named only the C+E species. It now lists every species, C+E ones first and marked `[C+E]`, e.g. `Shared BIN: BOLD:AAG9765 (2 species) — Sialis concava [C+E], Sialis velata (64)`.
 - [x] 8.1 BAGS C+E: sharing species' records missing from the group -- `split_shared_groups` kept only the species' own records and higher-rank riders, by design. **Reversed:** it now also shows the other species in the species' shared BINs (own records, then sharers, then riders). The curator's Sialis concava group now has all 68 records, not 53. Regression tests use the same shape (`tests/test_grouping.py`, `_sialis_frame`).
-- [ ] 9.1 Phylogeny: tip name "bin-processid-identification-country"
-- [ ] 9.2 Phylogeny: tip name links to the BIN on BOLD
+- [x] 9.1 Phylogeny: tip name "bin-processid-identification-country" -- `core/phylogeny.py:tip_label` now gives `BOLD:AAG9765-PID-Species-Country` (`No BIN-...` when blank). Biopython quotes the colon in Newick; a round-trip test covers it.
+- [x] 9.2 Phylogeny: tip name links to the BIN on BOLD -- each tip name is an SVG link to `bold_bin_url` (`bin_url` in `_phylo_tips`, `phylo-init.js`). A click that ends a pan drag does not follow the link. `drive_ui.py` checks it.
 
 ## State (2026-09-26)
 

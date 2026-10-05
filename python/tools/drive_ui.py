@@ -378,6 +378,16 @@ def main(argv: list[str] | None = None) -> int:
               """))
         check("the Newick download button is present",
               page.locator("#dl_phylo_newick").count() > 0)
+        tip_link = page.evaluate("""
+            () => {
+                const a = document.querySelector(
+                    '#phylo-tree-container a.bc-phylo-tip-link');
+                return a ? [a.getAttribute('href'), a.textContent] : null;
+            }
+        """)
+        check("tip names start with the BIN and link to it on BOLD",
+              bool(tip_link) and "[bin]" in tip_link[0]
+              and tip_link[1].startswith("BOLD:"), str(tip_link))
 
         # -- reroot: right-click (dispatched directly -- see phylo-init.js's
         # own contextmenu listener; a real synthetic right-click through

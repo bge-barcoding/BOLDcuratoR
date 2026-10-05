@@ -29,3 +29,7 @@
   color: #6c757d;
   margin: 4px 0 8px;
 }
+
+/* Tip names link to the BIN on BOLD (round 8, item 9.2). */
+.bc-phylo-tip-link { cursor: pointer; }
+.bc-phylo-tip-link:hover text { text-decoration: underline; fill: #0d6efd; }

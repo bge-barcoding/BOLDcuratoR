@@ -395,10 +395,12 @@ def _phylo_tips(result, grade_by_species: dict[str, str]) -> list[dict]:
         level = _cell_text(row, "name_status") in SPECIES_LEVEL_STATUSES \
             if "name_status" in row.index else True
         grade = grade_by_species.get(species, "") if level else ""
+        bin_uri = _cell_text(row, "bin_uri")
         tips.append({
             "tip": row["_tip_label"],
             "species": species,
-            "bin_uri": _cell_text(row, "bin_uri"),
+            "bin_uri": bin_uri,
+            "bin_url": bold_bin_url(bin_uri) if bin_uri else "",  # round 8, 9.2
             "bags_grade": grade,
             "monophyletic": result.monophyly.get(species) if level else None,
             "color": GRADE_COLOURS.get(grade, "#495057"),
