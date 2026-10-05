@@ -107,7 +107,8 @@ GROUP_LABELS = {
 CHECKLIST_LABELS = {
     "species": "Species", "name_status": "Name", "specimen_count": "Specimens",
     "bin_count": "BINs",
-    "bin_uris": "BIN URIs", "bags_grade": "BAGS", "countries": "Countries",
+    "bin_uris": "BIN URIs", "bags_grade": "BAGS", "c_plus_e": "C+E",
+    "countries": "Countries",
 }
 
 BIN_LABELS = {

@@ -33,9 +33,10 @@ first-run setup screen until it has a snapshot, then shows these tabs:
 | **Data** | The snapshot in use and others in the data folder; download the latest from Zenodo, check for an update, or add your own file/URL. Sessions: save, load, delete, autosave every 60 s |
 | **Search** | Taxa (one per line, synonyms after commas), countries, continents (a union with countries), dataset and project codes. **Check size** estimates records and BINs without fetching anything; results are BIN-expanded past the geographic filter |
 | **Gap analysis** | Each typed taxon, found or missing |
-| **Species** | Grade counts, unnamed-BIN counts (discordant / concordant) and a species checklist |
+| **Species** | Grade counts, the C+E count, unnamed-BIN counts (discordant / concordant) and a species checklist, whose C+E column marks grade-E species also split across BINs |
 | **BINs** | Concordant / discordant / shared BINs and a BIN content table |
 | **BAGS A-E** | One screen per grade, worked one problem at a time: per species (A, B, D), per species x BIN (C), per shared BIN (E). E and C are marked "work here first" |
+| **BAGS C+E** | Grade-E species that are also split across BINs (BAGS ranks E above C, so the C screen never shows them and E shows only their shared BIN): one group per species with every one of its BINs, each labelled shared, mixed genera or own; most BINs first. Grade E groups name the C+E species they hold |
 | **Unnamed BINs** | One group per BIN with no species-level name (every record identified to genus or higher), so no BAGS grade covers it. Discordant BINs (more than one genus, family or order) first |
 
 **How names are read.** The species field is shown and exported exactly as

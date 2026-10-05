@@ -19,6 +19,7 @@ from __future__ import annotations
 import pandas as pd
 
 from .frames import distinct_by_group, reindex_counts, reindex_joined
+from .grouping import split_shared_species
 from .species import (
     NAME_INTERIM,
     NAME_SPECIES,
@@ -29,7 +30,7 @@ from .species import (
 
 CHECKLIST_COLUMNS = [
     "species", "name_status", "specimen_count", "bin_count", "bin_uris",
-    "bags_grade", "countries", "mean_quality_score",
+    "bags_grade", "c_plus_e", "countries", "mean_quality_score",
 ]
 
 GAP_ANALYSIS_COLUMNS = [
@@ -76,6 +77,9 @@ def build_species_checklist(
     grade_by_species: dict[str, str] = {}
     if grades is not None and len(grades):
         grade_by_species = dict(zip(grades["species"], grades["bags_grade"]))
+    # Graded E and split across BINs: the species has BINs the E screen does
+    # not show (core.grouping.split_shared_species, the BAGS C+E screen).
+    split_shared = split_shared_species(grades)
 
     return pd.DataFrame(
         {
@@ -87,6 +91,7 @@ def build_species_checklist(
             "bin_count": reindex_counts(per_bin, index).to_numpy(),
             "bin_uris": reindex_joined(per_bin, index).to_numpy(),
             "bags_grade": [grade_by_species.get(s, "") for s in index],
+            "c_plus_e": ["C+E" if s in split_shared else "" for s in index],
             "countries": reindex_joined(per_country, index).to_numpy(),
             "mean_quality_score": mean_quality.round(2).to_numpy(),
         },

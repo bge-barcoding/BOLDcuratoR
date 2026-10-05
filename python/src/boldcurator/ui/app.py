@@ -44,6 +44,8 @@ from ..config.constants import (
 from ..core.grouping import (
     GRADE_DESCRIPTIONS,
     GRADES,
+    SPLIT_SHARED,
+    SPLIT_SHARED_DESCRIPTION,
     UNNAMED,
     UNNAMED_DESCRIPTION,
     PRIORITY_GRADES,
@@ -322,8 +324,32 @@ def _grade_panel(grade: str) -> ui.Tag:
 
 
 #: Every screen built from ``core.grouping`` groups: the five BAGS grades,
-#: then the BINs with no species-level name, which no grade covers.
-GROUP_SCREENS = (*GRADES, UNNAMED)
+#: then C+E (split and shared species, graded E), then the BINs with no
+#: species-level name, which no grade covers.
+GROUP_SCREENS = (*GRADES, SPLIT_SHARED, UNNAMED)
+
+
+def _split_shared_panel() -> ui.Tag:
+    """The BAGS C+E screen (``grade_CE_body``): the grade-E species that are
+    also split across BINs, every BIN together. Marked a priority, like C and
+    E, in both of their colours."""
+    c, e = GRADE_COLOURS["C"], GRADE_COLOURS["E"]
+    title = ui.span(
+        ui.span("●", style=f"color:{e};margin-right:6px;"),
+        ui.tags.strong("BAGS C+E"),
+    )
+    return ui.nav_panel(
+        title,
+        ui.div(
+            ui.tags.strong("BAGS C+E"),
+            ui.tags.span(f" — {SPLIT_SHARED_DESCRIPTION}", style="opacity:.9;"),
+            ui.tags.span("  ·  work here first", style="opacity:.85;"),
+            style=f"background:linear-gradient(90deg,{c},{e});color:#fff;"
+                  "padding:8px 14px;border-radius:5px;margin-bottom:10px;",
+        ),
+        ui.div(ui.output_ui(f"grade_{SPLIT_SHARED}_body"), class_="bc-fill-output"),
+        value=f"grade_{SPLIT_SHARED}",
+    )
 
 
 def _unnamed_panel() -> ui.Tag:
@@ -844,6 +870,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                         ui.div(ui.output_ui("bins_body"), class_="bc-fill-output"),
                         value="bins"),
             *[_grade_panel(g) for g in GRADES],
+            _split_shared_panel(),
             _unnamed_panel(),
             ui.nav_panel("Phylogeny",
                         ui.div(ui.output_ui("phylogeny_body"), class_="bc-fill-output"),
@@ -1629,6 +1656,8 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     ui.div(
                         *[value_box(f"{counts.get(g, 0):,}", f"Grade {g}",
                                     GRADE_COLOURS[g]) for g in GRADES],
+                        value_box(f"{len(search.groups(store, SPLIT_SHARED)):,}",
+                                  "C+E (of grade E)", GRADE_COLOURS["E"]),
                         *[value_box(f"{n:,}", f"Unnamed BINs, {label}", colour)
                           for n, label, colour in _unnamed_counts(
                               search.groups(store, UNNAMED))],
@@ -1678,6 +1707,9 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     return ui.div(
                         "No BINs without a species-level name in this result."
                         if grade == UNNAMED else
+                        "No species both split across BINs and in a shared "
+                        "BIN in this result."
+                        if grade == SPLIT_SHARED else
                         f"No species graded {grade} in this result.",
                         class_="text-muted")
                 index = min(group_index[grade].get(), len(groups) - 1)
@@ -1698,7 +1730,8 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 # A/B/D group one species at a time; C/E group one BIN at a
                 # time (species split across BINs, or a BIN shared between
                 # species) -- "problem" told a curator neither.
-                unit = "species" if grade in SPECIES_GRADES else "BIN"
+                unit = ("species" if grade in SPECIES_GRADES or grade == SPLIT_SHARED
+                        else "BIN")
                 plural_unit = "species" if unit == "species" else "BINs"
                 # The navigator (which problem) sits in one compact row above
                 # the table, not in a sidebar column beside it -- the table is

@@ -19,6 +19,14 @@ def test_the_app_object_builds(fixture_snapshot):
     assert isinstance(app, shiny.App)
 
 
+def test_the_c_plus_e_screen_is_in_the_nav(fixture_snapshot):
+    from boldcurator.ui.app import create_app
+
+    html = create_app(fixture_snapshot).ui["html"]
+    assert "BAGS C+E" in html
+    assert "grade_CE_body" in html
+
+
 def test_the_unnamed_bins_screen_is_in_the_nav(fixture_snapshot):
     from boldcurator.ui.app import create_app
 

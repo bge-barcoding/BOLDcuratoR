@@ -10,6 +10,7 @@ from boldcurator.core.grouping import (
     GRADE_DESCRIPTIONS,
     GRADES,
     PRIORITY_GRADES,
+    SPLIT_SHARED,
     UNNAMED,
     group_specimens,
     specimens_for_grade,
@@ -407,3 +408,88 @@ def test_an_unnamed_caption_summarises_many_names():
          "identification": f"Danaus {chr(97 + i)}group"} for i in range(5)])
     (group,) = group_specimens(frame, pd.DataFrame(), UNNAMED)
     assert group.caption.endswith("+2 more")
+
+
+# -- C+E: split and shared ------------------------------------------------------
+
+
+def _split_shared_frame():
+    from boldcurator.core.pipeline import process_specimen_data
+
+    rows = []
+
+    def add(prefix, name, rank, bin_uri, n, genus="Danaus"):
+        for i in range(n):
+            rows.append({"processid": f"{prefix}{i}", "species": name,
+                         "identification": name or genus,
+                         "identification_rank": rank, "genus": genus,
+                         "family": "Nymphalidae", "bin_uri": bin_uri,
+                         "quality_score": i, "country.ocean": "Kenya"})
+
+    add("PLA", "Danaus plexippus", "species", "BOLD:A", 3)   # shared
+    add("CHA", "Danaus chrysippus", "species", "BOLD:A", 2)
+    add("PLB", "Danaus plexippus", "species", "BOLD:B", 4)   # own
+    add("GNB", None, "genus", "BOLD:B", 1)                   # rides along
+    add("PLC", "Danaus plexippus", "species", "BOLD:C", 1)   # mixed genera
+    add("PIC", None, "genus", "BOLD:C", 1, genus="Pieris")
+    add("VAA", "Vanessa atalanta", "species", "BOLD:V", 2, genus="Vanessa")  # C only
+    add("VAB", "Vanessa atalanta", "species", "BOLD:W", 2, genus="Vanessa")
+    return process_specimen_data(pd.DataFrame(rows))
+
+
+def test_c_plus_e_groups_every_bin_of_a_split_and_shared_species():
+    """Graded E, so the C screen never showed it and E only its shared BIN."""
+    frame = _split_shared_frame()
+    grades = calculate_bags_grades(frame)
+    (group,) = group_specimens(frame, grades, SPLIT_SHARED)
+
+    assert group.caption == ("Species: Danaus plexippus — BOLD:A (shared with "
+                             "Danaus chrysippus), BOLD:B (own), BOLD:C (mixed genera)")
+    assert group.bins == ("BOLD:A", "BOLD:B", "BOLD:C")
+    assert set(group.specimens["processid"]) == {
+        "PLA0", "PLA1", "PLA2", "PLB0", "PLB1", "PLB2", "PLB3", "PLC0",
+        "GNB0", "PIC0"}, "its own records in every BIN, and the riders; not chrysippus"
+    assert group.note.startswith("Split across 3 BINs, 2 of them shared")
+    assert list(group.specimens["processid"]) == [
+        "PLA2", "PLA1", "PLA0", "PLB3", "PLB2", "PLB1", "PLB0", "PLC0",
+        "GNB0", "PIC0"], "own records BIN by BIN, best first; riders last"
+
+
+def test_a_split_species_with_no_shared_bin_is_not_c_plus_e():
+    frame = _split_shared_frame()
+    grades = calculate_bags_grades(frame)
+    assert dict(zip(grades["species"], grades["bags_grade"]))["Vanessa atalanta"] == "C"
+    assert all(g.species != ("Vanessa atalanta",)
+               for g in group_specimens(frame, grades, SPLIT_SHARED))
+
+
+def test_c_plus_e_puts_the_species_with_most_bins_first():
+    frame = _split_shared_frame()
+    extra = frame[frame["processid"].isin(["CHA0", "CHA1"])].copy()
+    extra["processid"] = ["CHX0", "CHX1"]
+    extra["bin_uri"] = "BOLD:X"                     # chrysippus: 2 BINs, 1 shared
+    frame = pd.concat([frame, extra], ignore_index=True)
+    grades = calculate_bags_grades(frame)
+    groups = group_specimens(frame, grades, SPLIT_SHARED)
+    assert [g.species[0] for g in groups] == ["Danaus plexippus", "Danaus chrysippus"]
+
+
+def test_e_groups_mark_their_c_plus_e_species():
+    frame = _split_shared_frame()
+    grades = calculate_bags_grades(frame)
+    groups = {g.bins[0]: g for g in group_specimens(frame, grades, "E")}
+    assert groups["BOLD:A"].caption == "Shared BIN: BOLD:A (2 species) · C+E: Danaus plexippus"
+    assert "see BAGS C+E" in groups["BOLD:A"].note
+
+
+def test_the_checklist_marks_c_plus_e_species():
+    frame = _split_shared_frame()
+    grades = calculate_bags_grades(frame)
+    checklist = build_species_checklist(frame, grades).set_index("species")
+    assert checklist.loc["Danaus plexippus", "c_plus_e"] == "C+E"
+    assert checklist.loc["Danaus chrysippus", "c_plus_e"] == ""
+    assert checklist.loc["Vanessa atalanta", "c_plus_e"] == ""
+
+
+def test_c_plus_e_is_not_a_bags_grade():
+    assert SPLIT_SHARED not in GRADES
