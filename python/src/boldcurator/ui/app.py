@@ -342,6 +342,45 @@ def _unnamed_panel() -> ui.Tag:
     )
 
 
+def _cell_text(row: pd.Series, *columns: str) -> str:
+    """The first of ``columns`` with a value, as text; ``""`` if none has one.
+
+    Not ``row.get(a) or row.get(b)``: a missing value is ``pd.NA``, whose
+    truth value raises "boolean value of NA is ambiguous" -- which is what
+    building a tree did once a representative could have no species name.
+    """
+    for column in columns:
+        value = row.get(column)
+        if not _is_missing(value) and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
+def _phylo_tips(result, grade_by_species: dict[str, str]) -> list[dict]:
+    """Per-tip metadata for the tree renderer (phylo-init.js).
+
+    A tip is coloured by its name's BAGS grade only when the record is
+    species-level (``core.species.name_status``): a genus-rank "Danaus sp."
+    is not the interim species "Danaus sp.", whatever the text says.
+    """
+    tips = []
+    for _, row in result.representatives.iterrows():
+        species = _cell_text(row, "species", "identification")
+        level = _cell_text(row, "name_status") in SPECIES_LEVEL_STATUSES \
+            if "name_status" in row.index else True
+        grade = grade_by_species.get(species, "") if level else ""
+        tips.append({
+            "tip": row["_tip_label"],
+            "species": species,
+            "bin_uri": _cell_text(row, "bin_uri"),
+            "bags_grade": grade,
+            "monophyletic": result.monophyly.get(species) if level else None,
+            "color": GRADE_COLOURS.get(grade, "#495057"),
+            "flags": result.flags.get(row["_tip_label"], []),
+        })
+    return tips
+
+
 def _unnamed_counts(groups) -> list[tuple[int, str, str]]:
     """``(count, label, colour)`` for the Species tab's two unnamed-BIN boxes,
     discordant in grade E's red and concordant in the screen's own colour."""
@@ -1927,28 +1966,8 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     style="margin-bottom:10px;",
                 ))
 
-            tips = [
-                {
-                    "tip": row["_tip_label"],
-                    "species": str(row.get("species") or row.get("identification") or ""),
-                    "bin_uri": str(row.get("bin_uri") or ""),
-                    "bags_grade": "",
-                    "monophyletic": None,
-                    "color": "#495057",
-                    "flags": result.flags.get(row["_tip_label"], []),
-                }
-                for _, row in result.representatives.iterrows()
-            ]
-            grade_by_species = None
             search = state.search
-            if search is not None:
-                grade_by_species = search.grade_lookup()
-            for tip in tips:
-                grade = (grade_by_species or {}).get(tip["species"], "")
-                tip["bags_grade"] = grade
-                tip["color"] = GRADE_COLOURS.get(grade, "#495057")
-                if tip["species"] in result.monophyly:
-                    tip["monophyletic"] = result.monophyly[tip["species"]]
+            tips = _phylo_tips(result, search.grade_lookup() if search else {})
 
             container_id = "phylo-tree-container"
             rows.append(ui.download_button(

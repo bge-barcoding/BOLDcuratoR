@@ -672,3 +672,42 @@ def test_a_broader_second_search_gets_representatives_for_its_new_bins(store):
     assert {keys[p] for p in selected if p in keys} == set(group_keys(with_bin))
     for pid, entry in first_selected.items():
         assert state.annotations.selected[pid] == entry
+
+
+def test_tree_tips_survive_a_representative_with_no_species_name():
+    """Regression: "boolean value of NA is ambiguous" building a tree.
+
+    Representatives no longer need a species name, so a genus-rank record's
+    species is pd.NA, and the tip builder's ``species or identification``
+    raised on it.
+    """
+    import pandas as pd
+
+    from boldcurator.core.phylogeny import PhylogenyResult
+    from boldcurator.ui.app import _phylo_tips
+
+    from boldcurator.core.pipeline import process_specimen_data
+
+    # Through process_specimen_data, from a string-dtype column as a snapshot
+    # fetch gives it: the missing species becomes pd.NA itself, not NaN.
+    reps = process_specimen_data(pd.DataFrame({
+        "processid": ["P1", "P2", "P3"],
+        "species": pd.array(["Danaus plexippus", None, "Danaus sp."], dtype="string"),
+        "identification": ["Danaus plexippus", "Danaus", "Danaus sp."],
+        "identification_rank": ["species", "genus", "genus"],
+        "bin_uri": pd.array(["BOLD:A", None, "BOLD:C"], dtype="string"),
+    }))
+    reps["_tip_label"] = ["P1-Danaus plexippus-Kenya", "P2-Danaus-Kenya",
+                          "P3-Danaus sp.-Peru"]
+    with pytest.raises(TypeError, match="ambiguous"):
+        bool(reps.iloc[1]["species"] or "")      # the old code's expression
+    result = PhylogenyResult(representatives=reps, newick="(a,b);",
+                             monophyly={"Danaus plexippus": True})
+    # "Danaus sp." is also graded as an interim species elsewhere in the
+    # result; the genus-rank record must not borrow that grade.
+    tips = _phylo_tips(result, {"Danaus plexippus": "A", "Danaus sp.": "E"})
+
+    assert [t["species"] for t in tips] == ["Danaus plexippus", "Danaus", "Danaus sp."]
+    assert [t["bin_uri"] for t in tips] == ["BOLD:A", "", "BOLD:C"]
+    assert [t["bags_grade"] for t in tips] == ["A", "", ""]
+    assert tips[0]["monophyletic"] is True and tips[2]["monophyletic"] is None
