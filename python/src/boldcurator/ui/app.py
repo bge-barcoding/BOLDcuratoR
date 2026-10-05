@@ -1755,7 +1755,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                                 choices={str(i): f"{g.caption}  ({g.specimen_count})"
                                          for i, g in enumerate(groups)},
                                 selected=str(index), width="100%"),
-                            style="flex:1 1 auto;min-width:280px;max-width:720px;",
+                            style="flex:1 1 auto;min-width:280px;max-width:1000px;",
                         ),
                         ui.input_action_button(f"prev_{grade}", "‹ Previous",
                                                class_="btn-sm"),

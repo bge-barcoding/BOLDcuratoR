@@ -9,9 +9,9 @@ per problem, and the curator takes them one at a time:
 =======  ==========================  ==============================================
 Grade    One group per               Caption
 =======  ==========================  ==============================================
-A, B, D  species                     ``Species: X (>10 specimens, single BIN)``
+A, B, D  species                     ``Species: X``
 C        species x BIN               ``Species: X - BIN: Y``
-E        shared BIN                  ``Shared BIN: Y (2 species)``
+E        shared BIN                  ``Shared BIN: Y (2 species) - X, Z``
 =======  ==========================  ==============================================
 
 **Grades E and C are the ones that matter**, because they are the ones where
@@ -86,14 +86,6 @@ GRADE_DESCRIPTIONS: dict[str, str] = {
     "C": "Species split across more than one BIN",
     "D": "Fewer than three specimens",
     "E": "Species sharing a BIN with another species",
-}
-
-#: The parenthetical on a group caption, so a group carries its own criterion
-#: without the curator having to remember which tab they are on.
-_GRADE_QUALIFIER: dict[str, str] = {
-    "A": ">10 specimens, single BIN",
-    "B": "3-10 specimens, single BIN",
-    "D": "<3 specimens, single BIN",
 }
 
 #: The grades where the barcode and the name disagree, so the curator's
@@ -227,11 +219,18 @@ def split_shared_species(grades: pd.DataFrame | None) -> set[str]:
 def split_shared_groups(specimens: pd.DataFrame, grades: pd.DataFrame, *,
                         shared_bins=None) -> list[SpecimenGroup]:
     """One group per C+E species (:func:`split_shared_species`): its own
-    records in every one of its BINs, plus the higher-rank records riding
-    along in those BINs. Most BINs first, then by name. Within a group the
-    species' own records come first, BIN by BIN, best first, then the riders:
-    a shared BIN's genus-level records can outnumber the species' own and
-    would otherwise bury them.
+    records in every one of its BINs, the other species' records in its
+    shared BINs, and the higher-rank records riding along in those BINs.
+    Most BINs first, then by name. Within a group the species' own records
+    come first, BIN by BIN, best first, then the sharing species', then the
+    riders: a shared BIN's genus-level records can outnumber the species' own
+    and would otherwise bury them.
+
+    Round 8, item 8.1: the sharing species used to be left out, so a shared
+    BIN showed only one of the names that make it shared (Sialis concava's
+    group showed 53 of the 68 records in its two BINs, missing the 15 Sialis
+    velata it shares BOLD:AAG9765 with). The problem is the BIN, so the
+    whole BIN is shown.
 
     The caption labels each BIN: "shared with" the other species-level names
     in it, "mixed genera" (families, orders) for a discordant BIN with no
@@ -257,6 +256,8 @@ def split_shared_groups(specimens: pd.DataFrame, grades: pd.DataFrame, *,
         own_bins = sorted(set(bins[core]))
         if not own_bins:
             continue
+        shared_own = [b for b in own_bins if b in shared_bins]
+        sharers = named & (species != name) & bins.isin(shared_own)
         riders = ~named & bins.isin(own_bins)
         labels = []
         for bin_uri in own_bins:
@@ -274,15 +275,17 @@ def split_shared_groups(specimens: pd.DataFrame, grades: pd.DataFrame, *,
         shown = ", ".join(labels[:_CAPTION_BINS])
         if len(labels) > _CAPTION_BINS:
             shown += f" +{len(labels) - _CAPTION_BINS} more"
-        members = frame[core | riders]
+        members = frame[core | sharers | riders]
         score = pd.to_numeric(column_or_missing(members, "quality_score"),
                               errors="coerce").fillna(-1)
-        order = pd.DataFrame({"rider": riders[members.index].to_numpy(),
+        tier = (sharers[members.index].astype(int)
+                + 2 * riders[members.index].astype(int))
+        order = pd.DataFrame({"tier": tier.to_numpy(),
                               "bin": bins[members.index].to_numpy(),
                               "score": score.to_numpy(),
                               "pid": _text(members, "processid").to_numpy()},
                              index=members.index)
-        order = order.sort_values(["rider", "bin", "score", "pid"],
+        order = order.sort_values(["tier", "bin", "score", "pid"],
                                   ascending=[True, True, False, True], kind="stable")
         groups.append(SpecimenGroup(
             key=f"{SPLIT_SHARED}|{name}",
@@ -293,7 +296,8 @@ def split_shared_groups(specimens: pd.DataFrame, grades: pd.DataFrame, *,
             note=(f"Split across {len(own_bins)} BINs, "
                   f"{sum(b in shared_bins for b in own_bins)} of them shared "
                   "or discordant. Graded E; every BIN of the species is here, "
-                  "and the shared ones are also on BAGS E."),
+                  "with the other species sharing them, and the shared ones "
+                  "are also on BAGS E."),
         ))
     groups.sort(key=lambda g: (-len(g.bins), g.species[0]))
     return groups
@@ -391,10 +395,11 @@ def _species_groups(frame, species, bins, named, grade) -> list[SpecimenGroup]:
         own_bins = set(bins[core]) - {""}
         riders = ~named & bins.isin(own_bins) & (bins != "")
         members = _sorted(frame[core | riders])
-        qualifier = _GRADE_QUALIFIER.get(grade, "")
+        # Round 8, item 3.1: no "(>10 specimens, single BIN)" qualifier --
+        # the grade's own header already says it.
         groups.append(SpecimenGroup(
             key=f"{grade}|{name}",
-            caption=f"Species: {name}" + (f" ({qualifier})" if qualifier else ""),
+            caption=f"Species: {name}",
             specimens=members,
             species=(name,),
             bins=tuple(sorted(own_bins)),
@@ -479,10 +484,19 @@ def _shared_bin_groups(frame, species, bins, named, grades, *,
         label = (f"Shared BIN: {bin_uri} ({conflict_counts(len(names), conflicts)}"
                  f"{' here' if outside else ''})")
         split = sorted(set(names) & split_also)
+        if names:
+            # Round 8, item 7.1: name every species in the BIN. Naming only
+            # the C+E one read as if it were the BIN's only species. A C+E
+            # species (other BINs this group does not show; BAGS C+E shows
+            # them all together) is marked in place, and listed first so a
+            # long list never truncates the marker away.
+            ordered = sorted(names, key=lambda n: (n not in split_also, n))
+            shown = [f"{n} [C+E]" if n in split_also else n
+                     for n in ordered[:_CAPTION_NAMES]]
+            label += " — " + ", ".join(shown)
+            if len(names) > _CAPTION_NAMES:
+                label += f" +{len(names) - _CAPTION_NAMES} more"
         if split:
-            # The D marker: these species have other BINs this group does
-            # not show; BAGS C+E shows them all together.
-            label += f" · C+E: {', '.join(split)}"
             note = "; ".join(filter(None, [note, (
                 f"{', '.join(split)} also split across other BINs -- see "
                 "BAGS C+E for every BIN of the species")]))

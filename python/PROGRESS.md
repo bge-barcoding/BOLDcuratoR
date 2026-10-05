@@ -17,7 +17,7 @@ Ticked as each item lands; the note says what changed.
 - [ ] 1.1 App unresponsive after idle (buttons dead, downloads return JSON)
 - [ ] 1.2 Text boxes and buttons don't line up across the app
 - [ ] 2.1 Species tab: summary blocks narrower, all on one row
-- [ ] 3.1 BAGS A/B/D: drop the "(>10 specimens, single BIN)" qualifier from group labels
+- [x] 3.1 BAGS A/B/D: drop the "(>10 specimens, single BIN)" qualifier from group labels -- captions are now `Species: X (n)` (`core/grouping.py:_species_groups`).
 - [ ] 4.1 BAGS/Specimens toolbars: inputs sit higher than buttons (same as 1.2)
 - [ ] 4.2 "Corrected identification" -> "Correct ID", box 1.5x wider
 - [ ] 4.3 Flag list: replace "id_uncertain" with "contamination"
@@ -27,8 +27,8 @@ Ticked as each item lands; the note says what changed.
 - [ ] 5.4 Newer app version: link to the download page
 - [ ] 5.5 Data page: remove the BOLD attribution footer (header link stays)
 - [ ] 6.1 Website: EULA / no-warranty notice for downloads
-- [ ] 7.1 BAGS E: group label doesn't name every species in the BIN
-- [ ] 8.1 BAGS C+E: sharing species' records missing from the group
+- [x] 7.1 BAGS E: group label doesn't name every species in the BIN -- the table was complete; the caption named only the C+E species. It now lists every species, C+E ones first and marked `[C+E]`, e.g. `Shared BIN: BOLD:AAG9765 (2 species) — Sialis concava [C+E], Sialis velata (64)`.
+- [x] 8.1 BAGS C+E: sharing species' records missing from the group -- `split_shared_groups` kept only the species' own records and higher-rank riders, by design. **Reversed:** it now also shows the other species in the species' shared BINs (own records, then sharers, then riders). The curator's Sialis concava group now has all 68 records, not 53. Regression tests use the same shape (`tests/test_grouping.py`, `_sialis_frame`).
 - [ ] 9.1 Phylogeny: tip name "bin-processid-identification-country"
 - [ ] 9.2 Phylogeny: tip name links to the BIN on BOLD
 
