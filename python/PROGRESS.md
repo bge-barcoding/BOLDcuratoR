@@ -10,9 +10,11 @@ performance investigation, the packaging saga) was trimmed from this file on
 2026-09-26 -- it is in git history (`git log -- python/PROGRESS.md`) if a
 similar bug resurfaces and you want to see how it was fixed last time.
 
-## Round 8 curator feedback (2026-10-05) -- in progress
+## Round 8 curator feedback (2026-10-05) -- done
 
-Ticked as each item lands; the note says what changed.
+All 17 items closed; each note says what changed. Still to confirm on a real
+machine: the reconnect after an actual sleep (simulated here by closing the
+websocket), and the installer's licence page (built by CI only).
 
 - [x] 1.1 App unresponsive after idle (buttons dead, downloads return JSON) -- root cause: uvicorn closes a websocket that misses its 20 s ping, which a minimised or sleeping window can't answer. That ends the Shiny session behind a page that still looks alive, and a dead session's download link answers `{"detail":"Not Found"}`, the JSON file the curator saw. Fixes: (1) no websocket pings on the loopback server (`desktop.WEBSOCKET_KEEPALIVE`); (2) if the socket drops anyway, the page shows "reconnecting" and reloads itself once it is visible and the server answers (`RECONNECT_JS`). The ending session saves its work and leaves a note (`_Reconnects`), and the new page restores the search, annotations, user name, tab, group and page. `drive_ui.py` closes the socket and checks all of this, including that a download afterwards is the real file.
 - [x] 1.2 Text boxes and buttons don't line up across the app -- `INLINE_INPUT_CSS` (`ui/format.py`) is used by both the app and the first-run setup screen; see 4.1. On the setup screen the path label now sits above the row. Measured: the Data-tab and setup rows share one centre.
@@ -26,15 +28,15 @@ Ticked as each item lands; the note says what changed.
 - [x] 5.3 Data page: delete an old snapshot once a newer one is downloaded -- root cause: a download never became the snapshot in use (the config kept the old path, and "Restart to switch" was untrue), so the old file stayed in use and couldn't be deleted. Now a newer download or copy is used from the next start (`_use_next_start_if_newer`). Each listed file says whether it is newer or older than the file in use and has **Use this one** and Delete buttons. "Keep using this one" undoes a switch. Deleting the next-start file falls back to the file in use.
 - [x] 5.4 Newer app version: link to the download page -- the banner already existed but linked the download page only for frozen builds. Now both the banner and the Data tab's manual check link the website's download section whenever a newer version is out.
 - [x] 5.5 Data page: remove the BOLD attribution footer (header link stays) -- removed. The setup screen and every export keep it.
-- [ ] 6.1 Website: EULA / no-warranty notice for downloads
+- [x] 6.1 Website: EULA / no-warranty notice for downloads -- the MIT licence already disclaims warranty and liability ("as is"), but no download route showed it. A bespoke EULA isn't needed for free, open-source software. Now the website's download section says "provided as is, without warranty of any kind... use at your own risk" with a link to LICENSE (the footer says so too), and the Windows installer shows LICENSE as an accept-to-continue page (`LicenseFile=` in `windows-installer.iss`). This isn't legal advice; NHM's legal team can confirm the wording.
 - [x] 7.1 BAGS E: group label doesn't name every species in the BIN -- the table was complete; the caption named only the C+E species. It now lists every species, C+E ones first and marked `[C+E]`, e.g. `Shared BIN: BOLD:AAG9765 (2 species) — Sialis concava [C+E], Sialis velata (64)`.
 - [x] 8.1 BAGS C+E: sharing species' records missing from the group -- `split_shared_groups` kept only the species' own records and higher-rank riders, by design. **Reversed:** it now also shows the other species in the species' shared BINs (own records, then sharers, then riders). The curator's Sialis concava group now has all 68 records, not 53. Regression tests use the same shape (`tests/test_grouping.py`, `_sialis_frame`).
 - [x] 9.1 Phylogeny: tip name "bin-processid-identification-country" -- `core/phylogeny.py:tip_label` now gives `BOLD:AAG9765-PID-Species-Country` (`No BIN-...` when blank). Biopython quotes the colon in Newick; a round-trip test covers it.
 - [x] 9.2 Phylogeny: tip name links to the BIN on BOLD -- each tip name is an SVG link to `bold_bin_url` (`bin_url` in `_phylo_tips`, `phylo-init.js`). A click that ends a pan drag does not follow the link. `drive_ui.py` checks it.
 
-## State (2026-09-26)
+## State (2026-10-05)
 
-Feature-complete and in curators' hands. Seven rounds of curator-reported
+Feature-complete and in curators' hands. Eight rounds of curator-reported
 issues are closed; there are no open curator bugs.
 
 - **The app:** Data, Search, Gap analysis, Species, BINs, BAGS A-E (E and C
@@ -56,9 +58,9 @@ issues are closed; there are no open curator bugs.
   shortcut command. The version comes from the release tag everywhere
   (`packaging/stamp_version.py`); the frozen build's `--version` is checked in
   CI. Unsigned, deliberately.
-- **Tests:** about 600 pytest tests, the R parity gate (PASS, nine recorded
+- **Tests:** about 630 pytest tests, the R parity gate (PASS, nine recorded
   divergences) and CI on Linux, macOS and Windows. `tools/drive_ui.py` makes
-  38 checks against the running UI.
+  42 checks against the running UI.
 
 ## Open items
 
@@ -117,6 +119,8 @@ Nothing here blocks curators. Roughly in priority order:
 | `HAS_IMAGE` | Removed; image requirement dropped from `RANK_2` so rank 2 stays reachable. Max score 15, not 16 |
 | Dataset/project codes | Implemented properly via `specimen_recordset` |
 | BAGS grade E | Evaluated against the whole snapshot, not just downloaded records |
+| BAGS C+E membership | A C+E group shows the species' own records in every BIN, **plus the other species in its shared BINs**, plus higher-rank riders (round 8, item 8.1, reversing the earlier "own records only" choice): the problem is the BIN, so the whole BIN is shown. |
+| Connection loss | The loopback server never pings its window (`desktop.WEBSOCKET_KEEPALIVE`). If the socket drops anyway, the page reloads itself and the server restores the session (round 8, item 1.1). Don't reintroduce uvicorn's default pings. |
 | BIN-less records | Excluded from BAGS entirely (project owner's instruction, reversing an earlier match to R): a species-level record with no BIN is not counted, and a species with no BIN-assigned records gets no grade. They still appear in the specimen table. |
 | GUI | Shiny for Python. No widget ever receives a whole result: the specimen table is server-side paged from `core/table.py` |
 | Desktop window | Best effort: `auto` tries a native pywebview window, then a Chromium `--app` window, then a browser tab. A pywebview failure never crashes the app |

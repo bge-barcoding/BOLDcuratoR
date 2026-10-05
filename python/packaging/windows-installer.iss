@@ -43,6 +43,11 @@ Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
 SetupIconFile=icon.ico
+; Round 8, item 6.1: show the MIT licence -- with its "as is, without
+; warranty" and no-liability terms -- as an accept-to-continue page, so
+; nobody installs without seeing them. Relative to this script, in the full
+; checkout the release workflow makes.
+LicenseFile=..\..\LICENSE
 UninstallDisplayIcon={app}\{#MyAppExeName}
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
