@@ -25,6 +25,8 @@ import datetime as _dt
 import json
 import tempfile
 import threading
+import time
+from urllib.parse import parse_qs
 from pathlib import Path
 
 import pandas as pd
@@ -317,6 +319,97 @@ def _with_checked(frame: pd.DataFrame, annotations) -> pd.DataFrame:
     return out
 
 
+class _Reconnects:
+    """What a session left behind when its connection dropped, for the page
+    that reloads in its place -- round 8, item 1.1.
+
+    Keyed by the *old* Shiny session id, which the page passes back on reload
+    (``?bc_resume=<id>``), so a note is only ever claimed by the window whose
+    connection dropped, and only once. Notes older than ``ttl`` seconds are
+    discarded unclaimed. One per app process, shared by its sessions.
+    """
+
+    def __init__(self, ttl: float = 24 * 3600) -> None:
+        self._ttl = ttl
+        self._notes: dict[str, tuple[float, dict]] = {}
+        self._lock = threading.Lock()
+
+    def leave(self, old_session_id: str, **note) -> None:
+        with self._lock:
+            now = time.monotonic()
+            self._notes = {k: v for k, v in self._notes.items()
+                           if now - v[0] < self._ttl}
+            self._notes[old_session_id] = (now, note)
+
+    def claim(self, old_session_id: str) -> dict | None:
+        with self._lock:
+            left = self._notes.pop(old_session_id, None)
+        if left is None or time.monotonic() - left[0] >= self._ttl:
+            return None
+        return left[1]
+
+
+def _resume_token(url_search: str) -> str:
+    """The old session id in a reconnecting page's ``?bc_resume=...``."""
+    return parse_qs((url_search or "").lstrip("?")).get("bc_resume", [""])[0]
+
+
+#: Round 8, item 1.1. When the websocket drops (the server was asked not to
+#: drop it -- ``desktop.WEBSOCKET_KEEPALIVE`` -- but a sleeping machine can
+#: still lose it), the page used to stay on screen with a dead session behind
+#: it: clicks went nowhere and download links answered with an error body.
+#: Now it says so, waits until the window is visible and the server answers,
+#: and reloads itself with the old session id; the server saved that
+#: session's work as it ended and restores it into the new one.
+RECONNECT_JS = """
+(function () {
+  var reloading = false;
+  function oldSessionId() {
+    try { return Shiny.shinyapp.config.sessionId || ""; } catch (e) { return ""; }
+  }
+  function reconnect(old) {
+    if (reloading) return;
+    reloading = true;
+    var url = new URL(window.location.href);
+    url.searchParams.set("bc_resume", old);
+    (function attempt() {
+      // Reload only once the server answers -- against a stopped server a
+      // reload would swap this page for the browser's own error page.
+      fetch(window.location.pathname, {cache: "no-store"}).then(function (r) {
+        if (r.ok) { window.location.replace(url.toString()); }
+        else { setTimeout(attempt, 3000); }
+      }).catch(function () { setTimeout(attempt, 3000); });
+    })();
+  }
+  $(document).on("shiny:disconnected", function () {
+    var old = oldSessionId();
+    var box = document.getElementById("bc-reconnect");
+    if (box) box.style.display = "flex";
+    var now = document.getElementById("bc-reconnect-now");
+    if (now) now.onclick = function () { reconnect(old); };
+    if (document.visibilityState === "visible") {
+      setTimeout(function () { reconnect(old); }, 1000);
+    } else {
+      document.addEventListener("visibilitychange", function onVisible() {
+        if (document.visibilityState !== "visible") return;
+        document.removeEventListener("visibilitychange", onVisible);
+        reconnect(old);
+      });
+    }
+  });
+  // Once the server has read it, drop the token, so a later manual reload
+  // starts afresh rather than claiming nothing.
+  $(document).on("shiny:sessioninitialized", function () {
+    var url = new URL(window.location.href);
+    if (url.searchParams.has("bc_resume")) {
+      url.searchParams.delete("bc_resume");
+      history.replaceState(null, "", url.toString());
+    }
+  });
+})();
+"""
+
+
 #: The Data tab's grey panels.
 BOX_STYLE = ("padding:10px 14px;background:#f8f9fa;border:1px solid #dee2e6;"
              "border-radius:5px;")
@@ -516,6 +609,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
     store = SnapshotStore(snapshot)
     info = store.info()
     sessions_path = sessions_path or DEFAULT_SESSIONS_PATH
+    reconnects = _Reconnects()
 
     app_ui = ui.page_fluid(
         # Round 5, items 6/7/8/10: the page itself must never need its own
@@ -633,6 +727,19 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         """),
         ui.tags.style(INLINE_INPUT_CSS),
         ui.tags.div(id="bc-toast", class_="bc-toast"),
+        ui.tags.div(
+            ui.tags.span("Lost the connection to BOLDcurator -- reconnecting "
+                         "and restoring your work..."),
+            ui.tags.button("Reconnect now", id="bc-reconnect-now", type="button",
+                           class_="btn btn-sm btn-light"),
+            id="bc-reconnect",
+            style="display:none;position:fixed;top:12px;left:50%;"
+                  "transform:translateX(-50%);z-index:100000;gap:12px;"
+                  "align-items:center;background:#212529;color:#fff;"
+                  "padding:8px 14px;border-radius:6px;font-size:14px;"
+                  "box-shadow:0 2px 8px rgba(0,0,0,.3);",
+        ),
+        ui.tags.script(RECONNECT_JS),
         # One delegated listener, attached to the page once. The specimen and
         # group tables are re-rendered as raw HTML on every click (paging,
         # sorting, "next problem"...), which replaces the checkboxes' own
@@ -963,7 +1070,30 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         #: concurrent opens fine at this scale, and it means a tab closing
         #: doesn't affect another tab's saved-session list.
         sessions = SessionStore(sessions_path)
-        session.on_ended(sessions.close)
+
+        def _on_session_ended() -> None:
+            """Round 8, item 1.1: save the work and leave a note for a page
+            reconnecting in this one's place (``_Reconnects``). Best effort:
+            the minute-by-minute auto-save stands if this fails."""
+            try:
+                with reactive.isolate():
+                    name = (input.session_name() or "").strip()
+                    note = {"user": (input.user() or "").strip(),
+                            "session_name": name, "tab": input.nav(),
+                            "offset": offset.get(),
+                            "groups": {g: v.get() for g, v in group_index.items()}}
+                saved_id = None
+                if state.search is not None:
+                    saved_id = _slugify(name) or _slugify("Auto-save")
+                    state.save_session(sessions, saved_id,
+                                       name=name or "Auto-save")
+                reconnects.leave(session.id, saved_id=saved_id, **note)
+            except Exception:  # noqa: BLE001 -- never let closing fail
+                pass
+            finally:
+                sessions.close()
+
+        session.on_ended(_on_session_ended)
         revision = reactive.Value(0)
         status = reactive.Value("")
         session_msg = reactive.Value("")
@@ -1626,6 +1756,43 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             ui.update_navset("nav", selected="species")
             session_msg.set(" ".join([text] + warnings))
             touch()
+
+        resume_tries = {"n": 0}
+
+        @reactive.effect
+        def _resume_after_reconnect():
+            """Round 8, item 1.1: a page reloaded by RECONNECT_JS carries the
+            old session id; pick up what that session left. Polls briefly,
+            because the old session may still be saving as this one starts."""
+            token = _resume_token(session.clientdata.url_search())
+            if not token:
+                return
+            note = reconnects.claim(token)
+            if note is None:
+                if resume_tries["n"] < 40:
+                    resume_tries["n"] += 1
+                    reactive.invalidate_later(0.5)
+                return
+            with reactive.isolate():
+                if note.get("user"):
+                    ui.update_text("user", value=note["user"])
+                    state.user = note["user"]
+                if note.get("session_name"):
+                    ui.update_text("session_name", value=note["session_name"])
+                saved = (sessions.load(note["saved_id"])
+                         if note.get("saved_id") else None)
+                if saved is not None:
+                    text, warnings = state.resume_session(saved)
+                    offset.set(note.get("offset", 0))
+                    for grade, value in group_index.items():
+                        value.set(note.get("groups", {}).get(grade, 0))
+                    session_msg.set(" ".join([text] + warnings))
+                    touch()
+                if note.get("tab"):
+                    ui.update_navset("nav", selected=note["tab"])
+            ui.notification_show(
+                "Reconnected -- your work is back where you left it."
+                if saved is not None else "Reconnected.", duration=6)
 
         @reactive.effect
         @reactive.event(input.delete_session)
@@ -3037,6 +3204,8 @@ def run(snapshot: str | Path, *, host: str = "127.0.0.1", port: int = 8000,
         sessions_path: str | Path | None = None) -> None:
     import shiny
 
+    from ..desktop import WEBSOCKET_KEEPALIVE
+
     shiny.run_app(
         create_app(snapshot, page_size=page_size, sessions_path=sessions_path),
-        host=host, port=port)
+        host=host, port=port, **WEBSOCKET_KEEPALIVE)

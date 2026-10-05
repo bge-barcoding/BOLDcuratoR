@@ -201,7 +201,7 @@ pip install playwright && playwright install chromium
 python tools/drive_ui.py --out /tmp/shots
 ```
 
-`drive_ui.py` makes 39 checks across every tab and exits non-zero on a
+`drive_ui.py` makes 42 checks across every tab and exits non-zero on a
 failure. When adding one, match against the table, not the panel -- the flag
 `<select>` contains every flag name, so a panel-wide text match passes for an
 annotation that never rendered.

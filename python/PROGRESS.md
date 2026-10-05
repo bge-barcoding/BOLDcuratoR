@@ -14,7 +14,7 @@ similar bug resurfaces and you want to see how it was fixed last time.
 
 Ticked as each item lands; the note says what changed.
 
-- [ ] 1.1 App unresponsive after idle (buttons dead, downloads return JSON)
+- [x] 1.1 App unresponsive after idle (buttons dead, downloads return JSON) -- root cause: uvicorn closes a websocket that misses its 20 s ping, which a minimised or sleeping window can't answer. That ends the Shiny session behind a page that still looks alive, and a dead session's download link answers `{"detail":"Not Found"}`, the JSON file the curator saw. Fixes: (1) no websocket pings on the loopback server (`desktop.WEBSOCKET_KEEPALIVE`); (2) if the socket drops anyway, the page shows "reconnecting" and reloads itself once it is visible and the server answers (`RECONNECT_JS`). The ending session saves its work and leaves a note (`_Reconnects`), and the new page restores the search, annotations, user name, tab, group and page. `drive_ui.py` closes the socket and checks all of this, including that a download afterwards is the real file.
 - [x] 1.2 Text boxes and buttons don't line up across the app -- `INLINE_INPUT_CSS` (`ui/format.py`) is used by both the app and the first-run setup screen; see 4.1. On the setup screen the path label now sits above the row. Measured: the Data-tab and setup rows share one centre.
 - [x] 2.1 Species tab: summary blocks narrower, all on one row -- `value_box(..., compact=True)` (`ui/format.py`): the tiles share the row equally, `flex-wrap:nowrap`, and a long label wraps onto a second line.
 - [x] 3.1 BAGS A/B/D: drop the "(>10 specimens, single BIN)" qualifier from group labels -- captions are now `Species: X (n)` (`core/grouping.py:_species_groups`).

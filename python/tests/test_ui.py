@@ -798,3 +798,35 @@ def test_tree_tips_survive_a_representative_with_no_species_name():
     assert tips[1]["bin_url"] == "", "no BIN, no link"
     assert [t["bags_grade"] for t in tips] == ["A", "", ""]
     assert tips[0]["monophyletic"] is True and tips[2]["monophyletic"] is None
+
+
+def test_a_reconnect_note_is_claimed_once_by_its_own_session():
+    """Round 8, item 1.1: the page that reloads after a dropped connection
+    gets back what its old session left -- once, and nobody else does."""
+    from boldcurator.ui.app import _Reconnects
+
+    notes = _Reconnects()
+    notes.leave("old-1", saved_id="auto-save", tab="grade_C")
+    assert notes.claim("someone-else") is None
+    assert notes.claim("old-1") == {"saved_id": "auto-save", "tab": "grade_C"}
+    assert notes.claim("old-1") is None, "claimed once"
+
+    stale = _Reconnects(ttl=0)
+    stale.leave("old-2", saved_id="x")
+    assert stale.claim("old-2") is None, "expired notes are not handed out"
+
+
+def test_the_resume_token_comes_from_the_query_string():
+    from boldcurator.ui.app import _resume_token
+
+    assert _resume_token("?bc_resume=abc123") == "abc123"
+    assert _resume_token("?x=1&bc_resume=abc") == "abc"
+    assert _resume_token("") == "" and _resume_token("?x=1") == ""
+
+
+def test_the_server_never_pings_its_own_window_away():
+    """Round 8, item 1.1: uvicorn's 20 s websocket ping timeout ended the
+    session of a window that was minimised or asleep."""
+    from boldcurator.desktop import WEBSOCKET_KEEPALIVE
+
+    assert WEBSOCKET_KEEPALIVE == {"ws_ping_interval": None, "ws_ping_timeout": None}
