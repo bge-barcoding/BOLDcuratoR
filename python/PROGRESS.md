@@ -10,6 +10,28 @@ performance investigation, the packaging saga) was trimmed from this file on
 2026-09-26 -- it is in git history (`git log -- python/PROGRESS.md`) if a
 similar bug resurfaces and you want to see how it was fixed last time.
 
+## Round 8 curator feedback (2026-10-05) -- in progress
+
+Ticked as each item lands; the note says what changed.
+
+- [ ] 1.1 App unresponsive after idle (buttons dead, downloads return JSON)
+- [ ] 1.2 Text boxes and buttons don't line up across the app
+- [ ] 2.1 Species tab: summary blocks narrower, all on one row
+- [ ] 3.1 BAGS A/B/D: drop the "(>10 specimens, single BIN)" qualifier from group labels
+- [ ] 4.1 BAGS/Specimens toolbars: inputs sit higher than buttons (same as 1.2)
+- [ ] 4.2 "Corrected identification" -> "Correct ID", box 1.5x wider
+- [ ] 4.3 Flag list: replace "id_uncertain" with "contamination"
+- [ ] 5.1 Data page: remove download-from-URL; keep Zenodo download and existing file
+- [ ] 5.2 Data page: use the width, trim text
+- [ ] 5.3 Data page: delete an old snapshot once a newer one is downloaded
+- [ ] 5.4 Newer app version: link to the download page
+- [ ] 5.5 Data page: remove the BOLD attribution footer (header link stays)
+- [ ] 6.1 Website: EULA / no-warranty notice for downloads
+- [ ] 7.1 BAGS E: group label doesn't name every species in the BIN
+- [ ] 8.1 BAGS C+E: sharing species' records missing from the group
+- [ ] 9.1 Phylogeny: tip name "bin-processid-identification-country"
+- [ ] 9.2 Phylogeny: tip name links to the BIN on BOLD
+
 ## State (2026-09-26)
 
 Feature-complete and in curators' hands. Seven rounds of curator-reported
