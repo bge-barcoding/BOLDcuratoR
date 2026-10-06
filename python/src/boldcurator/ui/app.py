@@ -24,6 +24,7 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import tempfile
+import sys
 import threading
 import time
 from urllib.parse import parse_qs
@@ -1088,8 +1089,12 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     state.save_session(sessions, saved_id,
                                        name=name or "Auto-save")
                 reconnects.leave(session.id, saved_id=saved_id, **note)
-            except Exception:  # noqa: BLE001 -- never let closing fail
-                pass
+            except Exception as exc:  # noqa: BLE001 -- never let closing fail
+                # Reported, not swallowed: stderr is the desktop app's log
+                # file (launcher._redirect_output_to_log). The minute-by-minute
+                # auto-save still stands.
+                print(f"BOLDcurator: could not save the session as it closed: "
+                      f"{exc!r}", file=sys.stderr)
             finally:
                 sessions.close()
 
