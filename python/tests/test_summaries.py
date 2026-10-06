@@ -80,3 +80,21 @@ def test_a_blank_line_in_a_group_is_skipped_not_matched():
     result = gap_analysis([["", "Danaus plexippus"]], SPECIMENS)
     assert result.iloc[0]["status"] == "Found"
     assert result.iloc[0]["matched_species"] == "Danaus plexippus"
+
+
+def test_the_checklist_lists_interim_species_and_says_so():
+    from boldcurator.core.pipeline import process_specimen_data
+    from boldcurator.core.summaries import build_species_checklist
+
+    frame = process_specimen_data(pd.DataFrame([
+        {"processid": "P1", "species": "Danaus plexippus",
+         "identification_rank": "species", "bin_uri": "BOLD:A"},
+        {"processid": "P2", "species": "Danaus sp. 1",
+         "identification_rank": "species", "bin_uri": "BOLD:B"},
+        {"processid": "P3", "species": "Danaus sp.",
+         "identification_rank": "genus", "bin_uri": "BOLD:C"},
+    ]))
+    checklist = build_species_checklist(frame).set_index("species")
+    assert list(checklist.index) == ["Danaus plexippus", "Danaus sp. 1"]
+    assert checklist.loc["Danaus sp. 1", "name_status"] == "interim species"
+    assert checklist.loc["Danaus plexippus", "name_status"] == "species"

@@ -189,9 +189,11 @@
     const width = leftMargin + maxDepth * xScale + labelWidth + 24;
     const height = Math.max(60, leaves.length * rowHeight + 24);
 
+    // Full height, not capped: the container scrolls (phylo.css), whereas
+    // squeezing 1,000 tips into a capped height shrank labels to ~1px.
     const svg = svgEl("svg", {
       width: "100%",
-      height: Math.min(height, 2000),
+      height: height,
       viewBox: `0 0 ${width} ${height}`,
       style: "background:#fff;cursor:grab;user-select:none;",
     });
@@ -257,7 +259,24 @@
           "font-size": 11, fill: flagged ? "#b8860b" : "#212529",
         });
         text.textContent = flagged ? `${label} \u26a0` : label;
-        viewport.appendChild(text);
+        // Round 8, item 9.2: a real tip's name links to its BIN on BOLD.
+        // An SVG <a> with target=_blank opens like the tables' links do (the
+        // desktop window hands those to the system browser). A click that
+        // ends a pan drag is not a click on the name.
+        if (meta && meta.bin_url && !canExpand) {
+          const link = svgEl("a", {
+            href: meta.bin_url, target: "_blank", rel: "noopener noreferrer",
+            class: "bc-phylo-tip-link",
+          });
+          link.addEventListener("click", (evt) => {
+            if (state.dragMoved) evt.preventDefault();
+          });
+          link.addEventListener("dragstart", (evt) => evt.preventDefault());
+          link.appendChild(text);
+          viewport.appendChild(link);
+        } else {
+          viewport.appendChild(text);
+        }
 
         // A 4px-radius circle is far smaller than a pointer -- this
         // invisible, much larger circle at the same centre is the actual
@@ -341,14 +360,20 @@
       apply();
     }, { passive: false });
 
+    let startX = 0;
+    let startY = 0;
     svg.addEventListener("mousedown", (evt) => {
       dragging = true;
-      lastX = evt.clientX;
-      lastY = evt.clientY;
+      state.dragMoved = false;
+      lastX = startX = evt.clientX;
+      lastY = startY = evt.clientY;
       svg.style.cursor = "grabbing";
     });
     global.addEventListener("mousemove", (evt) => {
       if (!dragging) return;
+      if (Math.abs(evt.clientX - startX) + Math.abs(evt.clientY - startY) > 3) {
+        state.dragMoved = true;
+      }
       state.panX += evt.clientX - lastX;
       state.panY += evt.clientY - lastY;
       lastX = evt.clientX;
@@ -373,7 +398,13 @@
       ...(meta.flags || []).map((f) => `\u26a0 ${f}`),
       canReroot ? "Right-click to reroot here" : null,
     ].filter(Boolean);
-    state.tooltip.innerHTML = lines.map((l) => `<div>${l}</div>`).join("");
+    // textContent, never innerHTML: species, BIN and flags come from the
+    // snapshot file, so a crafted value must render as text, not markup.
+    state.tooltip.replaceChildren(...lines.map((l) => {
+      const div = document.createElement("div");
+      div.textContent = String(l);
+      return div;
+    }));
     state.tooltip.style.display = "block";
     state.tooltip.style.left = `${evt.clientX + 12}px`;
     state.tooltip.style.top = `${evt.clientY + 12}px`;

@@ -15,11 +15,13 @@ import pytest
 from boldcurator.ui import setup
 
 
-def test_looks_like_a_manifest_needs_a_json_url():
-    assert setup._looks_like_a_manifest("https://example.org/manifest.json")
-    assert not setup._looks_like_a_manifest("https://example.org/snapshot.duckdb")
-    assert not setup._looks_like_a_manifest("22849516")
-    assert not setup._looks_like_a_manifest("manifest.json")  # no scheme
+def test_there_is_no_free_form_download_source():
+    """Round 8, item 5.1: two ways in -- the public Zenodo snapshot, or an
+    existing file. No URL/manifest field."""
+    resolved: "queue.Queue" = queue.Queue()
+    html = setup.create_setup_app(resolved).ui["html"]
+    assert 'id="source"' not in html and "provide your own source" not in html
+    assert 'id="download_default"' in html and 'id="path"' in html
 
 
 def test_the_setup_app_builds(tmp_path):

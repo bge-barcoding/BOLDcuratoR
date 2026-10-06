@@ -19,6 +19,22 @@ def test_the_app_object_builds(fixture_snapshot):
     assert isinstance(app, shiny.App)
 
 
+def test_the_c_plus_e_screen_is_in_the_nav(fixture_snapshot):
+    from boldcurator.ui.app import create_app
+
+    html = create_app(fixture_snapshot).ui["html"]
+    assert "BAGS C+E" in html
+    assert "grade_CE_body" in html
+
+
+def test_the_unnamed_bins_screen_is_in_the_nav(fixture_snapshot):
+    from boldcurator.ui.app import create_app
+
+    html = create_app(fixture_snapshot).ui["html"]
+    assert "Unnamed BINs" in html
+    assert "grade_U_body" in html
+
+
 def test_the_cc_by_sa_attribution_is_on_the_page(fixture_snapshot):
     """Plan item 0.3: the CC BY-SA 4.0 requirement goes in the app's about
 
@@ -522,19 +538,36 @@ def test_a_fresh_search_auto_selects_a_representative_per_bin_and_country(store)
 
 
 def test_auto_selection_never_overwrites_a_curator_s_own_choice(store):
+    """A curator's pick stays, and its (BIN x country) group gets no second,
+    automatic one. Every *other* group still gets a representative."""
+    from boldcurator.core.selection import UNKNOWN_COUNTRY
     from boldcurator.ui.state import AppState
 
     state = AppState(store)
     state.run_search("Lepidoptera")
     first_page = state.search.table.page(0).rows
+    first_page = first_page[first_page["bin_uri"].fillna("").astype(str) != ""]
     manual_pid = str(first_page["processid"].iloc[0])
     state.annotations.set_selected(manual_pid, user="curator")
+    manual_entry = dict(state.annotations.selected[manual_pid])
 
-    state.search.analysis(store)
+    specimens = state.search.analysis(store).specimens
 
-    assert state.annotations.selected == {
-        manual_pid: state.annotations.selected[manual_pid]
-    }, "an existing selection is a curator's, and analysis must leave it alone"
+    assert state.annotations.selected[manual_pid] == manual_entry, (
+        "an existing selection is a curator's, and analysis must leave it alone")
+
+    def group(frame):
+        country = frame["country.ocean"].fillna("").astype(str).str.strip()
+        return list(zip(frame["bin_uri"].astype(str),
+                        country.replace("", UNKNOWN_COUNTRY)))
+
+    groups = dict(zip(specimens["processid"].astype(str), group(specimens)))
+    selected = set(state.annotations.selected_processids())
+    manual_group = groups[manual_pid]
+    assert [p for p in selected if groups.get(p) == manual_group] == [manual_pid]
+    with_bin = specimens[specimens["bin_uri"].fillna("").astype(str) != ""]
+    assert {groups[p] for p in selected} == set(group(with_bin)), (
+        "every other (BIN x country) group must still get a representative")
 
 
 def test_checking_a_group_replaces_the_checked_set_rather_than_adding(store):
@@ -623,3 +656,177 @@ def test_only_listed_snapshots_can_be_deleted(tmp_path):
     assert not _is_listed_snapshot(tmp_path / "elsewhere.duckdb", directory=data)
     assert not _is_listed_snapshot(data / ".." / "elsewhere.duckdb", directory=data)
     assert not _is_listed_snapshot(data / "sub" / "x.duckdb", directory=data)
+
+
+def test_snapshots_compare_by_their_bold_package_date():
+    from boldcurator.ui.app import _compare_snapshots
+
+    assert _compare_snapshots("2026-10-02", "2026-09-18") == "newer"
+    assert _compare_snapshots("2026-09-11", "2026-09-18") == "older"
+    assert _compare_snapshots("2026-09-18", "2026-09-18") == "same"
+    assert _compare_snapshots("", "2026-09-18") == ""
+    assert _compare_snapshots("22849516", "2026-09-18") == ""
+
+
+def test_a_newer_download_is_used_from_the_next_start(tmp_path):
+    """Round 8, item 5.3: a downloaded newer snapshot was never used -- the
+    config kept naming the old file, which stayed in use and undeletable."""
+    import json
+
+    from boldcurator.desktop import load_snapshot_path
+    from boldcurator.ui.app import _use_next_start_if_newer
+
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"snapshot_path": "old", "check_for_updates": False}))
+    newer = tmp_path / "bold_snapshot_2026-10-02.duckdb"
+    newer.write_bytes(b"")
+
+    assert not _use_next_start_if_newer(newer, "2026-09-11", "2026-09-18",
+                                        config_path=config)
+    assert json.loads(config.read_text())["snapshot_path"] == "old"
+    assert _use_next_start_if_newer(newer, "2026-10-02", "2026-09-18",
+                                    config_path=config)
+    assert load_snapshot_path(config) == newer
+    assert json.loads(config.read_text())["check_for_updates"] is False, \
+        "the rest of the config is kept"
+
+
+def test_a_snapshot_id_comes_from_the_sidecar_or_the_file(tmp_path, fixture_snapshot):
+    import json
+    import shutil
+
+    from boldcurator.data.snapshot import SnapshotStore
+    from boldcurator.ui.app import _provenance_path, _snapshot_id_of
+
+    with_sidecar = tmp_path / "a.duckdb"
+    with_sidecar.write_bytes(b"")
+    _provenance_path(with_sidecar).write_text(json.dumps({"snapshot_id": "2026-09-18"}))
+    assert _snapshot_id_of(with_sidecar) == "2026-09-18"
+
+    copy = tmp_path / "b.duckdb"
+    shutil.copy(fixture_snapshot, copy)
+    with SnapshotStore(fixture_snapshot) as original:
+        assert _snapshot_id_of(copy) == original.info().snapshot_id
+
+    junk = tmp_path / "c.duckdb"
+    junk.write_bytes(b"not a database")
+    assert _snapshot_id_of(junk) == ""
+
+
+def test_the_data_tab_has_no_download_from_url_or_attribution_footer(fixture_snapshot):
+    """Round 8, items 5.1 and 5.5."""
+    from boldcurator.ui.app import create_app
+
+    html = str(create_app(fixture_snapshot).ui["html"])
+    assert 'id="snap_source"' not in html and "provide your own source" not in html
+    assert 'id="snap_download_default"' in html and 'id="snap_path"' in html
+    assert html.count("Full licence text") == 0
+
+
+def test_the_annotation_toolbar_says_correct_id_and_offers_contamination():
+    """Round 8, items 4.2 and 4.3."""
+    from htmltools import TagList
+
+    from boldcurator.ui.app import _annotation_controls
+
+    html = str(TagList(*_annotation_controls("sp")))
+    assert 'placeholder="Correct ID"' in html and "width:225px" in html
+    assert '<option value="contamination">Contamination</option>' in html
+    assert "id_uncertain" not in html
+
+
+def test_a_broader_second_search_gets_representatives_for_its_new_bins(store):
+    """Pieris, then Lepidoptera: the second result contains the first one's
+    picks, which used to make auto-selection skip it entirely, leaving every
+    BIN outside Pieris with no representative (and off the Phylogeny tab)."""
+    from boldcurator.core.phylogeny import group_keys
+    from boldcurator.ui.state import AppState
+
+    state = AppState(store)
+    state.run_search("Pieris")
+    state.search.analysis(store)
+    first_selected = dict(state.annotations.selected)
+
+    state.run_search("Lepidoptera")
+    specimens = state.search.analysis(store).specimens
+    with_bin = specimens[specimens["bin_uri"].fillna("").astype(str) != ""]
+    assert len(set(group_keys(with_bin))) > len(first_selected)
+
+    keys = dict(zip(specimens["processid"].astype(str), group_keys(specimens)))
+    selected = state.annotations.selected_processids()
+    assert {keys[p] for p in selected if p in keys} == set(group_keys(with_bin))
+    for pid, entry in first_selected.items():
+        assert state.annotations.selected[pid] == entry
+
+
+def test_tree_tips_survive_a_representative_with_no_species_name():
+    """Regression: "boolean value of NA is ambiguous" building a tree.
+
+    Representatives no longer need a species name, so a genus-rank record's
+    species is pd.NA, and the tip builder's ``species or identification``
+    raised on it.
+    """
+    import pandas as pd
+
+    from boldcurator.core.phylogeny import PhylogenyResult
+    from boldcurator.ui.app import _phylo_tips
+
+    from boldcurator.core.pipeline import process_specimen_data
+
+    # Through process_specimen_data, from a string-dtype column as a snapshot
+    # fetch gives it: the missing species becomes pd.NA itself, not NaN.
+    reps = process_specimen_data(pd.DataFrame({
+        "processid": ["P1", "P2", "P3"],
+        "species": pd.array(["Danaus plexippus", None, "Danaus sp."], dtype="string"),
+        "identification": ["Danaus plexippus", "Danaus", "Danaus sp."],
+        "identification_rank": ["species", "genus", "genus"],
+        "bin_uri": pd.array(["BOLD:A", None, "BOLD:C"], dtype="string"),
+    }))
+    reps["_tip_label"] = ["P1-Danaus plexippus-Kenya", "P2-Danaus-Kenya",
+                          "P3-Danaus sp.-Peru"]
+    with pytest.raises(TypeError, match="ambiguous"):
+        bool(reps.iloc[1]["species"] or "")      # the old code's expression
+    result = PhylogenyResult(representatives=reps, newick="(a,b);",
+                             monophyly={"Danaus plexippus": True})
+    # "Danaus sp." is also graded as an interim species elsewhere in the
+    # result; the genus-rank record must not borrow that grade.
+    tips = _phylo_tips(result, {"Danaus plexippus": "A", "Danaus sp.": "E"})
+
+    assert [t["species"] for t in tips] == ["Danaus plexippus", "Danaus", "Danaus sp."]
+    assert [t["bin_uri"] for t in tips] == ["BOLD:A", "", "BOLD:C"]
+    assert tips[0]["bin_url"].endswith("query=BOLD:A[bin]"), "tip links to its BIN"
+    assert tips[1]["bin_url"] == "", "no BIN, no link"
+    assert [t["bags_grade"] for t in tips] == ["A", "", ""]
+    assert tips[0]["monophyletic"] is True and tips[2]["monophyletic"] is None
+
+
+def test_a_reconnect_note_is_claimed_once_by_its_own_session():
+    """Round 8, item 1.1: the page that reloads after a dropped connection
+    gets back what its old session left -- once, and nobody else does."""
+    from boldcurator.ui.app import _Reconnects
+
+    notes = _Reconnects()
+    notes.leave("old-1", saved_id="auto-save", tab="grade_C")
+    assert notes.claim("someone-else") is None
+    assert notes.claim("old-1") == {"saved_id": "auto-save", "tab": "grade_C"}
+    assert notes.claim("old-1") is None, "claimed once"
+
+    stale = _Reconnects(ttl=0)
+    stale.leave("old-2", saved_id="x")
+    assert stale.claim("old-2") is None, "expired notes are not handed out"
+
+
+def test_the_resume_token_comes_from_the_query_string():
+    from boldcurator.ui.app import _resume_token
+
+    assert _resume_token("?bc_resume=abc123") == "abc123"
+    assert _resume_token("?x=1&bc_resume=abc") == "abc"
+    assert _resume_token("") == "" and _resume_token("?x=1") == ""
+
+
+def test_the_server_never_pings_its_own_window_away():
+    """Round 8, item 1.1: uvicorn's 20 s websocket ping timeout ended the
+    session of a window that was minimised or asleep."""
+    from boldcurator.desktop import WEBSOCKET_KEEPALIVE
+
+    assert WEBSOCKET_KEEPALIVE == {"ws_ping_interval": None, "ws_ping_timeout": None}

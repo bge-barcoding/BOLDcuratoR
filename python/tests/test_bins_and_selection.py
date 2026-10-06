@@ -92,3 +92,73 @@ def test_existing_selections_are_never_overwritten():
                  "quality_score": 9}])
     existing = {"P2": {"user": "curator"}}
     assert auto_select_best_specimens(frame, existing=existing) == existing
+
+
+def test_bin_content_has_no_bin_coverage_column():
+    frame = _f([{"processid": "P1", "bin_uri": "BOLD:A", "species": "Danaus plexippus"}])
+    assert "bin_coverage" not in analyse_bins(frame)["content"].columns
+
+
+def test_a_bin_with_no_species_name_still_gets_a_representative():
+    """Records identified only to genus or family must not take their BIN off
+    the Phylogeny tab and "Download Selected"."""
+    frame = _f([
+        {"processid": "P1", "bin_uri": "BOLD:A", "species": "Danaus plexippus",
+         "country.ocean": "France", "quality_score": 5},
+        {"processid": "P2", "bin_uri": "BOLD:B", "species": None, "genus": "Danaus",
+         "country.ocean": "France", "quality_score": 3},
+        {"processid": "P3", "bin_uri": None, "species": "Danaus plexippus",
+         "country.ocean": "France", "quality_score": 9},
+    ])
+    assert set(auto_select_best_specimens(frame)) == {"P1", "P2"}
+
+
+def test_fill_gaps_selects_only_groups_with_no_selected_record():
+    frame = _f([
+        {"processid": "P1", "bin_uri": "BOLD:A", "species": "Danaus plexippus",
+         "country.ocean": "France", "quality_score": 9},
+        {"processid": "P2", "bin_uri": "BOLD:A", "species": "Danaus plexippus",
+         "country.ocean": "France", "quality_score": 1},
+        {"processid": "P3", "bin_uri": "BOLD:B", "species": "Danaus chrysippus",
+         "country.ocean": "Kenya", "quality_score": 4},
+    ])
+    existing = {"P2": {"user": "curator"}}
+    chosen = auto_select_best_specimens(frame, existing=existing, fill_gaps=True)
+    assert set(chosen) == {"P2", "P3"}, "P1 must not join the curator's P2"
+    assert chosen["P2"] == {"user": "curator"}
+    assert chosen["P3"]["auto_selected"] is True
+
+    covered = {"P2": {}, "P3": {}}
+    assert auto_select_best_specimens(frame, existing=covered, fill_gaps=True) is covered
+
+
+def _bin_rows(*rows):
+    """(species, identification_rank, genus) per record, all in BOLD:A."""
+    return _f([{"processid": f"P{i}", "bin_uri": "BOLD:A", "species": sp,
+                "identification_rank": rank, "genus": genus, "family": "Nymphalidae"}
+               for i, (sp, rank, genus) in enumerate(rows)])
+
+
+def test_an_interim_species_beside_a_species_is_discordant():
+    frame = _bin_rows(("Danaus plexippus", "species", "Danaus"),
+                      ("Danaus cf. plexippus", "species", "Danaus"))
+    assert not check_taxonomic_concordance(frame)
+    content = analyse_bins(frame)["content"].iloc[0]
+    assert content["concordance"] == "Discordant"
+    assert content["species_list"] == "Danaus cf. plexippus; Danaus plexippus"
+
+
+def test_a_record_of_another_genus_makes_a_bin_discordant():
+    frame = _bin_rows(("Danaus plexippus", "species", "Danaus"),
+                      (None, "genus", "Pieris"))
+    assert not check_taxonomic_concordance(frame)
+    assert analyse_bins(frame)["content"].iloc[0]["concordance"] == "Discordant"
+
+
+def test_a_genus_rank_record_of_the_same_genus_changes_nothing():
+    frame = _bin_rows(("Danaus plexippus", "species", "Danaus"),
+                      ("Danaus sp.", "genus", "Danaus"))
+    assert check_taxonomic_concordance(frame)
+    content = analyse_bins(frame)["content"].iloc[0]
+    assert content["concordance"] == "Concordant"
+    assert content["species_list"] == "Danaus plexippus"

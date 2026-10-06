@@ -43,6 +43,28 @@ def test_round_trip_preserves_annotations(tmp_path, result):
     assert first in loaded.annotations.selected
 
 
+def test_a_retired_flag_in_an_old_session_survives_loading(tmp_path, result):
+    """Round 8, item 4.3 retired ``id_uncertain`` from the dropdown. A session
+    saved before that still loads with it, unchanged -- but it can't be set
+    on a record again."""
+    from boldcurator.config.constants import FLAG_OPTIONS, LEGACY_FLAGS
+
+    assert "id_uncertain" not in FLAG_OPTIONS and "id_uncertain" in LEGACY_FLAGS
+    assert "contamination" in FLAG_OPTIONS
+    first = str(result.specimens["processid"].iloc[0])
+    a = Annotations()
+    a.flags[first] = {"flag": "id_uncertain", "timestamp": "2026-09-01T00:00:00",
+                      "user": "curator", "species": ""}
+    path = tmp_path / "sessions.sqlite"
+    with SessionStore(path) as sessions:
+        sessions.save("old", result=result, annotations=a, user_email="a@example.org")
+    with SessionStore(path) as sessions:
+        loaded = sessions.load("old")
+    assert loaded.annotations.flags[first]["flag"] == "id_uncertain"
+    with pytest.raises(ValueError):
+        loaded.annotations.set_flag(first, "id_uncertain")
+
+
 def test_saving_twice_updates_in_place_and_keeps_created_at(tmp_path, result):
     path = tmp_path / "sessions.sqlite"
     with SessionStore(path) as sessions:

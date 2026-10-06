@@ -99,7 +99,12 @@ def build_rows(n: int, rng: random.Random) -> list[list[str]]:
         if rng.random() < 0.12:
             species_out = f"{genus} sp."
             id_rank = "genus"
-        elif rng.random() < 0.05:
+        elif rng.random() < 0.05 and genus == "Danaus":
+            # An interim species name at species rank makes its BIN grade E
+            # (core.bags), so it is confined to Danaus, whose BIN is already
+            # shared -- elsewhere it would turn every grade into E and leave
+            # the fixture without the A-D and C cases. Drawn for every taxon
+            # regardless, so the random sequence is unchanged.
             species_out = f"{genus} cf. {species.split()[1]}"
             id_rank = "species"
         else:

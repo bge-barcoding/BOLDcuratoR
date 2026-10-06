@@ -27,7 +27,7 @@ from ..data.queries import (
 from ..data.snapshot import SnapshotStore
 from . import bags, bins, selection
 from .ranking import score_and_rank
-from .species import column_or_missing, is_empty, to_text
+from .species import column_or_missing, is_empty, is_species_level, to_text
 
 
 # --------------------------------------------------------------------------
@@ -88,16 +88,17 @@ def geographic_filter(countries: list[str], continents: list[str]) -> list[str]:
 def process_specimen_data(frame: pd.DataFrame, *, sort: bool = True) -> pd.DataFrame:
     """``process_specimen_data`` (``mod_data_import_utils.R:152-214``), unified.
 
-    Trims and blanks the three fields the app keys on, stamps provenance, then
-    de-duplicates on ``processid`` and sorts.  The species rule applied here is
-    the unified one -- see ``core.species`` for what that changes.
+    Trims the three fields the app keys on (blanking only the missing-value
+    tokens), adds ``name_status`` (``core.species.name_status``), stamps
+    provenance, then de-duplicates on ``processid`` and sorts. Unlike R, an
+    invalid species name is **kept**: ``name_status`` says what it is.
 
     ``sort=False`` keeps the caller's row order.  The paged table needs it: a
     page is already in the order the curator asked for, and re-sorting it by
     processid would scramble that.  De-duplication still runs, and is a no-op
     on a page, since processid is unique in the snapshot.
     """
-    from .species import normalise_species
+    from .species import name_status, normalise_species
 
     if frame is None or len(frame) == 0:
         return frame if frame is not None else pd.DataFrame()
@@ -105,6 +106,10 @@ def process_specimen_data(frame: pd.DataFrame, *, sort: bool = True) -> pd.DataF
     out = frame.copy()
     if "species" in out.columns:
         out["species"] = normalise_species(out["species"])
+    # What kind of name ``species`` is, computed once here so every screen,
+    # grade and export reads the same answer -- the name itself is left as
+    # BOLD has it.
+    out["name_status"] = name_status(out)
     for column in ("bin_uri", "country.ocean"):
         if column in out.columns:
             values = out[column]
@@ -310,10 +315,15 @@ def analyse_plan(
         frame = frame.merge(
             grades[["species", "bags_grade"]], on="species", how="left"
         )
-    # The same scope calculate_bags_grades used for "has_shared_bins": which
-    # BINs are *themselves* shared, not which species have a shared BIN
-    # somewhere among their (possibly several) BINs.
-    shared = bags.shared_bins(bin_species if bin_species is not None else frame)
+        # A grade belongs to species-level records. A higher-rank record whose
+        # species field happens to read like a graded name (a genus-rank
+        # "Danaus sp." beside an interim-species "Danaus sp.") is not one.
+        frame["bags_grade"] = frame["bags_grade"].where(
+            is_species_level(frame), pd.NA)
+    # The same set calculate_bags_grades used for "has_shared_bins": which
+    # BINs are *themselves* discordant, not which species have a discordant
+    # BIN somewhere among their (possibly several) BINs.
+    shared = bags.discordant_bins(frame, bin_species)
 
     analysis = bins.analyse_bins(frame)
     selections = selection.auto_select_best_specimens(frame) if auto_select else {}

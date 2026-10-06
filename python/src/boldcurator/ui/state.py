@@ -84,6 +84,12 @@ class SearchState:
     #: (see :meth:`analysis`) lands where the specimen table and every BAGS
     #: group already look for it.
     annotations: Annotations | None = field(default=None, repr=False)
+    #: Give every (BIN x country) group with no selected record its own
+    #: auto-selected representative, even when other groups in this result
+    #: already have one (``core.selection``'s ``fill_gaps``). Off for a resumed
+    #: session: its saved selection is the curator's, and a group they emptied
+    #: on purpose must stay empty.
+    fill_selection_gaps: bool = True
     _analysis: SearchResult | None = field(default=None, repr=False)
     _groups: dict[str, list[SpecimenGroup]] = field(default_factory=dict, repr=False)
 
@@ -103,9 +109,9 @@ class SearchState:
         """The whole-result summaries. Computed once, on first use.
 
         Auto-selects a best specimen per (BIN x country) the first time this
-        result is analysed -- ``auto_select_best_specimens`` already refuses to
-        touch a non-empty selection, so this only ever fires on a fresh search,
-        the way R's own auto-selection does (``app.R:425-467``). It happens
+        result is analysed, for every group that has no selected record yet
+        (``fill_selection_gaps``; a resumed session instead keeps R's rule of
+        leaving any non-empty selection alone, ``app.R:425-467``). It happens
         here rather than at search time because this is the first point that
         actually holds the scored, whole-result frame the selection needs --
         the search itself only plans, and the paged table never materialises
@@ -123,7 +129,10 @@ class SearchState:
         to this search's own processids keeps that refusal doing its real job
         (never overwrite a curator's manual pick, including one restored from
         a saved session covering this same search) without it accidentally
-        starving every search after the first.
+        starving every search after the first. A *broader* later search
+        (Pieris, then Pieridae) does contain the first one's picks, which is
+        what ``fill_selection_gaps`` is for: without it every BIN outside the
+        first search got no representative.
         """
         if self._analysis is None:
             if not self.can_analyse:
@@ -140,7 +149,8 @@ class SearchState:
                     if pid in own_processids
                 }
                 chosen = selection.auto_select_best_specimens(
-                    self._analysis.specimens, existing=existing)
+                    self._analysis.specimens, existing=existing,
+                    fill_gaps=self.fill_selection_gaps)
                 if chosen is not existing:
                     self.annotations.selected.update(chosen)
         return self._analysis
@@ -489,5 +499,6 @@ class AppState:
             warnings=warnings,
             taxonomy_groups=query.get("taxonomy_groups", []),
             annotations=self.annotations,
+            fill_selection_gaps=False,
         )
         return f"{plan.expanded_records:,} records restored from {label!r}", warnings

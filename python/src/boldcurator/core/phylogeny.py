@@ -33,12 +33,17 @@ nothing new needs bundling per OS. Two consequences of that:
    few sites with some other tip are kept on the tree and flagged (see
    :attr:`PhylogenyResult.flags`), not silently dropped.
 
-The real speed ceiling is not this module's own arithmetic (a handful of
-vectorised matrix multiplies) nor the alignment step, but Biopython's
-``DistanceTreeConstructor.nj()``, a plain-Python, unvectorised O(n^3) loop.
-Measured on this project's own hardware: ~0.4s at 100 tips, ~6s at 250,
-~54s at 500 -- a clean cubic (`t = k * n**3`, `k ~= 4.3e-7`). PHYLOGENY_LIMITS
-(config.constants) is set from that fit, not a guess.
+A representative whose own record has no usable sequence would otherwise
+take its whole (BIN x country) group off the tree. Given the full result
+(``specimens``), :func:`build_phylogeny` stands in the group's best-scoring
+record that does have one, and flags the tip as a stand-in.
+
+Neighbor-joining is :func:`neighbor_joining`, a NumPy port of Biopython's
+``DistanceTreeConstructor.nj()`` that gives the same tree. Biopython's own is
+a plain-Python O(n^3) loop (~54 s at 500 tips, ~7 min at 1,000); vectorising
+each step brings 1,000 tips to a few seconds, so the alignment to the
+reference is now the slowest step. PHYLOGENY_LIMITS (config.constants) is set
+from those measurements.
 """
 
 from __future__ import annotations
@@ -71,8 +76,17 @@ class PhylogenyTooLargeToBuild(RuntimeError):
         )
 
 
+#: What a BIN-less record's tip label says in place of a BIN.
+NO_BIN_LABEL = "No BIN"
+
+
 def tip_label(row: pd.Series) -> str:
-    """``{processid}-{species}-{country}``.
+    """``{bin_uri}-{processid}-{species}-{country}``.
+
+    Round 8, item 9.1: the BIN leads, so tips sort and read by BIN; a
+    BIN-less record reads ``No BIN``. ``BOLD:AAG9765`` holds a colon, which
+    Newick only allows in a quoted name -- Biopython's writer quotes it, as it
+    already did for the space in every binomial.
 
     ``species`` already holds the full binomial (BOLD's own convention for
     the species-rank taxonomy field -- nothing else in this app concatenates
@@ -96,7 +110,12 @@ def tip_label(row: pd.Series) -> str:
         country = UNKNOWN_COUNTRY
     else:
         country = str(country).strip()
-    return f"{processid}-{species}-{country}"
+    bin_uri = row.get("bin_uri")
+    if bin_uri is None or pd.isna(bin_uri) or not str(bin_uri).strip():
+        bin_uri = NO_BIN_LABEL
+    else:
+        bin_uri = str(bin_uri).strip()
+    return f"{bin_uri}-{processid}-{species}-{country}"
 
 
 def fetch_representative_sequences(store, representatives: pd.DataFrame
@@ -110,6 +129,65 @@ def fetch_representative_sequences(store, representatives: pd.DataFrame
         return {}
     processids = [str(p) for p in representatives.get("processid", [])]
     return dict(iter_sequences(store, processids))
+
+
+#: How many of a group's best-scoring records :func:`find_stand_ins` fetches
+#: sequences for, looking for one that has a usable sequence. Bounds the fetch
+#: for a big BIN whose records mostly have none.
+STAND_IN_CANDIDATES = 25
+
+
+def group_keys(frame: pd.DataFrame) -> pd.Series:
+    """``(bin_uri, country)`` per row, normalised the way
+    :func:`core.selection.auto_select_best_specimens` groups them (a blank
+    country is ``UNKNOWN_COUNTRY``)."""
+    bins = to_text(column_or_missing(frame, "bin_uri")).str.strip()
+    country = to_text(column_or_missing(frame, "country.ocean")).str.strip()
+    country = country.mask(country == "", UNKNOWN_COUNTRY)
+    return pd.Series(list(zip(bins, country)), index=frame.index, dtype=object)
+
+
+def find_stand_ins(store, specimens: pd.DataFrame, missing: pd.DataFrame,
+                   taken: set[str], *, per_group: int = STAND_IN_CANDIDATES
+                   ) -> list[tuple[str, pd.Series, str]]:
+    """For each row of ``missing`` (representatives with no usable sequence),
+    the best-scoring other record of the same (BIN x country) group in
+    ``specimens`` that has one: ``[(missing processid, stand-in row, nuc)]``.
+
+    Records in ``taken`` (already on the tree) are skipped, as is a
+    representative with no BIN, which has no group to draw from.
+    """
+    if specimens is None or len(specimens) == 0 or len(missing) == 0:
+        return []
+    missing_keys = group_keys(missing)
+    wanted = {key for key in missing_keys if key[0]}
+    if not wanted:
+        return []
+
+    keys = group_keys(specimens)
+    pids = to_text(column_or_missing(specimens, "processid"))
+    pool = specimens[keys.isin(wanted) & ~pids.isin(taken)].copy()
+    if len(pool) == 0:
+        return []
+    pool["_key"] = keys[pool.index]
+    pool["_pid"] = pids[pool.index]
+    pool["_score"] = pd.to_numeric(column_or_missing(pool, "quality_score"),
+                                   errors="coerce").fillna(0)
+    pool = (pool.sort_values(["_score", "_pid"], ascending=[False, True])
+            .groupby("_key", sort=False).head(per_group))
+    fetched = fetch_representative_sequences(store, pool)
+
+    used: set[str] = set()
+    out = []
+    for missing_pid, key in zip(to_text(missing["processid"]), missing_keys):
+        for _, row in pool[pool["_key"] == key].iterrows():
+            seq = fetched.get(row["_pid"])
+            if row["_pid"] not in used and refalign.clean_sequence(seq):
+                used.add(row["_pid"])
+                out.append((missing_pid,
+                            row.drop(labels=["_key", "_pid", "_score"]), seq))
+                break
+    return out
 
 
 def k2p_distance_matrix(rows: np.ndarray, *, min_shared_sites: int
@@ -169,20 +247,89 @@ def k2p_distance_matrix(rows: np.ndarray, *, min_shared_sites: int
     return dist, imputed
 
 
+def neighbor_joining(names: list[str], distances: np.ndarray):
+    """Unrooted neighbor-joining tree (``Bio.Phylo.BaseTree.Tree``).
+
+    Step for step the algorithm of Biopython's
+    ``DistanceTreeConstructor.nj()`` -- the same pair choice (ties go to the
+    first pair in its scan order), branch lengths, ``Inner<k>`` clade names
+    and final join -- so it yields the same tree. Each step is vectorised
+    over the whole matrix instead of looped in Python, which is the
+    difference between seconds and minutes at 1,000 tips.
+    """
+    from Bio.Phylo import BaseTree
+
+    d = np.array(distances, dtype=np.float64)
+    clades = [BaseTree.Clade(None, name) for name in names]
+    n = len(clades)
+    if n == 1:
+        return BaseTree.Tree(clades[0], rooted=False)
+    if n == 2:
+        clades[1].branch_length = d[1, 0] / 2.0
+        clades[0].branch_length = d[1, 0] - clades[1].branch_length
+        inner = BaseTree.Clade(None, "Inner")
+        inner.clades.extend([clades[1], clades[0]])
+        return BaseTree.Tree(inner, rooted=False)
+
+    # Biopython scans i = 1.., j < i and keeps the first strict minimum: the
+    # strict lower triangle in row-major order, which is what argmin over it
+    # returns with everything else masked out.
+    lower = np.tri(n, k=-1, dtype=bool)
+    inner_count = 0
+    inner = None
+    while len(clades) > 2:
+        m = len(clades)
+        # Summed left to right (cumsum), as Biopython's loop does: NumPy's
+        # pairwise sum rounds differently, and on tied distances that last-bit
+        # difference picks a different, equally valid, pair.
+        node_dist = np.cumsum(d, axis=1)[:, -1] / (m - 2)
+        q = np.where(lower[:m, :m],
+                     d - node_dist[:, None] - node_dist[None, :], np.inf)
+        min_i, min_j = divmod(int(np.argmin(q)), m)
+        if (min_i, min_j) == (1, 0):
+            # Biopython seeds its scan with min_i=0, min_j=1, so when that
+            # first pair wins the roles are the other way round.
+            min_i, min_j = 0, 1
+
+        inner_count += 1
+        inner = BaseTree.Clade(None, f"Inner{inner_count}")
+        clade1, clade2 = clades[min_i], clades[min_j]
+        inner.clades.extend([clade1, clade2])
+        clade1.branch_length = (d[min_i, min_j] + node_dist[min_i]
+                                - node_dist[min_j]) / 2.0
+        clade2.branch_length = d[min_i, min_j] - clade1.branch_length
+
+        joined = (d[min_i] + d[min_j] - d[min_i, min_j]) / 2.0
+        joined[min_j] = 0.0
+        d[min_j, :] = joined
+        d[:, min_j] = joined
+        clades[min_j] = inner
+        del clades[min_i]
+        d = np.delete(np.delete(d, min_i, axis=0), min_i, axis=1)
+
+    if clades[0] is inner:
+        clades[0].branch_length = 0
+        clades[1].branch_length = d[1, 0]
+        clades[0].clades.append(clades[1])
+        root = clades[0]
+    else:
+        clades[0].branch_length = d[1, 0]
+        clades[1].branch_length = 0
+        clades[1].clades.append(clades[0])
+        root = clades[1]
+    return BaseTree.Tree(root, rooted=False)
+
+
 def build_tree(names: list[str], distances: np.ndarray):
     """Neighbor-joining tree (``Bio.Phylo.BaseTree.Tree``), midpoint-rooted.
 
     ``Bio.Phylo.TreeConstruction.DistanceCalculator`` is not used -- it
     computes distances from an aligned ``MultipleSeqAlignment``, which this
     module deliberately never builds (see module docstring). The NumPy
-    matrix from :func:`k2p_distance_matrix` is converted directly to
-    Biopython's own lower-triangular container instead.
+    matrix from :func:`k2p_distance_matrix` goes straight to
+    :func:`neighbor_joining`.
     """
-    from Bio.Phylo.TreeConstruction import DistanceMatrix, DistanceTreeConstructor
-
-    lower = [row[: i + 1].tolist() for i, row in enumerate(distances)]
-    dm = DistanceMatrix(names, lower)
-    tree = DistanceTreeConstructor().nj(dm)
+    tree = neighbor_joining(names, distances)
     if tree.count_terminals() > 2:
         tree.root_at_midpoint()
     return tree
@@ -216,18 +363,39 @@ def check_monophyly(tree, representatives: pd.DataFrame, bags_grades: pd.DataFra
     if not grade_c:
         return {}
 
-    terminal_by_name = {t.name: t for t in tree.get_terminals()}
+    tip_sets = clade_tip_sets(tree)
+    tip_names = {name for s in tip_sets for name in s}
     species_col = to_text(column_or_missing(representatives, "species")).str.strip()
 
     out: dict[str, bool] = {}
     for species in sorted(grade_c):
         group = representatives[species_col == species]
-        tips = [terminal_by_name[label] for label in group["_tip_label"]
-                if label in terminal_by_name]
+        tips = frozenset(label for label in group["_tip_label"] if label in tip_names)
         if len(tips) < 2:
             continue
-        out[species] = bool(tree.is_monophyletic(tips))
+        out[species] = tips in tip_sets
     return out
+
+
+def clade_tip_sets(tree) -> set[frozenset[str]]:
+    """The set of tip names under each clade of ``tree``.
+
+    A species is monophyletic exactly when its tips are one of these sets --
+    the test Biopython's ``is_monophyletic`` makes, but that walks the tree
+    again for every species (8 s for 250 grade-C species on a 1,000-tip
+    tree). Built once, iteratively, so a deep tree cannot hit the recursion
+    limit.
+    """
+    order, stack = [], [tree.root]
+    while stack:
+        clade = stack.pop()
+        order.append(clade)
+        stack.extend(clade.clades)
+    tips: dict[int, frozenset[str]] = {}
+    for clade in reversed(order):
+        tips[id(clade)] = (frozenset().union(*(tips[id(c)] for c in clade.clades))
+                           if clade.clades else frozenset([clade.name]))
+    return set(tips.values())
 
 
 def reroot_at(tree, target_name: str) -> bool:
@@ -302,6 +470,7 @@ def build_phylogeny(
     min_coverage: float = PHYLOGENY_ALIGNMENT["MIN_COVERAGE"],
     min_shared_sites: int = PHYLOGENY_ALIGNMENT["MIN_SHARED_SITES"],
     progress: "Callable[[str], None] | None" = None,
+    specimens: pd.DataFrame | None = None,
 ) -> PhylogenyResult:
     """Orchestrates label -> fetch -> align to reference -> K2P distance ->
     tree -> monophyly.
@@ -309,7 +478,9 @@ def build_phylogeny(
     ``representatives`` is already ``io.exports.selected_rows(result.specimens,
     annotations)`` -- the app's existing curated (BIN x country) selection.
     This function does not re-derive which specimens count as representative;
-    see the module docstring.
+    see the module docstring. ``specimens`` (the whole result) is only where a
+    stand-in comes from when a representative has no usable sequence (see
+    :func:`find_stand_ins`); without it such a group is left off the tree.
     """
     def report(text: str) -> None:
         if progress is not None:
@@ -339,13 +510,38 @@ def build_phylogeny(
         if pid in label_by_pid and refalign.clean_sequence(seq)
     }
     warnings = []
-    missing = tip_count - len(sequences)
-    if missing:
-        warnings.append(
-            f"{missing:,} representative specimen(s) had no usable sequence "
-            "and were left off the tree."
-        )
+    flags: dict[str, list[str]] = {}
+
+    unsequenced = reps[~reps["_tip_label"].isin(sequences)]
+    stand_ins = find_stand_ins(store, specimens, unsequenced,
+                               set(to_text(reps["processid"])))
+    if stand_ins:
+        rows = []
+        for missing_pid, row, seq in stand_ins:
+            label = tip_label(row)
+            if label in sequences:
+                label = f"{label}-{row.get('processid')}"
+            row["_tip_label"] = label
+            rows.append(row)
+            sequences[label] = seq
+            flags[label] = [
+                f"stand-in for {missing_pid}, the selected representative of "
+                "this BIN x country, which has no usable sequence"]
+        reps = pd.concat([reps, pd.DataFrame(rows)], ignore_index=True)
+
     reps = reps[reps["_tip_label"].isin(sequences)]
+    left_off = unsequenced[~unsequenced["processid"].astype(str).isin(
+        {pid for pid, _, _ in stand_ins})]
+    if len(left_off):
+        bins = sorted({b for b in to_text(column_or_missing(left_off, "bin_uri"))
+                       .str.strip() if b})
+        shown = ", ".join(bins[:10]) + (f" and {len(bins) - 10:,} more"
+                                        if len(bins) > 10 else "")
+        warnings.append(
+            f"{len(left_off):,} representative specimen(s) had no usable "
+            "sequence, and no other record of the same BIN x country has one, "
+            "so they were left off the tree"
+            + (f" (BINs: {shown})." if bins else "."))
     if len(reps) < 2:
         return PhylogenyResult(representatives=reps, newick="", tip_count=len(reps),
                                warnings=warnings + [
@@ -362,9 +558,8 @@ def build_phylogeny(
     distances, imputed = k2p_distance_matrix(
         np.vstack([a.row for a in anchored]), min_shared_sites=min_shared_sites)
 
-    flags: dict[str, list[str]] = {}
     for i, a in enumerate(anchored):
-        reasons = list(a.flags)
+        reasons = flags.get(a.name, []) + list(a.flags)
         n_imputed = int(imputed[i].sum())
         if n_imputed:
             reasons.append(
@@ -374,7 +569,8 @@ def build_phylogeny(
             flags[a.name] = reasons
     if flags:
         warnings.append(
-            f"{len(flags):,} tip(s) marked \u26a0 may be misplaced; hover a "
+            f"{len(flags):,} tip(s) marked \u26a0 need a second look (a "
+            "stand-in record, or a sequence that may be misplaced); hover a "
             "marked tip to see why.")
 
     report("Building tree...")

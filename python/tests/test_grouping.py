@@ -10,6 +10,8 @@ from boldcurator.core.grouping import (
     GRADE_DESCRIPTIONS,
     GRADES,
     PRIORITY_GRADES,
+    SPLIT_SHARED,
+    UNNAMED,
     group_specimens,
     specimens_for_grade,
 )
@@ -112,7 +114,8 @@ def test_grade_a_groups_by_species():
     groups = group_specimens(SPECIMENS, GRADES_FRAME, "A")
     assert len(groups) == 1
     assert groups[0].species == ("Vanessa atalanta",)
-    assert "single BIN" in groups[0].caption
+    assert groups[0].caption == "Species: Vanessa atalanta", \
+        "no grade qualifier: the grade header already says it (round 8, 3.1)"
     assert groups[0].specimen_count == 12
 
 
@@ -312,3 +315,246 @@ def test_the_checklist_is_sorted_and_empty_input_keeps_its_columns():
     empty = build_species_checklist(SPECIMENS.iloc[:0])
     assert len(empty) == 0
     assert "mean_quality_score" in empty.columns
+
+
+# -- interim species, genus conflicts and unnamed BINs ------------------------
+
+
+def _names_frame():
+    from boldcurator.core.pipeline import process_specimen_data
+
+    rows = []
+
+    def add(prefix, name, rank, bin_uri, n, genus="Danaus", ident=None):
+        for i in range(n):
+            rows.append({"processid": f"{prefix}{i}", "species": name,
+                         "identification": ident or name or genus,
+                         "identification_rank": rank, "genus": genus,
+                         "family": "Nymphalidae", "bin_uri": bin_uri,
+                         "quality_score": i, "country.ocean": "Kenya"})
+
+    add("PLX", "Danaus plexippus", "species", "BOLD:A", 3)
+    add("CFA", "Danaus cf. plexippus", "species", "BOLD:A", 2)  # interim, same BIN
+    add("CHR", "Danaus chrysippus", "species", "BOLD:C", 4)
+    add("GNC", None, "genus", "BOLD:C", 1)                      # same genus: no effect
+    add("ERI", "Danaus eresimus", "species", "BOLD:D", 4)
+    add("PIE", None, "genus", "BOLD:D", 1, genus="Pieris")      # other genus: E
+    add("SP1", "Danaus sp. 1", "species", "BOLD:F", 12)         # interim, graded
+    add("GSP", "Danaus sp.", "genus", "BOLD:G", 2)              # unnamed, concordant
+    add("MIX", None, "genus", "BOLD:H", 1)                      # unnamed, discordant
+    add("MXP", None, "genus", "BOLD:H", 1, genus="Pieris")
+    add("NOB", "Danaus cf. plexippus", "species", None, 1)      # no BIN
+    return process_specimen_data(pd.DataFrame(rows))
+
+
+def _grades(frame):
+    grades = calculate_bags_grades(frame)
+    return dict(zip(grades["species"], grades["bags_grade"]))
+
+
+def test_an_interim_species_in_a_species_bin_makes_it_grade_e():
+    """Strict: D. cf. plexippus is a name of its own."""
+    grades = _grades(_names_frame())
+    assert grades["Danaus plexippus"] == "E"
+    assert grades["Danaus cf. plexippus"] == "E"
+
+
+def test_a_different_genus_makes_a_bin_grade_e_and_the_same_genus_does_not():
+    grades = _grades(_names_frame())
+    assert grades["Danaus eresimus"] == "E"
+    assert grades["Danaus chrysippus"] == "B"
+
+
+def test_an_interim_species_gets_its_own_grade():
+    assert _grades(_names_frame())["Danaus sp. 1"] == "A"
+
+
+def test_a_genus_rank_name_is_not_graded():
+    assert "Danaus sp." not in _grades(_names_frame())
+
+
+def test_a_genus_conflict_e_group_says_so():
+    frame = _names_frame()
+    groups = {g.bins[0]: g for g in group_specimens(frame, calculate_bags_grades(frame), "E")}
+    assert set(groups) == {"BOLD:A", "BOLD:D"}
+    assert groups["BOLD:A"].caption == ("Shared BIN: BOLD:A (2 species) — "
+                                        "Danaus cf. plexippus, Danaus plexippus")
+    d = groups["BOLD:D"]
+    assert d.caption == "Shared BIN: BOLD:D (1 species, 2 genera) — Danaus eresimus"
+    assert d.note == "records from more than one genus: Danaus, Pieris"
+    assert set(d.specimens["processid"]) == {"ERI0", "ERI1", "ERI2", "ERI3", "PIE0"}
+
+
+def test_unnamed_bins_get_groups_discordant_first():
+    """Every BIN with no species-level record, so none is invisible."""
+    groups = group_specimens(_names_frame(), pd.DataFrame(), UNNAMED)
+
+    assert [g.bins[0] for g in groups] == ["BOLD:H", "BOLD:G"]
+    h, g = groups
+    assert h.discordant and not g.discordant
+    assert h.caption == "Discordant BIN: BOLD:H — Danaus, Pieris"
+    assert h.note == "records from more than one genus: Danaus, Pieris"
+    assert g.caption == "Concordant BIN: BOLD:G — Danaus sp."
+    assert set(g.specimens["processid"]) == {"GSP0", "GSP1"}
+    assert list(g.specimens["processid"]) == ["GSP1", "GSP0"], "best score first"
+
+
+def test_unnamed_screen_is_not_a_bags_grade():
+    assert UNNAMED not in GRADES
+
+
+def test_an_unnamed_caption_summarises_many_names():
+    frame = pd.DataFrame([
+        {"processid": f"P{i}", "species": None, "bin_uri": "BOLD:X",
+         "identification_rank": "genus", "genus": "Danaus",
+         "identification": f"Danaus {chr(97 + i)}group"} for i in range(5)])
+    (group,) = group_specimens(frame, pd.DataFrame(), UNNAMED)
+    assert group.caption.endswith("+2 more")
+
+
+# -- C+E: split and shared ------------------------------------------------------
+
+
+def _split_shared_frame():
+    from boldcurator.core.pipeline import process_specimen_data
+
+    rows = []
+
+    def add(prefix, name, rank, bin_uri, n, genus="Danaus"):
+        for i in range(n):
+            rows.append({"processid": f"{prefix}{i}", "species": name,
+                         "identification": name or genus,
+                         "identification_rank": rank, "genus": genus,
+                         "family": "Nymphalidae", "bin_uri": bin_uri,
+                         "quality_score": i, "country.ocean": "Kenya"})
+
+    add("PLA", "Danaus plexippus", "species", "BOLD:A", 3)   # shared
+    add("CHA", "Danaus chrysippus", "species", "BOLD:A", 2)
+    add("PLB", "Danaus plexippus", "species", "BOLD:B", 4)   # own
+    add("GNB", None, "genus", "BOLD:B", 1)                   # rides along
+    add("PLC", "Danaus plexippus", "species", "BOLD:C", 1)   # mixed genera
+    add("PIC", None, "genus", "BOLD:C", 1, genus="Pieris")
+    add("VAA", "Vanessa atalanta", "species", "BOLD:V", 2, genus="Vanessa")  # C only
+    add("VAB", "Vanessa atalanta", "species", "BOLD:W", 2, genus="Vanessa")
+    return process_specimen_data(pd.DataFrame(rows))
+
+
+def test_c_plus_e_groups_every_bin_of_a_split_and_shared_species():
+    """Graded E, so the C screen never showed it and E only its shared BIN."""
+    frame = _split_shared_frame()
+    grades = calculate_bags_grades(frame)
+    (group,) = group_specimens(frame, grades, SPLIT_SHARED)
+
+    assert group.caption == ("Species: Danaus plexippus — BOLD:A (shared with "
+                             "Danaus chrysippus), BOLD:B (own), BOLD:C (mixed genera)")
+    assert group.bins == ("BOLD:A", "BOLD:B", "BOLD:C")
+    assert set(group.specimens["processid"]) == {
+        "PLA0", "PLA1", "PLA2", "PLB0", "PLB1", "PLB2", "PLB3", "PLC0",
+        "CHA0", "CHA1", "GNB0", "PIC0"}, \
+        "its own records in every BIN, the sharing species and the riders"
+    assert group.note.startswith("Split across 3 BINs, 2 of them shared")
+    assert list(group.specimens["processid"]) == [
+        "PLA2", "PLA1", "PLA0", "PLB3", "PLB2", "PLB1", "PLB0", "PLC0",
+        "CHA1", "CHA0", "GNB0", "PIC0"], \
+        "own records BIN by BIN, best first; then the sharing species; riders last"
+
+
+def test_a_split_species_with_no_shared_bin_is_not_c_plus_e():
+    frame = _split_shared_frame()
+    grades = calculate_bags_grades(frame)
+    assert dict(zip(grades["species"], grades["bags_grade"]))["Vanessa atalanta"] == "C"
+    assert all(g.species != ("Vanessa atalanta",)
+               for g in group_specimens(frame, grades, SPLIT_SHARED))
+
+
+def test_c_plus_e_puts_the_species_with_most_bins_first():
+    frame = _split_shared_frame()
+    extra = frame[frame["processid"].isin(["CHA0", "CHA1"])].copy()
+    extra["processid"] = ["CHX0", "CHX1"]
+    extra["bin_uri"] = "BOLD:X"                     # chrysippus: 2 BINs, 1 shared
+    frame = pd.concat([frame, extra], ignore_index=True)
+    grades = calculate_bags_grades(frame)
+    groups = group_specimens(frame, grades, SPLIT_SHARED)
+    assert [g.species[0] for g in groups] == ["Danaus plexippus", "Danaus chrysippus"]
+
+
+def test_e_groups_mark_their_c_plus_e_species():
+    frame = _split_shared_frame()
+    grades = calculate_bags_grades(frame)
+    groups = {g.bins[0]: g for g in group_specimens(frame, grades, "E")}
+    assert groups["BOLD:A"].caption == ("Shared BIN: BOLD:A (2 species) — "
+                                        "Danaus plexippus [C+E], Danaus chrysippus")
+    assert "see BAGS C+E" in groups["BOLD:A"].note
+
+
+def test_the_checklist_marks_c_plus_e_species():
+    frame = _split_shared_frame()
+    grades = calculate_bags_grades(frame)
+    checklist = build_species_checklist(frame, grades).set_index("species")
+    assert checklist.loc["Danaus plexippus", "c_plus_e"] == "C+E"
+    assert checklist.loc["Danaus chrysippus", "c_plus_e"] == ""
+    assert checklist.loc["Vanessa atalanta", "c_plus_e"] == ""
+
+
+def test_c_plus_e_is_not_a_bags_grade():
+    assert SPLIT_SHARED not in GRADES
+
+
+def _sialis_frame(extra_species=()):
+    """Round 8, items 7.1 and 8.1, from a curator's export: Sialis concava
+    shares BOLD:AAG9765 with Sialis velata (and 48 genus-level records) and
+    has BOLD:AAL6477 to itself -- 68 records in its two BINs."""
+    from boldcurator.core.pipeline import process_specimen_data
+
+    rows = []
+
+    def add(prefix, name, rank, bin_uri, n):
+        for i in range(n):
+            rows.append({"processid": f"{prefix}{i}", "species": name,
+                         "identification": name or "Sialis",
+                         "identification_rank": rank, "genus": "Sialis",
+                         "family": "Sialidae", "order": "Megaloptera",
+                         "bin_uri": bin_uri, "quality_score": i,
+                         "country.ocean": "Canada"})
+
+    add("GEN", None, "genus", "BOLD:AAG9765", 48)
+    add("CON", "Sialis concava", "species", "BOLD:AAG9765", 1)
+    add("VEL", "Sialis velata", "species", "BOLD:AAG9765", 15)
+    add("VNB", "Sialis velata", "species", None, 8)            # no BIN
+    add("COL", "Sialis concava", "species", "BOLD:AAL6477", 4)
+    for n, name in enumerate(extra_species):
+        add(f"X{n}_", name, "species", "BOLD:AAG9765", 1)
+    return process_specimen_data(pd.DataFrame(rows))
+
+
+def test_c_plus_e_shows_the_species_sharing_its_bin():
+    frame = _sialis_frame()
+    grades = calculate_bags_grades(frame)
+    (group,) = group_specimens(frame, grades, SPLIT_SHARED)
+    assert group.caption == ("Species: Sialis concava — BOLD:AAG9765 (shared with "
+                             "Sialis velata), BOLD:AAL6477 (own)")
+    assert group.specimen_count == 68, "every record in both BINs"
+    pids = list(group.specimens["processid"])
+    assert sum(p.startswith("VEL") for p in pids) == 15
+    assert not any(p.startswith("VNB") for p in pids), "BIN-less velata stays out"
+    first_other = min(i for i, p in enumerate(pids) if not p.startswith("CO"))
+    assert all(p.startswith("CO") for p in pids[:first_other]) and first_other == 5, \
+        "concava's own five records first"
+
+
+def test_e_caption_names_every_species_in_the_shared_bin():
+    frame = _sialis_frame()
+    grades = calculate_bags_grades(frame)
+    (group,) = group_specimens(frame, grades, "E")
+    assert group.caption == ("Shared BIN: BOLD:AAG9765 (2 species) — "
+                             "Sialis concava [C+E], Sialis velata")
+    assert group.specimen_count == 64
+
+
+def test_a_long_e_caption_keeps_the_c_plus_e_marker():
+    frame = _sialis_frame(["Sialis annae", "Sialis bilobata", "Sialis aequata"])
+    grades = calculate_bags_grades(frame)
+    (e,) = group_specimens(frame, grades, "E")
+    assert e.caption.startswith("Shared BIN: BOLD:AAG9765 (5 species) — "
+                                "Sialis concava [C+E], ")
+    assert e.caption.endswith("+2 more")

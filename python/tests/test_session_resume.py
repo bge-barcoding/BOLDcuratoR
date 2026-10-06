@@ -130,3 +130,20 @@ def test_saving_under_the_same_name_updates_the_session_in_place(app_state, tmp_
         second = app_state.save_session(sessions, "s1", name="My review")
         assert second.created_at == first.created_at
         assert len(sessions.list_sessions()) == 1
+
+
+def test_resume_does_not_refill_a_group_the_curator_emptied(app_state, tmp_path):
+    """A saved selection is the curator's: a (BIN x country) group they
+    deselected stays empty when the session is resumed."""
+    app_state.run_search("Danaus")
+    app_state.search.analysis(app_state.store)
+    selected = sorted(app_state.annotations.selected_processids())
+    assert len(selected) >= 2
+    dropped = selected[0]
+    app_state.annotations.unset_selected(dropped)
+    with SessionStore(tmp_path / "sessions.db") as sessions:
+        saved = app_state.save_session(sessions, "s1")
+        fresh = AppState(app_state.store, page_size=25)
+        fresh.resume_session(sessions.load(saved.session_id))
+        fresh.search.analysis(fresh.store)
+    assert set(fresh.annotations.selected_processids()) == set(selected[1:])

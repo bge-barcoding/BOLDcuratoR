@@ -32,6 +32,7 @@ FIXTURES = HERE / "fixtures"
 REPORT = HERE / "REPORT.md"
 
 from boldcurator.core import bags, bins, selection  # noqa: E402
+from boldcurator.core.species import NAME_INTERIM, SPECIES_LEVEL_RANKS  # noqa: E402
 from boldcurator.core.pipeline import process_specimen_data  # noqa: E402
 from boldcurator.core.ranking import score_and_rank  # noqa: E402
 from boldcurator.core.species import is_species_level, is_valid_species_name  # noqa: E402
@@ -47,6 +48,9 @@ EXPLANATIONS = {
         "pass (mod_data_import_utils.R:180) anchors the pattern as ^sp\\. so "
         "'Danaus sp.' survives it, omits ' nr ', and tests only == \"\" for "
         "emptiness so the literals 'None' and 'NA' survive as species names. "
+        "The rule here is also wider than any of R's: interim names without a "
+        "full stop (cf, aff, sp), nr., gr., agg., complex, indet. and ? are "
+        "rejected, and ssp. is no longer mistaken for sp. "
         "Everything downstream of the name follows: SPECIES_ID, quality_score, "
         "rank, BAGS eligibility and auto-selection candidacy."
     ),
@@ -76,6 +80,37 @@ EXPLANATIONS = {
         "means 'contains cf.' OR 'contains aff.<Reference>' -- so any cf. "
         "record passes regardless of the reference species. Under the unified "
         "rule such records are simply not species-level."
+    ),
+    "SPECIES_KEPT_VERBATIM": (
+        "R blanks a species name its rule rejects (mod_data_import_utils.R:180), "
+        "so the original value is lost from every screen and export. Python "
+        "keeps the species field exactly as BOLD has it and records what kind "
+        "of name it is in name_status (core.species.name_status) -- the project "
+        "owner's decision. Only the missing tokens (blank, 'None', 'NA') are "
+        "blanked."
+    ),
+    "INTERIM_SPECIES_GRADED": (
+        "An interim species name recorded at species rank (Genus cf. species, "
+        "Genus sp. 1) is a species-level name here: it gets a BAGS grade of its "
+        "own, and it makes a BIN it shares with any other species-level name "
+        "discordant (grade E), strictly -- D. cf. plexippus beside D. plexippus "
+        "counts as two names. R blanks such names, so it neither grades them nor "
+        "lets them make a BIN shared. The project owner's decision."
+    ),
+    "RANK_DECIDES_SPECIES_LEVEL": (
+        "A valid binomial whose identification_rank is not species or "
+        "subspecies is not a species-level name here, anywhere. R's grade tabs "
+        "already respect the rank, but its BIN species list "
+        "(bin_analysis_utils.R:114) ignores it, so R lists the name as a "
+        "species of the BIN."
+    ),
+    "GENUS_CONFLICT_DISCORDANT": (
+        "A BIN holding records from more than one genus, family or order is "
+        "discordant (grade E for its species, Discordant on the BIN tab) "
+        "whatever rank each record was identified to -- a genus-only Pieris "
+        "record in a Danaus plexippus BIN disagrees with it. R let the "
+        "first rank with any value decide, so one species name made the BIN "
+        "concordant. The project owner's decision."
     ),
     "BIN_LESS_EXCLUDED_FROM_BAGS": (
         "Round 7: a species-level record with no BIN assigned yet is "
@@ -191,6 +226,9 @@ def compare_specimens(r: pd.DataFrame, py: pd.DataFrame, cases: dict) -> list[Di
             explanation = None
             if r_row_errored:
                 explanation = "R_ROW_ERROR_ZEROES_SCORE"
+            elif species_differs and _s(rr["species"]) == "":
+                # R blanked a name Python keeps verbatim.
+                explanation = "SPECIES_KEPT_VERBATIM"
             elif species_differs:
                 # R kept a name the unified rule rejects; everything the name
                 # feeds follows from that one decision.
@@ -272,12 +310,32 @@ def main() -> int:
         fixture.loc[species_level & no_bin, "species"].astype(str).str.strip()
     )
 
+    # BINs holding an interim species name (Python's own classification), the
+    # interim names themselves, and BINs mixing genera/families/orders.
+    py_bins_text = py_spec["bin_uri"].fillna("").astype(str).str.strip()
+    interim = py_spec["name_status"] == NAME_INTERIM
+    interim_names = set(py_spec.loc[interim, "species"].astype(str))
+    interim_bins = set(py_bins_text[interim]) - {""}
+    conflict_bins = bags.taxonomic_conflict_bins(py_spec)
+    species_bins: dict[str, set[str]] = {}
+    for name, bin_uri in zip(py_spec["species"].astype(str), py_bins_text):
+        if bin_uri:
+            species_bins.setdefault(name, set()).add(bin_uri)
+
     def explain_bags(key, col, rv, pv):
         if key in bin_less_species and (
             key in graded_r ^ graded_py or col in
             ("specimen_count", "bags_grade", "bin_count", "shared_bins")
         ):
             return "BIN_LESS_EXCLUDED_FROM_BAGS"
+        if key in interim_names or (
+            col in ("bags_grade", "shared_bins")
+            and species_bins.get(key, set()) & interim_bins
+        ):
+            return "INTERIM_SPECIES_GRADED"
+        if (col in ("bags_grade", "shared_bins")
+                and species_bins.get(key, set()) & conflict_bins):
+            return "GENUS_CONFLICT_DISCORDANT"
         if key in graded_r ^ graded_py:
             return "UNIFIED_SPECIES_RULE"
         return None
@@ -296,9 +354,24 @@ def main() -> int:
         ]
     ) - {""}
 
+    # BINs where a valid binomial is recorded at a non-species rank.
+    rank = fixture["identification_rank"].astype(str).str.strip().str.lower()
+    non_species_rank = (rank != "") & ~rank.isin(SPECIES_LEVEL_RANKS)
+    rank_bins = set(fixture.loc[non_species_rank
+                                & is_valid_species_name(fixture["species"]),
+                                "bin_uri"]) - {""}
+
     def explain_bins(key, col, rv, pv):
+        if key in interim_bins:
+            # Python lists (and, strictly, counts as discordant) the interim
+            # species names R blanks.
+            return "INTERIM_SPECIES_GRADED"
         if key in cf_bins:
             return "CF_AFF_CONCORDANCE"
+        if key in rank_bins and col in ("unique_species", "species_list"):
+            return "RANK_DECIDES_SPECIES_LEVEL"
+        if key in conflict_bins and col == "concordance":
+            return "GENUS_CONFLICT_DISCORDANT"
         return None
 
     result.diffs += compare_keyed(

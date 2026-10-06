@@ -378,6 +378,16 @@ def main(argv: list[str] | None = None) -> int:
               """))
         check("the Newick download button is present",
               page.locator("#dl_phylo_newick").count() > 0)
+        tip_link = page.evaluate("""
+            () => {
+                const a = document.querySelector(
+                    '#phylo-tree-container a.bc-phylo-tip-link');
+                return a ? [a.getAttribute('href'), a.textContent] : null;
+            }
+        """)
+        check("tip names start with the BIN and link to it on BOLD",
+              bool(tip_link) and "[bin]" in tip_link[0]
+              and tip_link[1].startswith("BOLD:"), str(tip_link))
 
         # -- reroot: right-click (dispatched directly -- see phylo-init.js's
         # own contextmenu listener; a real synthetic right-click through
@@ -403,6 +413,29 @@ def main(argv: list[str] | None = None) -> int:
         check("right-clicking a tip reroots the tree",
               after_reroot != before_reroot)
         page.screenshot(path=str(args.out / "06-phylogeny.png"), full_page=True)
+
+        # -- round 8, item 1.1: a dropped connection (a sleeping machine)
+        # reloads the page and restores the work, rather than leaving a dead
+        # page whose buttons do nothing and whose downloads are an error.
+        show("Specimens")
+        old_session = page.evaluate("Shiny.shinyapp.config.sessionId")
+        page.evaluate("Shiny.shinyapp.$socket.close()")
+        time.sleep(1.0)
+        check("a dropped connection says it is reconnecting",
+              page.locator("#bc-reconnect").is_visible())
+        page.wait_for_load_state("networkidle")
+        time.sleep(SETTLE * 2)
+        new_session = page.evaluate("Shiny.shinyapp.config.sessionId")
+        active = page.locator(".nav-link.active").inner_text()
+        check("it reconnects to a new session on the same tab, work restored",
+              new_session != old_session and "Specimens" in active
+              and page.locator("#specimens_body table").count() > 0,
+              f"tab {active!r}")
+        href = page.get_attribute("#dl_all", "href") or ""
+        download = page.request.get(args.url.rstrip("/") + "/" + href.lstrip("/"))
+        check("a download after reconnecting is the file, not an error",
+              download.ok and "json" not in download.headers.get("content-type", ""),
+              f"{download.status} {download.headers.get('content-type')}")
 
         check("no javascript errors", not js_errors, "; ".join(js_errors))
         browser.close()

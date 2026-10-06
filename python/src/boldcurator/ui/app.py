@@ -24,7 +24,10 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import tempfile
+import sys
 import threading
+import time
+from urllib.parse import parse_qs
 from pathlib import Path
 
 import pandas as pd
@@ -33,22 +36,29 @@ from shiny import App, reactive, render, ui
 from .. import __version__
 from .. import app_update
 from ..config.constants import (
+    APP_DOWNLOAD_URL,
     CONTINENT_COUNTRIES,
     DEFAULT_SESSIONS_PATH,
     DEFAULT_SNAPSHOT_DIR,
     DEFAULT_SNAPSHOT_ZENODO_DOI,
     DOWNLOAD_LIMITS,
-    FLAG_OPTIONS,
+    FLAG_CHOICES,
     PHYLOGENY_LIMITS,
 )
 from ..core.grouping import (
     GRADE_DESCRIPTIONS,
     GRADES,
+    SPLIT_SHARED,
+    SPLIT_SHARED_DESCRIPTION,
+    UNNAMED,
+    UNNAMED_DESCRIPTION,
     PRIORITY_GRADES,
     SPECIES_GRADES,
 )
+from ..core.species import SPECIES_LEVEL_STATUSES
 from ..core.table import DEFAULT_PAGE_SIZE
 from ..data.snapshot import SnapshotError, SnapshotStore
+from ..desktop import DEFAULT_CONFIG_PATH, load_snapshot_path, save_snapshot_path
 from ..io import exports as export_io
 from ..io.annotations import merge_annotations
 from ..io.session import SessionStore
@@ -65,6 +75,8 @@ from .format import (
     GRADE_COLOURS,
     GROUP_COLUMNS,
     GROUP_LABELS,
+    INLINE_INPUT_CSS,
+    UNNAMED_COLOUR,
     bold_bin_url,
     bold_record_url,
     bold_species_url,
@@ -119,15 +131,16 @@ def _read_provenance(snapshot_path: Path) -> dict:
 
 
 def _obtained_date(snapshot_path: Path) -> str:
+    """When this file was downloaded or copied in -- or, for one that never
+    came through this app, its own modified date, marked as such."""
     recorded = _read_provenance(snapshot_path).get("downloaded_at")
     if recorded:
-        return recorded
+        return str(recorded)[:10]
     try:
         mtime = snapshot_path.stat().st_mtime
     except OSError:
         return "unknown"
-    return (_dt.datetime.fromtimestamp(mtime).isoformat(timespec="seconds")
-            + " (file's own modified date -- not downloaded through this app)")
+    return _dt.date.fromtimestamp(mtime).isoformat() + " (file date)"
 
 
 def _snapshot_filename_for(*, filename: str = "", snapshot_id: str = "") -> str:
@@ -169,6 +182,61 @@ def _is_listed_snapshot(path: Path, *, directory: Path = DEFAULT_SNAPSHOT_DIR) -
                 and path.parent.resolve() == directory.resolve())
     except OSError:
         return False
+
+
+#: ``(resolved path, mtime) -> snapshot_id`` for files with no sidecar, so the
+#: Data tab's list doesn't reopen every file on every render.
+_snapshot_id_cache: dict[tuple[str, float], str] = {}
+
+
+def _snapshot_id_of(path: Path) -> str:
+    """Which BOLD data package a snapshot file holds: its sidecar's
+    ``snapshot_id`` when it has one, else read from the file itself
+    (read-only, cached by path and modified time). ``""`` if neither works."""
+    recorded = _read_provenance(path).get("snapshot_id")
+    if recorded:
+        return str(recorded)
+    try:
+        key = (str(path.resolve()), path.stat().st_mtime)
+    except OSError:
+        return ""
+    if key not in _snapshot_id_cache:
+        try:
+            with SnapshotStore(path) as other:
+                _snapshot_id_cache[key] = other.info().snapshot_id or ""
+        except (SnapshotError, OSError):
+            _snapshot_id_cache[key] = ""
+    return _snapshot_id_cache[key]
+
+
+def _compare_snapshots(candidate_id: str, current_id: str) -> str:
+    """``"newer"``, ``"older"`` or ``"same"`` -- ``candidate_id`` relative to
+    ``current_id`` -- or ``""`` when they can't be compared (either unknown,
+    or not date-form; snapshot ids are the BOLD package's date)."""
+    from ..build.fetch_snapshot import _parse_snapshot_date
+
+    if not candidate_id or not current_id:
+        return ""
+    if candidate_id == current_id:
+        return "same"
+    candidate, current = (_parse_snapshot_date(candidate_id),
+                          _parse_snapshot_date(current_id))
+    if candidate is None or current is None:
+        return ""
+    return "newer" if candidate > current else "older"
+
+
+def _use_next_start_if_newer(new_path: Path, new_id: str, current_id: str, *,
+                             config_path: Path = DEFAULT_CONFIG_PATH) -> bool:
+    """Round 8, item 5.3: a newly downloaded or copied snapshot that is newer
+    than the one in use becomes the one BOLDcurator opens next time it
+    starts. Before this, nothing ever switched to it -- the config kept
+    naming the old file, which stayed "in use" and so could never be
+    deleted. Returns whether it switched."""
+    if _compare_snapshots(new_id, current_id) != "newer":
+        return False
+    save_snapshot_path(new_path, config_path)
+    return True
 
 
 def _unique_snapshot_path(name: str, *, directory: Path = DEFAULT_SNAPSHOT_DIR) -> Path:
@@ -252,6 +320,102 @@ def _with_checked(frame: pd.DataFrame, annotations) -> pd.DataFrame:
     return out
 
 
+class _Reconnects:
+    """What a session left behind when its connection dropped, for the page
+    that reloads in its place -- round 8, item 1.1.
+
+    Keyed by the *old* Shiny session id, which the page passes back on reload
+    (``?bc_resume=<id>``), so a note is only ever claimed by the window whose
+    connection dropped, and only once. Notes older than ``ttl`` seconds are
+    discarded unclaimed. One per app process, shared by its sessions.
+    """
+
+    def __init__(self, ttl: float = 24 * 3600) -> None:
+        self._ttl = ttl
+        self._notes: dict[str, tuple[float, dict]] = {}
+        self._lock = threading.Lock()
+
+    def leave(self, old_session_id: str, **note) -> None:
+        with self._lock:
+            now = time.monotonic()
+            self._notes = {k: v for k, v in self._notes.items()
+                           if now - v[0] < self._ttl}
+            self._notes[old_session_id] = (now, note)
+
+    def claim(self, old_session_id: str) -> dict | None:
+        with self._lock:
+            left = self._notes.pop(old_session_id, None)
+        if left is None or time.monotonic() - left[0] >= self._ttl:
+            return None
+        return left[1]
+
+
+def _resume_token(url_search: str) -> str:
+    """The old session id in a reconnecting page's ``?bc_resume=...``."""
+    return parse_qs((url_search or "").lstrip("?")).get("bc_resume", [""])[0]
+
+
+#: Round 8, item 1.1. When the websocket drops (the server was asked not to
+#: drop it -- ``desktop.WEBSOCKET_KEEPALIVE`` -- but a sleeping machine can
+#: still lose it), the page used to stay on screen with a dead session behind
+#: it: clicks went nowhere and download links answered with an error body.
+#: Now it says so, waits until the window is visible and the server answers,
+#: and reloads itself with the old session id; the server saved that
+#: session's work as it ended and restores it into the new one.
+RECONNECT_JS = """
+(function () {
+  var reloading = false;
+  function oldSessionId() {
+    try { return Shiny.shinyapp.config.sessionId || ""; } catch (e) { return ""; }
+  }
+  function reconnect(old) {
+    if (reloading) return;
+    reloading = true;
+    var url = new URL(window.location.href);
+    url.searchParams.set("bc_resume", old);
+    (function attempt() {
+      // Reload only once the server answers -- against a stopped server a
+      // reload would swap this page for the browser's own error page.
+      fetch(window.location.pathname, {cache: "no-store"}).then(function (r) {
+        if (r.ok) { window.location.replace(url.toString()); }
+        else { setTimeout(attempt, 3000); }
+      }).catch(function () { setTimeout(attempt, 3000); });
+    })();
+  }
+  $(document).on("shiny:disconnected", function () {
+    var old = oldSessionId();
+    var box = document.getElementById("bc-reconnect");
+    if (box) box.style.display = "flex";
+    var now = document.getElementById("bc-reconnect-now");
+    if (now) now.onclick = function () { reconnect(old); };
+    if (document.visibilityState === "visible") {
+      setTimeout(function () { reconnect(old); }, 1000);
+    } else {
+      document.addEventListener("visibilitychange", function onVisible() {
+        if (document.visibilityState !== "visible") return;
+        document.removeEventListener("visibilitychange", onVisible);
+        reconnect(old);
+      });
+    }
+  });
+  // Once the server has read it, drop the token, so a later manual reload
+  // starts afresh rather than claiming nothing.
+  $(document).on("shiny:sessioninitialized", function () {
+    var url = new URL(window.location.href);
+    if (url.searchParams.has("bc_resume")) {
+      url.searchParams.delete("bc_resume");
+      history.replaceState(null, "", url.toString());
+    }
+  });
+})();
+"""
+
+
+#: The Data tab's grey panels.
+BOX_STYLE = ("padding:10px 14px;background:#f8f9fa;border:1px solid #dee2e6;"
+             "border-radius:5px;")
+
+
 def _annotation_controls(prefix: str) -> list:
     """Flag / note / corrected-ID, plus Apply. Repeated per screen, so shared.
 
@@ -276,13 +440,15 @@ def _annotation_controls(prefix: str) -> list:
         ui.div(
             ui.tags.span("Flag", class_="small text-muted"),
             ui.input_select(f"{prefix}_flag", None,
-                            choices=sorted(FLAG_OPTIONS), width="115px"),
+                            choices=FLAG_CHOICES, width="140px"),
             style="display:flex;align-items:center;gap:6px;",
         ),
         ui.input_text(f"{prefix}_note", None, placeholder="Curator note",
                      width="170px"),
+        # Round 8, item 4.2: "Correct ID", 1.5x the old 150px so a full
+        # binomial fits.
         ui.input_text(f"{prefix}_updated_id", None,
-                     placeholder="Corrected identification", width="150px"),
+                     placeholder="Correct ID", width="225px"),
         ui.input_action_button(f"{prefix}_apply", "Apply to checked",
                                class_="btn-primary btn-sm"),
     ]
@@ -315,6 +481,100 @@ def _grade_panel(grade: str) -> ui.Tag:
         ui.div(ui.output_ui(f"grade_{grade}_body"), class_="bc-fill-output"),
         value=f"grade_{grade}",
     )
+
+
+#: Every screen built from ``core.grouping`` groups: the five BAGS grades,
+#: then C+E (split and shared species, graded E), then the BINs with no
+#: species-level name, which no grade covers.
+GROUP_SCREENS = (*GRADES, SPLIT_SHARED, UNNAMED)
+
+
+def _split_shared_panel() -> ui.Tag:
+    """The BAGS C+E screen (``grade_CE_body``): the grade-E species that are
+    also split across BINs, every BIN together. Marked a priority, like C and
+    E, in both of their colours."""
+    c, e = GRADE_COLOURS["C"], GRADE_COLOURS["E"]
+    title = ui.span(
+        ui.span("●", style=f"color:{e};margin-right:6px;"),
+        ui.tags.strong("BAGS C+E"),
+    )
+    return ui.nav_panel(
+        title,
+        ui.div(
+            ui.tags.strong("BAGS C+E"),
+            ui.tags.span(f" — {SPLIT_SHARED_DESCRIPTION}", style="opacity:.9;"),
+            ui.tags.span("  ·  work here first", style="opacity:.85;"),
+            style=f"background:linear-gradient(90deg,{c},{e});color:#fff;"
+                  "padding:8px 14px;border-radius:5px;margin-bottom:10px;",
+        ),
+        ui.div(ui.output_ui(f"grade_{SPLIT_SHARED}_body"), class_="bc-fill-output"),
+        value=f"grade_{SPLIT_SHARED}",
+    )
+
+
+def _unnamed_panel() -> ui.Tag:
+    """The unnamed-BINs screen. Same body as a grade's (``grade_U_body``),
+    but labelled as what it is: not a BAGS grade."""
+    return ui.nav_panel(
+        "Unnamed BINs",
+        ui.div(
+            ui.tags.strong("Unnamed BINs"),
+            ui.tags.span(f" — {UNNAMED_DESCRIPTION}", style="opacity:.9;"),
+            style=f"background:{UNNAMED_COLOUR};color:#fff;padding:8px 14px;"
+                  "border-radius:5px;margin-bottom:10px;",
+        ),
+        ui.div(ui.output_ui(f"grade_{UNNAMED}_body"), class_="bc-fill-output"),
+        value=f"grade_{UNNAMED}",
+    )
+
+
+def _cell_text(row: pd.Series, *columns: str) -> str:
+    """The first of ``columns`` with a value, as text; ``""`` if none has one.
+
+    Not ``row.get(a) or row.get(b)``: a missing value is ``pd.NA``, whose
+    truth value raises "boolean value of NA is ambiguous" -- which is what
+    building a tree did once a representative could have no species name.
+    """
+    for column in columns:
+        value = row.get(column)
+        if not _is_missing(value) and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
+def _phylo_tips(result, grade_by_species: dict[str, str]) -> list[dict]:
+    """Per-tip metadata for the tree renderer (phylo-init.js).
+
+    A tip is coloured by its name's BAGS grade only when the record is
+    species-level (``core.species.name_status``): a genus-rank "Danaus sp."
+    is not the interim species "Danaus sp.", whatever the text says.
+    """
+    tips = []
+    for _, row in result.representatives.iterrows():
+        species = _cell_text(row, "species", "identification")
+        level = _cell_text(row, "name_status") in SPECIES_LEVEL_STATUSES \
+            if "name_status" in row.index else True
+        grade = grade_by_species.get(species, "") if level else ""
+        bin_uri = _cell_text(row, "bin_uri")
+        tips.append({
+            "tip": row["_tip_label"],
+            "species": species,
+            "bin_uri": bin_uri,
+            "bin_url": bold_bin_url(bin_uri) if bin_uri else "",  # round 8, 9.2
+            "bags_grade": grade,
+            "monophyletic": result.monophyly.get(species) if level else None,
+            "color": GRADE_COLOURS.get(grade, "#495057"),
+            "flags": result.flags.get(row["_tip_label"], []),
+        })
+    return tips
+
+
+def _unnamed_counts(groups) -> list[tuple[int, str, str]]:
+    """``(count, label, colour)`` for the Species tab's two unnamed-BIN boxes,
+    discordant in grade E's red and concordant in the screen's own colour."""
+    discordant = sum(1 for g in groups if g.discordant)
+    return [(discordant, "discordant", GRADE_COLOURS["E"]),
+            (len(groups) - discordant, "concordant", UNNAMED_COLOUR)]
 
 
 def _banner_text(warning: str) -> str:
@@ -350,6 +610,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
     store = SnapshotStore(snapshot)
     info = store.info()
     sessions_path = sessions_path or DEFAULT_SESSIONS_PATH
+    reconnects = _Reconnects()
 
     app_ui = ui.page_fluid(
         # Round 5, items 6/7/8/10: the page itself must never need its own
@@ -445,6 +706,16 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             .bc-scroll td {
                 max-width: 280px; overflow: hidden; text-overflow: ellipsis;
             }
+            /* Round 8, item 5.2: the Data tab in two columns, the
+               snapshot (the busier one) wider; one column when narrow. */
+            .bc-data-grid {
+                display: grid; gap: 16px 24px; align-items: start;
+                grid-template-columns: minmax(0, 3fr) minmax(360px, 2fr);
+                max-width: 1500px;
+            }
+            @media (max-width: 1100px) {
+                .bc-data-grid { grid-template-columns: minmax(0, 1fr); }
+            }
             /* Round 5, item 12: a download click's own visible
                acknowledgement -- see the click listener below. */
             .bc-toast {
@@ -455,7 +726,21 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 max-width: 320px; box-shadow: 0 2px 8px rgba(0,0,0,0.3);
             }
         """),
+        ui.tags.style(INLINE_INPUT_CSS),
         ui.tags.div(id="bc-toast", class_="bc-toast"),
+        ui.tags.div(
+            ui.tags.span("Lost the connection to BOLDcurator -- reconnecting "
+                         "and restoring your work..."),
+            ui.tags.button("Reconnect now", id="bc-reconnect-now", type="button",
+                           class_="btn btn-sm btn-light"),
+            id="bc-reconnect",
+            style="display:none;position:fixed;top:12px;left:50%;"
+                  "transform:translateX(-50%);z-index:100000;gap:12px;"
+                  "align-items:center;background:#212529;color:#fff;"
+                  "padding:8px 14px;border-radius:6px;font-size:14px;"
+                  "box-shadow:0 2px 8px rgba(0,0,0,.3);",
+        ),
+        ui.tags.script(RECONNECT_JS),
         # One delegated listener, attached to the page once. The specimen and
         # group tables are re-rendered as raw HTML on every click (paging,
         # sorting, "next problem"...), which replaces the checkboxes' own
@@ -484,6 +769,11 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 var del = e.target.closest && e.target.closest('.bc-del-snapshot');
                 if (del) {{
                     Shiny.setInputValue('delete_snapshot_click', del.dataset.path,
+                        {{priority: 'event'}});
+                }}
+                var use = e.target.closest && e.target.closest('.bc-use-snapshot');
+                if (use) {{
+                    Shiny.setInputValue('use_snapshot_click', use.dataset.path,
                         {{priority: 'event'}});
                 }}
                 // Round 5, item 12: a curator running the packaged desktop
@@ -600,125 +890,111 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 # the running app, not only the one-time first-run setup
                 # screen (ui/setup.py, unchanged and still what a curator
                 # sees before any snapshot is configured at all).
-                ui.tags.h5("Snapshot file", style="margin-top:0;"),
-                ui.output_ui("snapshot_panel"),
+                # Round 8, item 5.2: two columns -- the snapshot on the
+                # left, session and app on the right -- instead of one
+                # 900px-wide column with the rest of the window empty; one
+                # column again when the window is narrow. Help texts trimmed
+                # to the facts. Item 5.1 removed the download-from-a-URL
+                # field (the CLI's ``fetch`` still takes any source), item
+                # 5.5 the attribution footer (the header link carries it).
                 ui.div(
-                    ui.tags.strong("Download a snapshot", class_="small"),
                     ui.div(
-                        ui.input_action_button(
-                            "snap_download_default",
-                            "Download the latest public BOLD snapshot",
-                            class_="btn-sm btn-primary"),
-                        ui.input_action_button(
-                            "snap_check_update", "Check for update",
-                            class_="btn-sm btn-outline-secondary"),
-                        style="margin:6px 0;display:flex;gap:8px;"
-                              "align-items:center;flex-wrap:wrap;",
-                    ),
-                    ui.tags.details(
-                        ui.tags.summary("Or provide your own source",
-                                       class_="small text-muted"),
+                        ui.tags.h5("Snapshot file", style="margin-top:0;"),
+                        ui.output_ui("snapshot_panel"),
                         ui.div(
-                            ui.input_text(
-                                "snap_source", None, width="360px",
-                                placeholder="A direct URL, a manifest.json "
-                                           "URL, or a Zenodo record/DOI"),
-                            ui.input_action_button("snap_download",
-                                                   "Download",
-                                                   class_="btn-sm"),
-                            style="display:flex;gap:8px;align-items:center;"
-                                  "margin-top:6px;flex-wrap:wrap;",
+                            ui.div(
+                                ui.input_action_button(
+                                    "snap_download_default",
+                                    "Download the latest public BOLD snapshot",
+                                    class_="btn-sm btn-primary"),
+                                ui.input_action_button(
+                                    "snap_check_update", "Check for update",
+                                    class_="btn-sm btn-outline-secondary"),
+                                style="display:flex;gap:8px;"
+                                      "align-items:center;flex-wrap:wrap;",
+                            ),
+                            ui.tags.strong("Or use a file you already have",
+                                          class_="small",
+                                          style="display:block;margin-top:12px;"),
+                            ui.div(
+                                ui.input_text(
+                                    "snap_path", None, width="260px",
+                                    placeholder="/path/to/a/bold_snapshot.duckdb"),
+                                ui.input_action_button(
+                                    "snap_browse", "Browse…",
+                                    class_="btn-sm btn-outline-secondary"),
+                                ui.input_action_button(
+                                    "snap_copy",
+                                    "Copy into BOLDcurator's data folder",
+                                    class_="btn-sm"),
+                                style="display:flex;gap:8px;align-items:center;"
+                                      "flex-wrap:wrap;margin-top:4px;",
+                            ),
+                            ui.tags.span(
+                                "Downloads and copies are saved as new files "
+                                "in BOLDcurator's data folder. A newer one is "
+                                "used from the next start.",
+                                class_="small text-muted",
+                                style="display:block;margin-top:6px;"),
+                            ui.output_ui("snapshot_mgmt_status"),
+                            style="margin-top:10px;" + BOX_STYLE,
                         ),
                     ),
-                    ui.tags.strong("Use an existing file instead",
-                                  class_="small",
-                                  style="display:block;margin-top:14px;"),
                     ui.div(
-                        ui.input_text(
-                            "snap_path", None, width="360px",
-                            placeholder="/path/to/a/bold_snapshot.duckdb"),
-                        ui.input_action_button("snap_browse", "Browse…",
-                                               class_="btn-sm "
-                                                     "btn-outline-secondary"),
-                        ui.input_action_button(
-                            "snap_copy",
-                            "Copy into BOLDcurator's data folder",
-                            class_="btn-sm"),
-                        style="display:flex;gap:8px;align-items:center;"
-                              "flex-wrap:wrap;margin-top:4px;",
+                        ui.tags.h5("Session", style="margin-top:0;"),
+                        ui.div(
+                            ui.div(
+                                ui.input_text("session_name", None,
+                                              placeholder="Session name",
+                                              width="200px"),
+                                ui.input_action_button("save_session", "Save",
+                                                       class_="btn-sm"),
+                                style="display:flex;gap:8px;align-items:center;"
+                                      "flex-wrap:wrap;",
+                            ),
+                            ui.div(
+                                ui.input_select("load_session_id", None,
+                                                choices={}, width="280px"),
+                                ui.input_action_button("load_session", "Load",
+                                                       class_="btn-sm"),
+                                ui.input_action_button(
+                                    "delete_session", "Delete",
+                                    class_="btn-sm btn-outline-danger"),
+                                style="display:flex;gap:8px;align-items:center;"
+                                      "flex-wrap:wrap;margin-top:8px;",
+                            ),
+                            ui.tags.span(
+                                "Auto-saves every minute under this name "
+                                "(\"Auto-save\" if blank).",
+                                class_="small text-muted", style="display:block;"
+                                      "margin-top:6px;"),
+                            ui.output_ui("session_status"),
+                            ui.output_ui("session_location"),
+                            style=BOX_STYLE,
+                        ),
+                        ui.tags.h5("BOLDcurator app", style="margin-top:18px;"),
+                        ui.div(
+                            ui.div(
+                                ui.tags.span(f"Version {__version__}",
+                                             class_="small"),
+                                ui.input_action_button(
+                                    "app_check_update", "Check for app update",
+                                    class_="btn-sm btn-outline-secondary"),
+                                style="display:flex;gap:8px;align-items:center;"
+                                      "flex-wrap:wrap;",
+                            ),
+                            ui.tags.span(
+                                "Also checks Zenodo by itself once a day and "
+                                "never updates without you. To stop that, set "
+                                "\"check_for_updates\": false in "
+                                "~/.boldcurator/config.json.",
+                                class_="small text-muted", style="display:block;"
+                                      "margin-top:6px;"),
+                            ui.output_ui("app_update_status"),
+                            style=BOX_STYLE,
+                        ),
                     ),
-                    ui.tags.span(
-                        "A download or copy lands in BOLDcurator's own "
-                        "data folder as a new file -- it does not "
-                        "replace the file this session is using. "
-                        "Restart BOLDcurator to switch to it.",
-                        class_="small text-muted",
-                        style="display:block;margin-top:6px;"),
-                    ui.output_ui("snapshot_mgmt_status"),
-                    style="margin-top:10px;padding:10px 14px;"
-                          "background:#f8f9fa;border:1px solid #dee2e6;"
-                          "border-radius:5px;max-width:900px;",
-                ),
-                ui.tags.h5("Session", style="margin-top:22px;"),
-                ui.div(
-                    ui.div(
-                        ui.input_text("session_name", None,
-                                      placeholder="Session name",
-                                      width="220px"),
-                        ui.input_action_button("save_session", "Save",
-                                               class_="btn-sm"),
-                        ui.input_select("load_session_id", None, choices={},
-                                        width="320px"),
-                        ui.input_action_button("load_session", "Load",
-                                               class_="btn-sm"),
-                        ui.input_action_button("delete_session", "Delete",
-                                               class_="btn-sm btn-outline-danger"),
-                        style="display:flex;gap:8px;align-items:center;"
-                              "flex-wrap:wrap;",
-                    ),
-                    ui.tags.span(
-                        "Auto-saves every minute, under the name above (or "
-                        "\"Auto-save\" if left blank).",
-                        class_="small text-muted", style="display:block;"
-                              "margin-top:6px;"),
-                    ui.output_ui("session_status"),
-                    ui.output_ui("session_location"),
-                    style="margin-top:6px;padding:10px 14px;"
-                          "background:#f8f9fa;border:1px solid #dee2e6;"
-                          "border-radius:5px;max-width:900px;",
-                ),
-                ui.tags.h5("BOLDcurator app", style="margin-top:22px;"),
-                ui.div(
-                    ui.div(
-                        ui.tags.span(f"This is BOLDcurator v{__version__}.",
-                                     class_="small"),
-                        ui.input_action_button(
-                            "app_check_update", "Check for app update",
-                            class_="btn-sm btn-outline-secondary"),
-                        style="display:flex;gap:8px;align-items:center;"
-                              "flex-wrap:wrap;",
-                    ),
-                    ui.tags.span(
-                        "BOLDcurator also checks by itself, at most once a "
-                        "day, and says so at the top of the window when a "
-                        "new version is out. It asks Zenodo, the same place "
-                        "the snapshots come from, and never updates "
-                        "anything without you. To switch the automatic "
-                        "check off, set \"check_for_updates\": false in "
-                        "~/.boldcurator/config.json.",
-                        class_="small text-muted", style="display:block;"
-                              "margin-top:6px;"),
-                    ui.output_ui("app_update_status"),
-                    style="margin-top:6px;padding:10px 14px;"
-                          "background:#f8f9fa;border:1px solid #dee2e6;"
-                          "border-radius:5px;max-width:900px;",
-                ),
-                ui.div(
-                    BOLD_ATTRIBUTION_TEXT + " ",
-                    ui.tags.a("Full licence text.", href=CC_BY_SA_URL,
-                             target="_blank", rel="noopener noreferrer"),
-                    class_="small text-muted", style="margin-top:18px;"
-                          "max-width:900px;",
+                    class_="bc-data-grid",
                 ),
                 value="data",
             ),
@@ -772,6 +1048,8 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                         ui.div(ui.output_ui("bins_body"), class_="bc-fill-output"),
                         value="bins"),
             *[_grade_panel(g) for g in GRADES],
+            _split_shared_panel(),
+            _unnamed_panel(),
             ui.nav_panel("Phylogeny",
                         ui.div(ui.output_ui("phylogeny_body"), class_="bc-fill-output"),
                         value="phylogeny"),
@@ -793,14 +1071,41 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         #: concurrent opens fine at this scale, and it means a tab closing
         #: doesn't affect another tab's saved-session list.
         sessions = SessionStore(sessions_path)
-        session.on_ended(sessions.close)
+
+        def _on_session_ended() -> None:
+            """Round 8, item 1.1: save the work and leave a note for a page
+            reconnecting in this one's place (``_Reconnects``). Best effort:
+            the minute-by-minute auto-save stands if this fails."""
+            try:
+                with reactive.isolate():
+                    name = (input.session_name() or "").strip()
+                    note = {"user": (input.user() or "").strip(),
+                            "session_name": name, "tab": input.nav(),
+                            "offset": offset.get(),
+                            "groups": {g: v.get() for g, v in group_index.items()}}
+                saved_id = None
+                if state.search is not None:
+                    saved_id = _slugify(name) or _slugify("Auto-save")
+                    state.save_session(sessions, saved_id,
+                                       name=name or "Auto-save")
+                reconnects.leave(session.id, saved_id=saved_id, **note)
+            except Exception as exc:  # noqa: BLE001 -- never let closing fail
+                # Reported, not swallowed: stderr is the desktop app's log
+                # file (launcher._redirect_output_to_log). The minute-by-minute
+                # auto-save still stands.
+                print(f"BOLDcurator: could not save the session as it closed: "
+                      f"{exc!r}", file=sys.stderr)
+            finally:
+                sessions.close()
+
+        session.on_ended(_on_session_ended)
         revision = reactive.Value(0)
         status = reactive.Value("")
         session_msg = reactive.Value("")
         offset = reactive.Value(0)
         estimate: reactive.Value = reactive.Value({})
         group_index: dict[str, reactive.Value] = {
-            g: reactive.Value(0) for g in GRADES
+            g: reactive.Value(0) for g in GROUP_SCREENS
         }
         #: Click-a-header sort state for the in-memory tables (species
         #: checklist, gap analysis, BIN dashboard, one BAGS group at a time)
@@ -853,42 +1158,125 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             current = store.path.resolve()
             return [f for f in files if f.resolve() != current]
 
+        def _next_start() -> Path:
+            """The file BOLDcurator will open when it next starts: the
+            config's, or this one if the config names nothing usable."""
+            return load_snapshot_path(DEFAULT_CONFIG_PATH) or store.path
+
+        def _same_file(a: Path, b: Path) -> bool:
+            try:
+                return a.resolve() == b.resolve()
+            except OSError:
+                return False
+
+        def _snapshot_buttons(path: Path, *, use_label: str = "Use this one",
+                              deletable: bool = True) -> list:
+            buttons = []
+            if use_label:
+                buttons.append(ui.tags.button(
+                    use_label, type="button",
+                    class_="btn btn-sm btn-outline-primary bc-use-snapshot",
+                    data_path=str(path)))
+            if deletable:
+                buttons.append(ui.tags.button(
+                    "Delete", type="button",
+                    class_="btn btn-sm btn-outline-danger bc-del-snapshot",
+                    data_path=str(path)))
+            return buttons
+
+        _RELATION_TEXT = {"newer": ("newer than the file in use", "#198754"),
+                          "older": ("older than the file in use", "#6c757d"),
+                          "same": ("same version as the file in use", "#6c757d")}
+
         @output
         @render.ui
         def snapshot_panel():
             snap_tick.get()
+            next_start = _next_start()
+            switching = not _same_file(next_start, store.path)
             rows = [
                 ui.div(ui.tags.strong("File in use: "), str(store.path),
-                      class_="small"),
-                ui.div(ui.tags.strong("BOLD package version: "),
-                      f"{info.snapshot_id} (built {info.built_at})",
-                      class_="small"),
-                ui.div(ui.tags.strong("Obtained: "), _obtained_date(store.path),
-                      class_="small"),
+                      class_="small", style="overflow-wrap:anywhere;"),
+                ui.div(ui.tags.strong("BOLD package: "),
+                      f"{info.snapshot_id} · obtained "
+                      f"{_obtained_date(store.path)}", class_="small"),
             ]
+            if switching:
+                # Round 8, item 5.3: say plainly which file the next start
+                # opens, and offer the way back.
+                rows.append(ui.div(
+                    ui.tags.span(
+                        f"Next start uses {next_start.name}. Restart "
+                        "BOLDcurator to switch; this file can then be "
+                        "deleted here.", class_="small"),
+                    *_snapshot_buttons(store.path, use_label="Keep using this one",
+                                       deletable=False),
+                    style="display:flex;gap:10px;align-items:center;"
+                          "flex-wrap:wrap;margin-top:4px;padding:4px 8px;"
+                          "background:#e7f1ff;border-radius:4px;",
+                ))
             others = _other_snapshot_files()
             if others:
                 rows.append(ui.tags.strong(
-                    "Other snapshot files in BOLDcurator's data folder",
+                    "Other snapshots in BOLDcurator's data folder",
                     class_="small", style="display:block;margin-top:10px;"))
                 for f in others:
                     try:
                         size_mb = f.stat().st_size / 1e6
                     except OSError:
                         size_mb = 0.0
+                    snapshot_id = _snapshot_id_of(f)
+                    relation = _compare_snapshots(snapshot_id, info.snapshot_id)
+                    is_next = switching and _same_file(f, next_start)
+                    tags = []
+                    if relation in _RELATION_TEXT:
+                        text, colour = _RELATION_TEXT[relation]
+                        tags.append(ui.tags.span(
+                            text, class_="small",
+                            style=f"color:{colour};font-weight:600;"))
+                    if is_next:
+                        tags.append(ui.tags.span("used from next start",
+                                                 class_="small",
+                                                 style="color:#0d6efd;"
+                                                       "font-weight:600;"))
+                    # The package date only when the name doesn't already
+                    # say it (bold_snapshot_2026-09-11.duckdb does).
+                    version = ("" if snapshot_id and snapshot_id in f.name
+                               else f" · {snapshot_id or 'unknown version'}")
                     rows.append(ui.div(
                         ui.tags.span(
-                            f"{f.name} -- {size_mb:,.0f} MB, obtained "
-                            f"{_obtained_date(f)}", class_="small"),
-                        ui.tags.button(
-                            "Delete", type="button",
-                            class_="btn btn-sm btn-outline-danger "
-                                  "bc-del-snapshot",
-                            data_path=str(f)),
+                            f"{f.name}{version} · {size_mb:,.0f} MB",
+                            class_="small", style="overflow-wrap:anywhere;"),
+                        *tags,
+                        *_snapshot_buttons(
+                            f, use_label="" if is_next else "Use this one"),
                         style="display:flex;gap:10px;align-items:center;"
-                              "margin-top:4px;",
+                              "flex-wrap:wrap;margin-top:4px;",
                     ))
             return ui.div(*rows)
+
+        @reactive.effect
+        @reactive.event(input.use_snapshot_click)
+        def _use_snapshot():
+            target = Path(input.use_snapshot_click() or "")
+            # The path arrives from the page, like Delete's: only a file the
+            # panel offers -- one in the data folder, or the one in use.
+            if not (_same_file(target, store.path)
+                    or (_is_listed_snapshot(target) and target.exists())):
+                snap_msg.set(f"Refusing to use {target}: it is not a snapshot "
+                             "in BOLDcurator's data folder.")
+                return
+            try:
+                save_snapshot_path(target, DEFAULT_CONFIG_PATH)
+            except OSError as exc:
+                snap_msg.set(f"Could not save the choice: {exc}")
+                return
+            if _same_file(target, store.path):
+                snap_msg.set(f"Keeping {target.name} for the next start.")
+            else:
+                snap_msg.set(f"BOLDcurator will use {target.name} from the "
+                             "next start. Restart it to switch now.")
+            snap_tick.set(snap_tick.get() + 1)
 
         @reactive.effect
         @reactive.event(input.delete_snapshot_click)
@@ -927,13 +1315,33 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 snap_msg.set(f"Refusing to delete {target}: it is not a snapshot "
                              "in BOLDcurator's data folder.")
                 return
+            was_next = _same_file(target, _next_start())
             try:
                 target.unlink(missing_ok=True)
                 _provenance_path(target).unlink(missing_ok=True)
                 snap_msg.set(f"Deleted {target}.")
+                if was_next:
+                    # Otherwise the next start finds no file and goes back
+                    # to first-run setup.
+                    save_snapshot_path(store.path, DEFAULT_CONFIG_PATH)
             except OSError as exc:
                 snap_msg.set(f"Could not delete {target}: {exc}")
             snap_tick.set(snap_tick.get() + 1)
+
+        def _after_new_snapshot(path: Path, snapshot_id: str) -> str:
+            """Switch the next start to a newer snapshot (round 8, item
+            5.3) and say what happened. Runs on the download/copy thread:
+            file I/O only, no reactive values."""
+            try:
+                switched = _use_next_start_if_newer(path, snapshot_id,
+                                                    info.snapshot_id)
+            except OSError:
+                switched = False
+            if switched:
+                return ("BOLDcurator will use it from the next start; the "
+                        "older file can then be deleted here.")
+            return ("It is not newer than the file in use, so nothing "
+                    "changes -- choose \"Use this one\" to switch to it.")
 
         def _snap_run_download(resolve_source) -> None:
             from ..build import fetch_snapshot as fs
@@ -955,8 +1363,8 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 _write_provenance(out_path, source=source.url,
                                   snapshot_id=source.snapshot_id,
                                   filename=source.filename)
-                snap_dl_state["message"] = (
-                    f"Downloaded to {out_path}. Restart BOLDcurator to use it.")
+                snap_dl_state["message"] = f"Downloaded to {out_path}. " + \
+                    _after_new_snapshot(out_path, source.snapshot_id)
             except fs.FetchError as exc:
                 snap_dl_state["message"] = f"Failed: {exc}"
             finally:
@@ -1029,25 +1437,6 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             snap_op_seq.set(snap_op_seq.get() + 1)
 
         @reactive.effect
-        @reactive.event(input.snap_download)
-        def _snap_download_custom():
-            source_text = (input.snap_source() or "").strip()
-            if not source_text:
-                return
-
-            def resolve(fs):
-                looks_like_manifest = (
-                    source_text.startswith(("http://", "https://"))
-                    and source_text.rstrip("/").endswith(".json"))
-                if looks_like_manifest:
-                    return fs.resolve_manifest(source_text)
-                if source_text.startswith(("http://", "https://")):
-                    return fs.Source(url=source_text)
-                return fs.resolve_zenodo_record(source_text)
-
-            _snap_start_download(resolve)
-
-        @reactive.effect
         @reactive.event(input.snap_browse)
         def _snap_browse():
             chosen = _pick_snapshot_file()
@@ -1073,8 +1462,8 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                             f"({written / 1e6:.0f} / {total / 1e6:.0f} MB)")
                 tmp.replace(out_path)
                 _write_provenance(out_path, source=str(src), snapshot_id=snapshot_id)
-                snap_dl_state["message"] = (
-                    f"Copied to {out_path}. Restart BOLDcurator to use it.")
+                snap_dl_state["message"] = f"Copied to {out_path}. " + \
+                    _after_new_snapshot(out_path, snapshot_id)
             except OSError as exc:
                 snap_dl_state["message"] = f"Copy failed: {exc}"
             finally:
@@ -1140,10 +1529,11 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     f"BOLDcurator {status.latest.version} is available"),
                 f" (you have {status.current}). {app_update.how_to_update()} ",
             ]
-            url = app_update.download_url()
-            if url:
-                parts += [ui.tags.a("Download page", href=url, target="_blank",
-                                    rel="noopener noreferrer"), " · "]
+            # Round 8, item 5.4: always link the download page (the website
+            # covers every install route, the uv/pip upgrade included).
+            parts += [ui.tags.a("Download page", href=APP_DOWNLOAD_URL,
+                                target="_blank", rel="noopener noreferrer"),
+                      " · "]
             parts += [
                 ui.tags.a("What's new", href=status.latest.notes_url,
                           target="_blank", rel="noopener noreferrer"),
@@ -1165,11 +1555,14 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             app_update_seq.set(app_update_seq.get() + 1)
 
         def _app_run_check() -> None:
+            newer = False
             try:
-                message, _ = app_update.manual_check()
+                message, status = app_update.manual_check()
+                newer = bool(status is not None and status.newer)
             except Exception as exc:  # noqa: BLE001 -- shown, not swallowed
                 message = f"Could not check for an app update: {exc}"
             app_check_state["message"] = message
+            app_check_state["newer"] = newer
             app_check_state["running"] = False
 
         @reactive.effect
@@ -1177,7 +1570,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         def _app_check_update():
             if app_check_state["running"]:
                 return
-            app_check_state.update(running=True,
+            app_check_state.update(running=True, newer=False,
                                    message="Asking Zenodo for the latest release...")
             threading.Thread(target=_app_run_check, daemon=True).start()
             app_update_seq.set(app_update_seq.get() + 1)
@@ -1189,7 +1582,14 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             if app_check_state["running"]:
                 reactive.invalidate_later(0.5)
             text = app_check_state["message"]
-            return ui.div(text, class_="small mt-2") if text else ui.div()
+            if not text:
+                return ui.div()
+            link = []
+            if app_check_state.get("newer") and not app_check_state["running"]:
+                link = [" ", ui.tags.a("Download page", href=APP_DOWNLOAD_URL,
+                                       target="_blank",
+                                       rel="noopener noreferrer")]
+            return ui.div(text, *link, class_="small mt-2")
 
         @output
         @render.ui
@@ -1362,6 +1762,43 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             session_msg.set(" ".join([text] + warnings))
             touch()
 
+        resume_tries = {"n": 0}
+
+        @reactive.effect
+        def _resume_after_reconnect():
+            """Round 8, item 1.1: a page reloaded by RECONNECT_JS carries the
+            old session id; pick up what that session left. Polls briefly,
+            because the old session may still be saving as this one starts."""
+            token = _resume_token(session.clientdata.url_search())
+            if not token:
+                return
+            note = reconnects.claim(token)
+            if note is None:
+                if resume_tries["n"] < 40:
+                    resume_tries["n"] += 1
+                    reactive.invalidate_later(0.5)
+                return
+            with reactive.isolate():
+                if note.get("user"):
+                    ui.update_text("user", value=note["user"])
+                    state.user = note["user"]
+                if note.get("session_name"):
+                    ui.update_text("session_name", value=note["session_name"])
+                saved = (sessions.load(note["saved_id"])
+                         if note.get("saved_id") else None)
+                if saved is not None:
+                    text, warnings = state.resume_session(saved)
+                    offset.set(note.get("offset", 0))
+                    for grade, value in group_index.items():
+                        value.set(note.get("groups", {}).get(grade, 0))
+                    session_msg.set(" ".join([text] + warnings))
+                    touch()
+                if note.get("tab"):
+                    ui.update_navset("nav", selected=note["tab"])
+            ui.notification_show(
+                "Reconnected -- your work is back where you left it."
+                if saved is not None else "Reconnected.", duration=6)
+
         @reactive.effect
         @reactive.event(input.delete_session)
         def _delete_session():
@@ -1390,10 +1827,9 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             browser tab.
             """
             return ui.div(
-                f"Sessions are stored in {sessions_path} -- deleting that "
-                "file (or the Delete button above) is the only way to lose "
-                "them; closing the app does not.",
-                class_="small text-muted mt-1",
+                f"Stored in {sessions_path}. Closing the app keeps them; only "
+                "Delete, or deleting that file, loses them.",
+                class_="small text-muted mt-1", style="overflow-wrap:anywhere;",
             )
 
         @output
@@ -1555,8 +1991,16 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 return ui.div(
                     ui.div(
                         *[value_box(f"{counts.get(g, 0):,}", f"Grade {g}",
-                                    GRADE_COLOURS[g]) for g in GRADES],
-                        style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap;",
+                                    GRADE_COLOURS[g], compact=True) for g in GRADES],
+                        value_box(f"{len(search.groups(store, SPLIT_SHARED)):,}",
+                                  "C+E (of grade E)", GRADE_COLOURS["E"],
+                                  compact=True),
+                        *[value_box(f"{n:,}", f"Unnamed BINs, {label}", colour,
+                                    compact=True)
+                          for n, label, colour in _unnamed_counts(
+                              search.groups(store, UNNAMED))],
+                        # Round 8, item 2.1: one row, however narrow.
+                        style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:nowrap;",
                     ),
                     ui.download_button("dl_species_analysis",
                                        "Download species analysis (xlsx)",
@@ -1574,13 +2018,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             def body(search):
                 analysis = search.analysis(store).bin_analysis
                 summary = analysis["summary"]
-                # Round 3, item 5: "share of result" isn't something a
-                # curator scanning the BIN dashboard needs -- dropped from
-                # the on-screen table only; the BIN analysis xlsx download
-                # (analysis["content"] itself) is unchanged.
-                content = _sorted_by(
-                    analysis["content"].drop(columns=["bin_coverage"], errors="ignore"),
-                    bins_sort)
+                content = _sorted_by(analysis["content"], bins_sort)
                 return ui.div(
                     ui.div(
                         value_box(f"{summary['total_bins']:,}", "Total BINs",
@@ -1605,8 +2043,14 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             def body(search):
                 groups = search.groups(store, grade)
                 if not groups:
-                    return ui.div(f"No species graded {grade} in this result.",
-                                  class_="text-muted")
+                    return ui.div(
+                        "No BINs without a species-level name in this result."
+                        if grade == UNNAMED else
+                        "No species both split across BINs and in a shared "
+                        "BIN in this result."
+                        if grade == SPLIT_SHARED else
+                        f"No species graded {grade} in this result.",
+                        class_="text-muted")
                 index = min(group_index[grade].get(), len(groups) - 1)
                 group = groups[index]
                 rows = _sorted_by(
@@ -1625,7 +2069,8 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 # A/B/D group one species at a time; C/E group one BIN at a
                 # time (species split across BINs, or a BIN shared between
                 # species) -- "problem" told a curator neither.
-                unit = "species" if grade in SPECIES_GRADES else "BIN"
+                unit = ("species" if grade in SPECIES_GRADES or grade == SPLIT_SHARED
+                        else "BIN")
                 plural_unit = "species" if unit == "species" else "BINs"
                 # The navigator (which problem) sits in one compact row above
                 # the table, not in a sidebar column beside it -- the table is
@@ -1649,7 +2094,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                                 choices={str(i): f"{g.caption}  ({g.specimen_count})"
                                          for i, g in enumerate(groups)},
                                 selected=str(index), width="100%"),
-                            style="flex:1 1 auto;min-width:280px;max-width:720px;",
+                            style="flex:1 1 auto;min-width:280px;max-width:1000px;",
                         ),
                         ui.input_action_button(f"prev_{grade}", "‹ Previous",
                                                class_="btn-sm"),
@@ -1780,7 +2225,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 return None
             return groups[min(group_index[grade].get(), len(groups) - 1)]
 
-        for _grade in GRADES:
+        for _grade in GROUP_SCREENS:
             _register_grade(_grade)
 
         # -- phylogeny -------------------------------------------------------
@@ -1812,7 +2257,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             with reactive.isolate():
                 phylo_tick.set(phylo_tick.get() + 1)
 
-        def _phylo_run_build(representatives, bags_grades) -> None:
+        def _phylo_run_build(representatives, bags_grades, specimens) -> None:
             from ..core import phylogeny as phylo
 
             try:
@@ -1821,7 +2266,8 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
 
                 phylo_state["result"] = phylo.build_phylogeny(
                     representatives, bags_grades, store,
-                    max_tips=PHYLOGENY_LIMITS["MAX_TIPS"], progress=progress)
+                    max_tips=PHYLOGENY_LIMITS["MAX_TIPS"], progress=progress,
+                    specimens=specimens)
                 phylo_state["error"] = ""
             except phylo.PhylogenyTooLargeToBuild as exc:
                 phylo_state["error"] = str(exc)
@@ -1849,7 +2295,8 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             phylo_state.update(running=True, message="Starting...",
                                result=None, error="")
             threading.Thread(target=_phylo_run_build,
-                             args=(representatives, result.bags_grades),
+                             args=(representatives, result.bags_grades,
+                                   result.specimens),
                              daemon=True).start()
             phylo_op_seq.set(phylo_op_seq.get() + 1)
 
@@ -1891,28 +2338,8 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     style="margin-bottom:10px;",
                 ))
 
-            tips = [
-                {
-                    "tip": row["_tip_label"],
-                    "species": str(row.get("species") or row.get("identification") or ""),
-                    "bin_uri": str(row.get("bin_uri") or ""),
-                    "bags_grade": "",
-                    "monophyletic": None,
-                    "color": "#495057",
-                    "flags": result.flags.get(row["_tip_label"], []),
-                }
-                for _, row in result.representatives.iterrows()
-            ]
-            grade_by_species = None
             search = state.search
-            if search is not None:
-                grade_by_species = search.grade_lookup()
-            for tip in tips:
-                grade = (grade_by_species or {}).get(tip["species"], "")
-                tip["bags_grade"] = grade
-                tip["color"] = GRADE_COLOURS.get(grade, "#495057")
-                if tip["species"] in result.monophyly:
-                    tip["monophyletic"] = result.monophyly[tip["species"]]
+            tips = _phylo_tips(result, search.grade_lookup() if search else {})
 
             container_id = "phylo-tree-container"
             rows.append(ui.download_button(
@@ -2075,9 +2502,14 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             lookup = search.grade_lookup()
             if lookup:
                 rows = rows.copy()
+                # Only a species-level record carries its name's grade: a
+                # genus-rank "Danaus sp." is not the interim species
+                # "Danaus sp." (core.species.name_status).
+                level = rows["name_status"].isin(SPECIES_LEVEL_STATUSES) \
+                    if "name_status" in rows.columns else [True] * len(rows)
                 rows["bags_grade"] = [
-                    lookup.get(s, "") if isinstance(s, str) else ""
-                    for s in rows["species"].astype(object)
+                    lookup.get(s, "") if isinstance(s, str) and ok else ""
+                    for s, ok in zip(rows["species"].astype(object), level)
                 ]
 
             sort_label = (
@@ -2551,7 +2983,7 @@ def _header_cell(column: str, labels: dict[str, str], *, sort_input: str | None,
         arrow = " ▼" if sort_state[0] == column and sort_state[1] else \
                 (" ▲" if sort_state[0] == column else "")
         attrs = (f" class='{SORT_HEADER_CLASS}' data-sort-input='{sort_input}' "
-                f"data-sort-col='{_escape(column)}'{attrs} title='Click to sort'")
+                f"data-sort-col='{_escape_attr(column)}'{attrs} title='Click to sort'")
         label += arrow
     return f"<th{attrs}>{label}</th>"
 
@@ -2640,7 +3072,7 @@ def _link_cell(value: object, url: str) -> str:
     itself built (not a user-typed URL) should still not hand the opened tab
     a live ``window.opener`` back into the app.
     """
-    return (f"<td><a href='{_escape(url)}' target='_blank' "
+    return (f"<td><a href='{_escape_attr(url)}' target='_blank' "
             f"rel='noopener noreferrer'>{_escape(value)}</a></td>")
 
 
@@ -2703,9 +3135,9 @@ ROW_CHECK_CLASS = "bc-row-check"
 
 def _checkbox_cell(pid: object, checked: bool, css_class: str, *,
                    title: str = "") -> str:
-    pid = _escape(pid)
+    pid = _escape_attr(pid)
     mark = "checked" if checked else ""
-    attr = f" title='{_escape(title)}'" if title else ""
+    attr = f" title='{_escape_attr(title)}'" if title else ""
     return (f"<td><input type='checkbox' class='{css_class}'{attr} "
             f"data-pid='{pid}' {mark}></td>")
 
@@ -2777,6 +3209,8 @@ def run(snapshot: str | Path, *, host: str = "127.0.0.1", port: int = 8000,
         sessions_path: str | Path | None = None) -> None:
     import shiny
 
+    from ..desktop import WEBSOCKET_KEEPALIVE
+
     shiny.run_app(
         create_app(snapshot, page_size=page_size, sessions_path=sessions_path),
-        host=host, port=port)
+        host=host, port=port, **WEBSOCKET_KEEPALIVE)

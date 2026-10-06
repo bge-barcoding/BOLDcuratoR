@@ -295,6 +295,11 @@ The desktop build fails its smoke test if the built app reports anything
 other than the stamped version. A source checkout (`pip install -e .`)
 reports `0.0.0.dev0` -- plainly not a release.
 
+The Windows installer shows the repository's `LICENSE` (MIT, "as is,
+without warranty") as an accept-to-continue page (`LicenseFile=` in
+`windows-installer.iss`, relative to the script, so it needs the full
+checkout the release job already makes).
+
 The Windows installer deletes the previous install's `_internal\` before
 copying in the new one (`[InstallDelete]` in `windows-installer.iss`).
 Without that, an upgrade kept the old build's `boldcurator-*.dist-info`

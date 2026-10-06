@@ -75,10 +75,15 @@ def test_every_difference_is_explained_and_the_report_says_so():
     report = (PARITY / "REPORT.md").read_text(encoding="utf-8")
     assert "**PASS**" in report
     assert "UNEXPLAINED" not in report
-    # The five recorded divergences (python/PROGRESS.md) all show up.
+    # The recorded divergences (python/PROGRESS.md) the fixture exercises all
+    # show up. CF_AFF_CONCORDANCE no longer does: a species-rank cf. record is
+    # a name of its own now (INTERIM_SPECIES_GRADED), so R's alternation bug
+    # makes no difference the fixture can see. GENUS_CONFLICT_DISCORDANT has
+    # no fixture case yet -- adding one needs R to regenerate the reference.
     for tag in ("UNIFIED_SPECIES_RULE", "RANK2_IMAGE_REMOVED",
-                "CF_AFF_CONCORDANCE", "R_ROW_ERROR_ZEROES_SCORE",
-                "BIN_LESS_EXCLUDED_FROM_BAGS"):
+                "R_ROW_ERROR_ZEROES_SCORE", "BIN_LESS_EXCLUDED_FROM_BAGS",
+                "SPECIES_KEPT_VERBATIM", "INTERIM_SPECIES_GRADED",
+                "RANK_DECIDES_SPECIES_LEVEL"):
         assert tag in report
 
 

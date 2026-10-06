@@ -75,13 +75,41 @@ def _compile(pattern: str | None) -> re.Pattern[str] | None:
     return _CACHE[pattern]
 
 
+#: The one "not a resolved species name" rule (``core.species``), also the
+#: SPECIES_ID criterion's negative pattern. Case-insensitive. A name fails if
+#: it holds, as a word:
+#:
+#: - ``sp``/``spp`` with or without the full stop (``Danaus sp.``,
+#:   ``Danaus sp``, ``Danaus n. sp.``), but not inside ``ssp.``, so a
+#:   subspecies written ``Danaus plexippus ssp. plexippus`` keeps its species;
+#: - an open-nomenclature qualifier with or without the full stop: ``cf``,
+#:   ``aff``, ``nr``, ``gr``/``grp`` (species group), ``agg``, ``indet``;
+#: - ``complex``;
+#:
+#: or any ``?`` or digit (``Danaus sp. 1``, ``Danaus plexippusDHJ02``).
+#:
+#: R's ``SPECIES_ID`` (``constants.R:52``) is ``sp\.|spp\.|[0-9]|^sp$|aff\.|cf\.| nr ``,
+#: which missed every form above without a full stop, ``nr.``, ``gr.``,
+#: ``?``, ``complex`` and ``indet.``, and wrongly caught ``ssp.``. BOLD
+#: records interim names like these with an identification rank of
+#: "species", so the rank alone cannot say a name is resolved; together they
+#: decide ``core.species.name_status`` (resolved, interim species, or higher
+#: rank).
+INVALID_SPECIES_PATTERN = (
+    r"\bspp?\b"
+    r"|\b(?:cf|aff|nr|gr|grp|agg|indet)\b"
+    r"|\bcomplex\b"
+    r"|\?"
+    r"|[0-9]"
+)
+
 #: Declaration order is significant: it is the order names appear in
 #: ``criteria_met``.
 SPECIMEN_SCORING_CRITERIA: tuple[Criterion, ...] = (
     Criterion(
         "SPECIES_ID",
         ("species",),
-        negative_pattern=r"sp\.|spp\.|[0-9]|^sp$|aff\.|cf\.| nr ",
+        negative_pattern=INVALID_SPECIES_PATTERN,
     ),
     Criterion(
         "TYPE_SPECIMEN",
@@ -229,14 +257,29 @@ PREFERRED_COLUMN_ORDER: tuple[str, ...] = (
 # --------------------------------------------------------------------------
 
 #: ``get_flag_options()`` (R/utils/annotation_utils.R:43).  Keys are stored,
-#: values displayed.
+#: values displayed.  Round 8, item 4.3: ``id_uncertain`` replaced by
+#: ``contamination`` (Python app only; the R app keeps its own list).
 FLAG_OPTIONS: dict[str, str] = {
     "": "None",
     "misidentification": "Misidentification",
     "synonym": "Synonym",
-    "id_uncertain": "ID Uncertain",
+    "contamination": "Contamination",
     "data_issue": "Data Issue",
     "other_issue": "Other Issue",
+}
+
+#: Flags that can no longer be chosen but may still be on records in a saved
+#: session from before they were retired. Loading leaves them as they are
+#: (shown and exported unchanged) -- never silently rewritten to something
+#: the curator didn't pick.
+LEGACY_FLAGS: dict[str, str] = {
+    "id_uncertain": "ID Uncertain",
+}
+
+#: The toolbar dropdown: labels shown, keys stored. Blank first, because
+#: applying a blank flag clears it (``Annotations.set_flag``).
+FLAG_CHOICES: dict[str, str] = {
+    key: ("" if key == "" else label) for key, label in FLAG_OPTIONS.items()
 }
 
 # --------------------------------------------------------------------------
@@ -250,7 +293,7 @@ FLAG_OPTIONS: dict[str, str] = {
 DOWNLOAD_LIMITS: dict[str, int] = {
     "WARN_RECORDS": 10_000,
     "WARN_BINS": 1_000,
-    "MAX_RECORDS": 250_000,
+    "MAX_RECORDS": 350_000,
     "MAX_BINS": 25_000,
 }
 
@@ -260,19 +303,16 @@ DOWNLOAD_LIMITS: dict[str, int] = {
 
 #: The Phylogeny tab's tree builder (``core.phylogeny``) is pure Python, by
 #: design -- no external ML/alignment binary, so nothing new to bundle per
-#: OS. That trades away the speed a compiled tool would give: Biopython's
-#: ``DistanceTreeConstructor.nj()`` is a plain-Python, unvectorised O(n^3)
-#: loop, and it -- not the alignment to a reference (~5 ms per sequence, O(n))
-#: nor the K2P distances (a few vectorised NumPy multiplies) -- is what
-#: actually caps how many tips can be built
-#: "very quickly". Measured directly on this project's own hardware (not
-#: guessed): ~0.4s at 100 tips, ~6s at 250, ~54s at 500 -- a clean cubic
-#: fit (``t = k * n**3``, ``k ~= 4.3e-7``). WARN_TIPS (~1.5s) and MAX_TIPS
-#: (~25-30s worst case) are picked from that fit, with headroom for slower
-#: machines than the one this was measured on.
+#: OS. The cap used to be 400 because Biopython's
+#: ``DistanceTreeConstructor.nj()`` is a plain-Python O(n^3) loop (~54 s at
+#: 500 tips, ~7 min at 1,000). ``core.phylogeny.neighbor_joining`` gives the
+#: same tree with each step vectorised. A whole build of synthetic 658 bp
+#: sequences, measured: ~1 s at 150 tips, ~3 s at 400, ~11 s at 1,000
+#: (alignment ~7 s, NJ ~4 s; still cubic, so the NJ share grows fastest).
+#: WARN_TIPS (~5 s) and MAX_TIPS leave headroom for slower machines.
 PHYLOGENY_LIMITS: dict[str, int] = {
-    "WARN_TIPS": 150,
-    "MAX_TIPS": 400,
+    "WARN_TIPS": 500,
+    "MAX_TIPS": 1_000,
 }
 
 #: How ``core.refalign`` anchors representatives to a reference before

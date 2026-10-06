@@ -43,7 +43,6 @@ from urllib.error import HTTPError, URLError
 from . import __version__
 from .build import fetch_snapshot as fs
 from .config.constants import (
-    APP_DOWNLOAD_URL,
     APP_RELEASE_NOTES_URL,
     APP_ZENODO_CONCEPT_DOI,
     UPDATE_CHECK_INTERVAL_HOURS,
@@ -242,13 +241,6 @@ def how_to_update(*, frozen: bool | None = None, platform: str | None = None,
                 "BOLDcurator.app with the one inside it.")
     return ("To update, download the new zip and extract it into an empty "
             "folder -- not over this copy.")
-
-
-def download_url(*, frozen: bool | None = None) -> str | None:
-    """The download page, for a build that is updated by downloading one;
-    ``None`` for a pip/uv install, which is updated with a command."""
-    frozen = getattr(sys, "frozen", False) if frozen is None else frozen
-    return APP_DOWNLOAD_URL if frozen else None
 
 
 # -- the automatic check, once per app process -------------------------------

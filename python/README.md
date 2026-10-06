@@ -33,10 +33,29 @@ first-run setup screen until it has a snapshot, then shows these tabs:
 | **Data** | The snapshot in use and others in the data folder; download the latest from Zenodo, check for an update, or add your own file/URL. Sessions: save, load, delete, autosave every 60 s |
 | **Search** | Taxa (one per line, synonyms after commas), countries, continents (a union with countries), dataset and project codes. **Check size** estimates records and BINs without fetching anything; results are BIN-expanded past the geographic filter |
 | **Gap analysis** | Each typed taxon, found or missing |
-| **Species** | Grade counts and a species checklist |
+| **Species** | Grade counts, the C+E count, unnamed-BIN counts (discordant / concordant) and a species checklist, whose C+E column marks grade-E species also split across BINs |
 | **BINs** | Concordant / discordant / shared BINs and a BIN content table |
 | **BAGS A-E** | One screen per grade, worked one problem at a time: per species (A, B, D), per species x BIN (C), per shared BIN (E). E and C are marked "work here first" |
-| **Phylogeny** | Neighbour-joining tree (K2P, reference-anchored alignment) of one representative per selected BIN x country, with monophyly badges for grade-C species; warns above 150 tips, refuses above 400 |
+| **BAGS C+E** | Grade-E species that are also split across BINs (BAGS ranks E above C, so the C screen never shows them and E shows only their shared BIN): one group per species with every one of its BINs, each labelled shared, mixed genera or own; most BINs first. Grade E groups name the C+E species they hold |
+| **Unnamed BINs** | One group per BIN with no species-level name (every record identified to genus or higher), so no BAGS grade covers it. Discordant BINs (more than one genus, family or order) first |
+
+**How names are read.** The species field is shown and exported exactly as
+BOLD has it; a `name_status` column says what kind of name it is, using
+BOLD's `identification_rank`:
+
+| `name_status` | When | In BAGS |
+|---|---|---|
+| species | a binomial passing the species rule (`config.constants.INVALID_SPECIES_PATTERN`) | graded |
+| interim species | a binomial failing it (`Genus cf. species`, `Genus sp. 1`, a bare `Genus sp.`) at species or subspecies rank | graded as a species of its own |
+| higher rank | rank genus or above, a one-word name, or an interim-looking name with no rank recorded | not graded; rides along with the BIN's species |
+| unidentified | no name at any rank | not graded |
+
+A BIN is discordant (grade E for every species in it; Discordant on the
+BINs tab) when it holds two different species-level names -- strictly, so
+*D. cf. plexippus* beside *D. plexippus* counts -- or records from more than
+one genus, family or order, whatever rank they were identified to. A
+record identified only to the BIN's own genus changes nothing.
+| **Phylogeny** | Neighbour-joining tree (K2P, reference-anchored alignment) of one representative per selected BIN x country, with monophyly badges for grade-C species; warns above 500 tips, refuses above 1,000 |
 | **Specimens** | Every record, server-side paged and sortable |
 
 Across the tables: per-record annotations (flag, curator note, corrected
@@ -182,7 +201,7 @@ pip install playwright && playwright install chromium
 python tools/drive_ui.py --out /tmp/shots
 ```
 
-`drive_ui.py` makes 38 checks across every tab and exits non-zero on a
+`drive_ui.py` makes 42 checks across every tab and exits non-zero on a
 failure. When adding one, match against the table, not the panel -- the flag
 `<select>` contains every flag name, so a panel-wide text match passes for an
 annotation that never rendered.
@@ -250,7 +269,7 @@ packaging/     PyInstaller entry point, Windows installer, version stamping
   it would mean scoring the whole result.
 - **Size policy.** The specimen table works at any size. Species, BIN and
   BAGS screens are whole-result aggregates, computed lazily once and refused
-  above `DOWNLOAD_LIMITS["MAX_RECORDS"]` (250,000) with an explanation.
+  above `DOWNLOAD_LIMITS["MAX_RECORDS"]` (350,000) with an explanation.
 - **BAGS screens are problem navigators, not flat tables.** Grade C (a
   species split across BINs) and E (a BIN shared by species) are each a set
   of separate species-BIN problems, so the screen walks them one at a time,

@@ -16,7 +16,7 @@ legacy R Shiny app got a lighter review for **critical** problems only (see
 | Secrets in git history | gitleaks: none. **A manual search found two BOLD-API-key-shaped values in old commits (S1, S2).** Not purged: rotating them is your call. |
 | Python app, server binding | `127.0.0.1` only |
 | Python app, outbound network | `zenodo.org` over HTTPS only: an update check (daily at most, can be switched off) and snapshot downloads the user starts. No telemetry. |
-| Python app, code findings | 1 medium (P1, not fixed: needs a design decision), 2 low **fixed** (P2, P3), 5 low/info recommendations (P4–P8) |
+| Python app, code findings | 1 medium (P1, not fixed: needs a design decision), 3 low **fixed** (P2, P3, P5), 4 low/info recommendations (P4, P6–P8) |
 | Bandit | 40 raw findings, 0 genuine. All suppressed line by line with a reason. |
 | pip-audit | 80 locked packages, 0 known vulnerabilities |
 | zizmor | 54 findings across the six existing workflows, now 0 |
@@ -156,12 +156,23 @@ checksum and the file come over HTTPS from the same host, so it catches
 corruption rather than a malicious host. *Recommendation:* put a SHA-256 in
 the snapshot's manifest or Zenodo description and prefer it.
 
-**P5, low: a crafted snapshot file.** A `.duckdb` file from an untrusted
-source could define views that make DuckDB autoload an extension (a network
-fetch) or read local files when queried. This only applies if a user opens
-a snapshot from somewhere other than the project's Zenodo record.
-*Recommendation:* open snapshots with
-`config={"autoinstall_known_extensions": False, "autoload_known_extensions": False}`.
+**P5, low, fixed: a crafted snapshot file.** A `.duckdb` file from an
+untrusted source (or a tampered upload to the Zenodo record) could define
+views that make DuckDB autoload an extension (a network fetch) or read local
+files when queried, and its values could inject markup into the app's
+tables. Now:
+- every snapshot is opened through `data/snapshot.py`'s `connect_snapshot`
+  (the app, the CLI and `verify`), read-only with `enable_external_access`,
+  extension autoinstall and autoload off, and `lock_configuration` on, so a
+  query cannot read files or reach the network and the settings cannot be
+  switched back on from inside the session;
+- a snapshot holding any view or macro is refused; the builder only writes
+  plain tables;
+- table HTML attributes (`href`, `title`, `data-pid`, `data-sort-col`) use
+  `_escape_attr`, `bold_bin_url` percent-encodes the BIN, and the phylogeny
+  hover tooltip is built with `textContent` instead of `innerHTML`.
+
+Tests: `tests/test_snapshot_hardening.py`.
 
 **P6, info: the macOS repin step installs without hashes.**
 `packaging/macos_deployment_target.py repin` replaces a few wheels

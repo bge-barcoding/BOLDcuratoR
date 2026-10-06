@@ -247,6 +247,17 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
+#: Round 8, item 1.1: after time away the window went dead -- clicks did
+#: nothing, downloads came back as an error body -- until the app was
+#: restarted. uvicorn closes a websocket that misses its ping for 20 s, and a
+#: window that is minimised, throttled or on a sleeping machine can't answer
+#: in time; the closed socket ends the Shiny session behind a page that still
+#: looks alive. The server is on loopback and only ever talks to its own
+#: window, so there is no dead peer to detect: no pings. (The page also
+#: reconnects by itself if the socket goes anyway -- see ``ui/app.py``.)
+WEBSOCKET_KEEPALIVE = {"ws_ping_interval": None, "ws_ping_timeout": None}
+
+
 def run_server(app, *, host: str = "127.0.0.1", port: int | None = None):
     """Start an ASGI ``app`` in a background thread. Returns ``(url, stop)``.
 
@@ -257,7 +268,8 @@ def run_server(app, *, host: str = "127.0.0.1", port: int | None = None):
     import uvicorn
 
     port = port if port is not None else _free_port()
-    config = uvicorn.Config(app, host=host, port=port, log_level="warning")
+    config = uvicorn.Config(app, host=host, port=port, log_level="warning",
+                            **WEBSOCKET_KEEPALIVE)
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
