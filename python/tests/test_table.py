@@ -239,3 +239,69 @@ def test_offsets_past_the_end_clamp_rather_than_erroring(table):
 
 def test_the_default_page_size_is_something_a_widget_can_hold():
     assert 20 <= DEFAULT_PAGE_SIZE <= 500
+
+
+# -- the search box (round 9, item 2) ---------------------------------------
+
+
+def _column(table, name):
+    return fetch_rows(table.store, table.plan.row_ids, columns=[name, "processid"])
+
+
+def test_a_column_search_shows_exactly_the_records_containing_it(table):
+    frame = _column(table, "country.ocean")
+    country = str(frame["country.ocean"].dropna().iloc[0])
+    expected = set(frame.loc[frame["country.ocean"].astype(str).str.lower()
+                             .str.contains(country[:4].lower(), regex=False),
+                             "processid"].astype(str))
+    n = table.search_for(country[:4].upper(), "country.ocean")   # case ignored
+    assert n == len(expected) == table.total_rows
+    assert set(table.all_processids()) == expected
+    seen = []
+    for offset in range(0, table.total_rows, table.page_size):
+        seen += list(table.page(offset).rows["processid"].astype(str))
+    assert set(seen) == expected
+
+
+def test_the_search_survives_sorting_and_clears(table):
+    total = table.total_rows
+    bin_uri = str(_column(table, "bin_uri")["bin_uri"].dropna().iloc[0])
+    n = table.search_for(bin_uri.split(":")[-1], "bin_uri")
+    table.sort_by("processid", descending=True)
+    assert table.total_rows == n
+    ids = table.all_processids()
+    assert ids == sorted(ids, reverse=True)
+    assert table.check_all() == n                  # "Check all N found"
+    assert table.search_for("") == total and table.search is None
+
+
+def test_any_column_and_annotations_are_searched_and_text_is_literal(table):
+    pid = table.all_processids()[3]
+    table.annotations.set_note(pid, "Voucher 50%_lost")
+    assert table.search_for("50%_LOST") == 1 and table.all_processids() == [pid]
+    assert table.search_for("50%_lost", "curator_notes") == 1
+    assert table.search_for("5_%", None) == 0      # not wildcards
+    assert table.search_for(pid) >= 1               # a stored column, any
+    assert table.search_for("no such text anywhere") == 0
+    assert len(table.page(0).rows) == 0
+
+
+def test_a_computed_column_cannot_be_searched(table):
+    assert "bags_grade" not in table.searchable_columns
+    with pytest.raises(ValueError):
+        table.search_for("C", "bags_grade")
+
+
+def test_search_frame_matches_like_the_table():
+    import pandas as pd
+
+    from boldcurator.core.table import search_frame
+
+    frame = pd.DataFrame({"processid": ["P1", "P2", "P3"],
+                          "country.ocean": ["Canada", None, "canada east"],
+                          "identified_by": ["A. Smith", "Smithson", pd.NA]})
+    assert list(search_frame(frame, "CANADA", "country.ocean")["processid"]) == \
+        ["P1", "P3"]
+    assert list(search_frame(frame, "smith")["processid"]) == ["P1", "P2"]
+    assert search_frame(frame, "  ") is frame
+    assert len(search_frame(frame, "x", "no_such_column")) == 0

@@ -95,6 +95,18 @@ def main(argv: list[str] | None = None) -> int:
             bodies = page.locator(f"{selector} table tbody")
             return "\n".join(bodies.nth(i).inner_text() for i in range(bodies.count()))
 
+        def column_values(selector: str, label: str) -> list[str]:
+            """One column's cells, by its header text, in a table."""
+            return page.evaluate("""([sel, label]) => {
+                const table = document.querySelector(sel + ' table');
+                if (!table) return [];
+                const heads = Array.from(table.querySelectorAll('thead th'));
+                const i = heads.findIndex(th => th.innerText.trim() === label);
+                if (i < 0) return [];
+                return Array.from(table.querySelectorAll('tbody tr'))
+                    .map(tr => tr.children[i].innerText.trim());
+            }""", [selector, label])
+
         def show(name: str, settle: float = 3.0) -> None:
             # has-text, not text-is: the priority grades carry a bullet in
             # their label, so an exact match finds nothing.
@@ -247,8 +259,63 @@ def main(argv: list[str] | None = None) -> int:
             check("a check left in a different group is not swept into that apply",
                   "data_issue" not in table_text(f"#grade_{grade}_body"))
 
+        # Round 9, item 2: Find records in a group -- the table shows only
+        # the matches and "Check the N found" checks exactly those.
+        page.select_option(f"#find_col_{grade}", "identified_by")
+        time.sleep(SETTLE / 2)
+        page.fill(f"#find_text_{grade}", "smith")
+        page.click(f"#find_go_{grade}")
+        time.sleep(SETTLE * 1.5)
+        who = column_values(f"#grade_{grade}_body", "Identified by")
+        check("Find records narrows a group to the matches",
+              bool(who) and all("smith" in w.lower() for w in who),
+              f"{len(who)} rows")
+        page.click(f"#selall_{grade}")
+        time.sleep(SETTLE)
+        here = page.locator(f"#grade_{grade}_body").inner_text()
+        check('"Check the N found" checks just the matches',
+              f"{len(who)} checked here" in here,
+              re.search(r"\d+ checked here", here).group(0) if
+              re.search(r"\d+ checked here", here) else "")
+        page.click(f"#find_clear_{grade}")
+        time.sleep(SETTLE)
+        page.click(f"#clear_{grade}")
+        time.sleep(SETTLE)
+
         # -- the paged specimen table
         show("Specimens", settle=SETTLE * 1.5)
+        pages_before = page.locator("#specimens_body").inner_text()
+        page.select_option("#find_col_sp", "country.ocean")
+        time.sleep(SETTLE / 2)
+        page.fill("#find_text_sp", "Canada")
+        page.press("#find_text_sp", "Enter")          # Enter searches too
+        time.sleep(SETTLE * 1.5)
+        countries = column_values("#specimens_body", "Country/Ocean")
+        body = page.locator("#specimens_body").inner_text()
+        found = re.search(r"Check all ([\d,]+) found", body)
+        check("Find records narrows the specimen table, Enter to search",
+              bool(countries) and set(countries) == {"Canada"} and bool(found),
+              f"{len(countries)} rows on the page, {found.group(0) if found else 'no count'}")
+        page.click("#select_all")
+        time.sleep(SETTLE)
+        checked = re.search(r"([\d,]+) checked",
+                            page.locator("#specimens_body").inner_text())
+        check('"Check all N found" checks just the matches',
+              bool(found and checked) and checked.group(1) == found.group(1),
+              checked.group(0) if checked else "")
+        page.click("#clear_selection")
+        time.sleep(SETTLE)
+        page.click("#find_clear_sp")
+        time.sleep(SETTLE * 1.5)
+        pages_after = page.locator("#specimens_body").inner_text()
+
+        def page_count(text: str) -> str:
+            m = re.search(r"\b1 / ([\d,]+)", text)
+            return m.group(1) if m else "?"
+        check("Clear search shows every record again",
+              not re.search(r"Check all [\d,]+ found", pages_after)
+              and page_count(pages_after) == page_count(pages_before) != "?",
+              f"pages {page_count(pages_before)} -> {page_count(pages_after)}")
         header = page.locator("#specimens_body table thead").inner_text()
         check("the specimen table carries the BAGS grade once analysed",
               "BAGS" in header, header.replace("\n", " "))

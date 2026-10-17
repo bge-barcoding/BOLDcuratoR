@@ -851,6 +851,8 @@ def test_selected_processids_are_this_result_s_representatives(store, tmp_path):
     assert ids and not set(ids) & pieris
     assert set(ids) <= set(result.specimens["processid"].astype(str))
     assert set(ids) <= state.annotations.selected_processids()
+    state.search.table.search_for("no such text anywhere")
+    assert state.search.representative_processids() == ids   # not narrowed
 
     path = state.search.export_specimens(store, "selected", tmp_path / "s.xlsx",
                                          excel=True)

@@ -30,7 +30,7 @@ first-run setup screen until it has a snapshot, then opens on the Guide:
 
 | Tab | What it is |
 |---|---|
-| **Guide** | The first screen: how to use the app in nine steps, the BAGS grades, and a link to the BAGS paper |
+| **Guide** | The first screen: how to use the app in ten steps, the BAGS grades, and a link to the BAGS paper |
 | **Data** | The snapshot in use and others in the data folder; download the latest from Zenodo, check for an update, or add your own file/URL. Sessions: save, load, delete, autosave every 60 s |
 | **Search** | Taxa (one per line, synonyms after commas), countries, continents (a union with countries), dataset and project codes. **Check size** estimates records and BINs without fetching anything; results are BIN-expanded past the geographic filter |
 | **Gap analysis** | Each typed taxon, found or missing |
@@ -57,10 +57,12 @@ BINs tab) when it holds two different species-level names -- strictly, so
 one genus, family or order, whatever rank they were identified to. A
 record identified only to the BIN's own genus changes nothing.
 | **Phylogeny** | Neighbour-joining tree (K2P, reference-anchored alignment) of one representative per selected BIN x country, with monophyly badges for grade-C species; warns above 500 tips, refuses above 1,000 |
-| **Specimens** | Every record, server-side paged and sortable |
+| **Specimens** | Every record, server-side paged and sortable; Find records narrows it to one column's (or any column's) text |
 
 Across the tables: per-record annotations (flag, curator note, corrected
-identification), "checked" records and a separate representative pick
+identification, and Clear annotations to undo them), "Find records" on
+Specimens and every BAGS group (check all it found, then annotate them),
+"checked" records and a separate representative pick
 (auto-selected per BIN x country on a fresh search). Downloads: all /
 selected / annotated records (xlsx), the selected process IDs (one per line,
 for a BOLD dataset), the BOLD curation report (TSV), FASTA, CSV, xlsx

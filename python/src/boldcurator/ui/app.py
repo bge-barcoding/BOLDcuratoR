@@ -57,7 +57,7 @@ from ..core.grouping import (
     SPECIES_GRADES,
 )
 from ..core.species import SPECIES_LEVEL_STATUSES
-from ..core.table import DEFAULT_PAGE_SIZE
+from ..core.table import DEFAULT_PAGE_SIZE, search_frame
 from ..data.snapshot import SnapshotError, SnapshotStore
 from ..desktop import DEFAULT_CONFIG_PATH, load_snapshot_path, save_snapshot_path
 from ..io import exports as export_io
@@ -522,6 +522,11 @@ def _guide_panel() -> ui.Tag:
                      "Previous and Next. BAGS C+E gathers species that are "
                      "both split across BINs and share one, and Unnamed BINs "
                      "the BINs no grade covers."),
+                step("Find records.",
+                     "On Specimens and every BAGS screen, Find records shows "
+                     "only the records with some text in a column you choose, "
+                     "or in any column: a country, a collector or identifier, "
+                     "a BIN. The check button above then checks just those."),
                 step("Annotate.",
                      "Tick Check on the records you mean (Check this group "
                      "ticks them all), choose a flag, type a note or a "
@@ -558,6 +563,47 @@ def _guide_panel() -> ui.Tag:
         ),
         value="guide",
     )
+
+
+#: Columns the search box never offers: the two checkbox columns.
+_UNSEARCHABLE = frozenset({"selected", "checked"})
+
+
+def _search_controls(key: str, columns: list[str], *,
+                     current: tuple[str | None, str] | None,
+                     matches: int, total: int) -> ui.Tag:
+    """Round 9, item 2: "Find records" -- a column (or any) and some text;
+    the table then shows only the records containing it, and the check
+    button above checks just those. ``key`` is ``sp`` (Specimens) or a
+    group screen's grade; ``current`` is the search in force, if any.
+
+    Enter in the text box runs the search (the delegated keydown listener
+    in ``create_app``).
+    """
+    column, text = current if current else (None, "")
+    choices = {"": "Any column"} | {
+        c: GROUP_LABELS.get(c, c) for c in columns if c not in _UNSEARCHABLE}
+    parts = [
+        ui.tags.span("Find records", class_="small text-muted"),
+        ui.input_select(f"find_col_{key}", None, choices=choices,
+                        selected=column or "", width="190px"),
+        ui.input_text(f"find_text_{key}", None, value=text,
+                      placeholder="e.g. Canada, a name, BOLD:AAA1234",
+                      width="260px"),
+        ui.input_action_button(f"find_go_{key}", "Search", class_="btn-sm"),
+    ]
+    if current:
+        where = GROUP_LABELS.get(column, column) if column else "any column"
+        parts += [
+            ui.input_action_button(f"find_clear_{key}", "Clear search",
+                                   class_="btn-sm"),
+            ui.tags.span(
+                f"{matches:,} of {total:,} records with \u201c{text}\u201d "
+                f"in {where}", class_="small",
+                style="font-weight:600;color:#0d6efd;"),
+        ]
+    return ui.div(*parts, style="display:flex;align-items:center;gap:8px;"
+                                "flex-wrap:wrap;margin-bottom:6px;")
 
 
 def _grade_panel(grade: str) -> ui.Tag:
@@ -904,6 +950,19 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                         {{pid: e.target.dataset.pid, checked: e.target.checked}},
                         {{priority: 'event'}});
                 }}
+            }});
+            // Round 9, item 2: Enter in a "Find records" box runs the
+            // search. The box's value is sent first: Shiny debounces text
+            // inputs, and the click must not search for the text before.
+            document.addEventListener('keydown', function(e) {{
+                var box = e.target;
+                if (e.key !== 'Enter' || !box || !box.id
+                        || box.id.indexOf('find_text_') !== 0) return;
+                e.preventDefault();
+                Shiny.setInputValue(box.id, box.value);
+                var go = document.getElementById(
+                    'find_go_' + box.id.slice('find_text_'.length));
+                if (go) go.click();
             }});
             document.addEventListener('click', function(e) {{
                 var th = e.target.closest && e.target.closest('.{SORT_HEADER_CLASS}');
@@ -1260,6 +1319,10 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         #: -- (column, descending). The specimen table sorts differently
         #: (server-side, via SpecimenTable.sort_by) because it is never
         #: materialised whole; see _spec_sort_click below.
+        #: Each group screen's "Find records" search, ``grade -> (column or
+        #: None, text)`` (round 9, item 2); kept while moving between groups,
+        #: dropped by a new search. The Specimens tab's lives on its table.
+        find_state: dict[str, tuple[str | None, str]] = {}
         checklist_sort = reactive.Value(("", False))
         gap_sort = reactive.Value(("", False))
         bins_sort = reactive.Value(("", False))
@@ -1817,6 +1880,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             # so it may still land after this reset; the curator can always
             # click "Build tree" again.
             phylo_state.update(running=False, message="", result=None, error="")
+            find_state.clear()
             if state.search is not None:
                 ui.update_navset("nav", selected="species")
             touch()
@@ -1904,6 +1968,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             state.user = (input.user() or "").strip() or state.user
             text, warnings = state.resume_session(saved)
             offset.set(0)
+            find_state.clear()
             for value in group_index.values():
                 value.set(0)
             ui.update_navset("nav", selected="species")
@@ -2201,11 +2266,11 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                         class_="text-muted")
                 index = min(group_index[grade].get(), len(groups) - 1)
                 group = groups[index]
-                rows = _sorted_by(
-                    _with_checked(
-                        merge_annotations(group.specimens, state.annotations),
-                        state.annotations),
-                    group_sort)
+                all_rows = _with_checked(
+                    merge_annotations(group.specimens, state.annotations),
+                    state.annotations)
+                found = find_state.get(grade)
+                rows = _sorted_by(_found_rows(grade, all_rows), group_sort)
                 # "Apply to checked" (and the count below) must act only on
                 # this group's own records -- Annotations.working is one
                 # global set, and checking rows via the per-row checkbox
@@ -2259,6 +2324,9 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                            class_="mb-1"),
                     ui.div(group.note, class_="alert alert-info py-1 px-2 small")
                     if group.note else ui.div(),
+                    _search_controls(grade, _all_columns_ordered(all_rows),
+                                     current=found, matches=len(rows),
+                                     total=len(all_rows)),
                     # Round 6, curation tools item 6: one flat row, not a
                     # column of buttons/count beside a separately-aligned
                     # cluster of labelled inputs -- that mix of a
@@ -2267,7 +2335,9 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     # than it needed to be.
                     ui.div(
                         ui.input_action_button(
-                            f"selall_{grade}", "Check this group",
+                            f"selall_{grade}",
+                            f"Check the {len(rows):,} found" if found
+                            else "Check this group",
                             class_="btn-sm"),
                         ui.input_action_button(f"clear_{grade}",
                                                "Clear checked",
@@ -2342,10 +2412,27 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     # silently re-annotate the first -- which is the opposite
                     # of working through one problem at a time. This never
                     # touches the representative pick (annotations.selected).
+                    # With a search in force, only what it found.
                     state.annotations.clear_working()
-                    for pid in group.specimens["processid"]:
-                        state.annotations.set_working(str(pid))
+                    for pid in _group_scope(grade, group):
+                        state.annotations.set_working(pid)
                     touch()
+
+            @reactive.effect
+            @reactive.event(input[f"find_go_{grade}"])
+            def _find_in_group():
+                text = (input[f"find_text_{grade}"]() or "").strip()
+                if text:
+                    find_state[grade] = (input[f"find_col_{grade}"]() or None, text)
+                else:
+                    find_state.pop(grade, None)
+                touch()
+
+            @reactive.effect
+            @reactive.event(input[f"find_clear_{grade}"])
+            def _clear_find_in_group():
+                find_state.pop(grade, None)
+                touch()
 
             @reactive.effect
             @reactive.event(input[f"clear_{grade}"])
@@ -2360,16 +2447,31 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             @reactive.event(input[f"g{grade}_apply"])
             def _apply_group():
                 group = _current_group(grade)
-                scope = ({str(pid) for pid in group.specimens["processid"]}
-                        if group is not None else set())
+                scope = _group_scope(grade, group) if group is not None else set()
                 _apply(f"g{grade}", scope=scope)
 
             @reactive.effect
             @reactive.event(input[f"g{grade}_clear_ann"])
             def _clear_group_annotations():
                 group = _current_group(grade)
-                _confirm_clear({str(pid) for pid in group.specimens["processid"]}
+                _confirm_clear(_group_scope(grade, group)
                                if group is not None else set())
+
+        def _found_rows(grade: str, rows: pd.DataFrame) -> pd.DataFrame:
+            """``rows`` (a group's, annotations merged) narrowed to the
+            screen's search, if one is in force."""
+            found = find_state.get(grade)
+            return search_frame(rows, found[1], found[0]) if found else rows
+
+        def _group_scope(grade: str, group) -> set[str]:
+            """The records the group's check / apply / clear buttons act on:
+            the whole group, or only what its search found -- annotations
+            merged first, so a search by flag or note finds the same records
+            the table shows."""
+            rows = group.specimens
+            if grade in find_state:
+                rows = _found_rows(grade, merge_annotations(rows, state.annotations))
+            return {str(pid) for pid in rows["processid"]}
 
         def _current_group(grade: str):
             search = state.search
@@ -2623,10 +2725,11 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             checked AND in ``scope`` -- the current BAGS group, so a check
             left over from a different group (checked individually, not via
             "Check this group", which replaces the whole set) never gets
-            annotated alongside it. The Specimens tab passes no scope: it is
-            one continuous table across pages, not a different table per
-            page, so a checked-then-paged-away record is still meant to be
-            included.
+            annotated alongside it -- or only what the screen's "Find
+            records" search found (round 9, item 2). Without a search the
+            Specimens tab passes no scope: it is one continuous table across
+            pages, not a different table per page, so a checked-then-paged-
+            away record is still meant to be included.
             """
             working = state.annotations.working
             checked = sorted(working if scope is None else working & scope)
@@ -2729,6 +2832,10 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     for s, ok in zip(rows["species"].astype(object), level)
                 ]
 
+            found = table.search
+            searchable = table.searchable_columns
+            searchable = ([c for c in GROUP_COLUMNS if c in searchable]
+                          + [c for c in searchable if c not in GROUP_COLUMNS])
             sort_label = (
                 f"Sorted by {table.sort_column} "
                 f"({'desc' if table.sort_descending else 'asc'})"
@@ -2757,13 +2864,18 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     style="display:flex;align-items:center;gap:10px;"
                           "flex-wrap:wrap;margin-bottom:8px;",
                 ),
+                _search_controls("sp", searchable, current=found,
+                                 matches=table.total_rows,
+                                 total=search.plan.expanded_records),
                 # Round 6, curation tools item 6: one flat row -- see the
                 # matching change in _grade_body for why.
                 ui.div(
                     ui.input_action_button("select_page", "Check page",
                                            class_="btn-sm"),
-                    ui.input_action_button("select_all", "Check all",
-                                           class_="btn-sm"),
+                    ui.input_action_button(
+                        "select_all",
+                        f"Check all {table.total_rows:,} found" if found
+                        else "Check all", class_="btn-sm"),
                     ui.input_action_button("clear_selection", "Clear checked",
                                            class_="btn-sm"),
                     ui.tags.span(f"{len(state.annotations.working):,} checked",
@@ -2943,15 +3055,47 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 state.annotations.unset_selected(pid)
             touch()
 
+        def _specimen_scope() -> set[str] | None:
+            """With a search in force, Apply and Clear annotations act only
+            on the checked records it found -- the ones the table shows."""
+            search = state.search
+            if search is None or search.table.search is None:
+                return None
+            return set(search.table.all_processids())
+
         @reactive.effect
         @reactive.event(input.sp_apply)
         def _apply_specimens():
-            _apply("sp")
+            _apply("sp", scope=_specimen_scope())
 
         @reactive.effect
         @reactive.event(input.sp_clear_ann)
         def _clear_specimens():
-            _confirm_clear()
+            _confirm_clear(_specimen_scope())
+
+        @reactive.effect
+        @reactive.event(input.find_go_sp)
+        def _find_specimens():
+            """Round 9, item 2: the Specimens tab's "Find records"."""
+            search = state.search
+            if search is None:
+                return
+            text = (input.find_text_sp() or "").strip()
+            try:
+                search.table.search_for(text, input.find_col_sp() or None)
+            except (KeyError, ValueError) as exc:
+                _tell(str(exc))
+                return
+            offset.set(0)
+            touch()
+
+        @reactive.effect
+        @reactive.event(input.find_clear_sp)
+        def _clear_find_specimens():
+            if state.search is not None:
+                state.search.table.search_for("")
+                offset.set(0)
+                touch()
 
         # -- downloads -------------------------------------------------------
         #

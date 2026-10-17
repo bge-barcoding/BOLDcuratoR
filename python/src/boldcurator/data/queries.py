@@ -369,6 +369,42 @@ def fetch_rows(store: SnapshotStore, row_ids, *,
         store.connection.unregister("_wanted_rows")
 
 
+def match_rows(store: SnapshotStore, row_ids, text: str, *,
+               column: str | None = None) -> np.ndarray:
+    """The ``rowid``s among ``row_ids`` whose ``column`` (app name; ``None``
+    for any column) contains ``text``, ignoring case -- round 9, item 2's
+    record search.
+
+    In DuckDB, over the same semi-join as :func:`fetch_rows`, so a search of
+    a large result costs one scan of the columns it reads, not the result
+    in memory. ``text`` is a bound parameter with ``%``/``_`` escaped, so it
+    matches literally. "Any column" matches against every stored column
+    joined with a separator no typed text contains (U+001F), so a match
+    never spans two columns.
+    """
+    row_ids = np.asarray(row_ids)
+    if len(row_ids) == 0 or not text:
+        return row_ids[:0]
+    physical = store.physical_columns
+    if column is not None:
+        physical = [c for c in physical if S.app_name(c) == column]
+        if not physical:
+            raise KeyError(f"No such column in this snapshot: {column!r}")
+    cast = [f"CAST(s.{S.quote_ident(c)} AS VARCHAR)" for c in physical]
+    target = cast[0] if len(cast) == 1 else f"concat_ws(chr(31), {', '.join(cast)})"
+    pattern = "%" + (text.replace("\\", "\\\\").replace("%", "\\%")
+                     .replace("_", "\\_")) + "%"
+    store.connection.register("_wanted_rows", pd.DataFrame({"rid": row_ids}))
+    try:
+        found = store.connection.execute(
+            "SELECT s.rowid AS rid FROM specimen s "  # nosec B608 # identifiers are schema column names via quote_ident; the text is a bound ? parameter
+            "SEMI JOIN _wanted_rows p ON p.rid = s.rowid "
+            f"WHERE {target} ILIKE ? ESCAPE '\\'", [pattern]).df()
+    finally:
+        store.connection.unregister("_wanted_rows")
+    return found["rid"].to_numpy()
+
+
 def fetch_planned(store: SnapshotStore, plan: SearchPlan, *,
                   limit: int | None = None) -> pd.DataFrame:
     """Materialise the 70-odd columns for an already-resolved row set.

@@ -258,9 +258,10 @@ class SearchState:
         exports), in table order -- round 9, item 3's list for building a
         dataset on BOLD. From the table, so it needs no analysis and works
         at any result size; picks from an earlier search in the session
-        aren't in it."""
+        aren't in it, and neither does a "Find records" search narrow it."""
         ann = self.annotations if self.annotations is not None else Annotations()
-        return [p for p in self.table.all_processids() if p in ann.selected]
+        return [p for p in self.table.all_processids(found_only=False)
+                if p in ann.selected]
 
     def export_search_results(self, store: SnapshotStore, path) -> "Path | None":
         from ..io import exports as export_io
