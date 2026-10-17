@@ -884,3 +884,27 @@ def test_the_guide_is_the_first_tab_and_links_the_bags_paper(fixture_snapshot):
     assert BAGS_PAPER_URL in html
     tabs = [html.index(f'data-value="{v}"') for v in ("guide", "data", "input")]
     assert tabs == sorted(tabs)
+
+
+def test_tree_data_cannot_close_its_script_element():
+    """Round 9, item 9a (stored XSS): snapshot text in the tree's data --
+    a tip label, a species -- must not be able to end the element it sits
+    in and run a script of its own. It goes in a non-executable JSON
+    element, HTML-safe encoded, and parses back unchanged."""
+    import json
+    import re
+
+    from htmltools import TagList
+
+    from boldcurator.ui.app import _json_for_script, _phylo_tree_scripts
+
+    evil = "</script><script>alert(1)</script><!-- & 'x'  "
+    tips = [{"tip": evil, "species": evil, "flags": [evil]}]
+    html = str(TagList(*_phylo_tree_scripts("tree", f"({evil}:1);", tips)))
+    # Exactly the two elements written, both closed where intended.
+    assert html.count("<script") == 2 and html.count("</script>") == 2
+    assert "alert(1)</script>" not in html and "<!--" not in html
+    data = re.search(r'<script type="application/json" id="tree-data">(.*?)</script>',
+                     html, re.S).group(1)
+    assert json.loads(data) == {"newick": f"({evil}:1);", "tips": tips}
+    assert json.loads(_json_for_script(evil)) == evil

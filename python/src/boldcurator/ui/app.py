@@ -675,6 +675,43 @@ def _phylo_tips(result, grade_by_species: dict[str, str]) -> list[dict]:
     return tips
 
 
+def _json_for_script(value) -> str:
+    """JSON that is safe inside a ``<script>`` element (round 9, item 9a).
+
+    ``json.dumps`` leaves ``</script>`` as it is, and a browser ends the
+    element at the first one, whatever the JSON around it -- so a specimen
+    label in a crafted snapshot could close the script and run its own.
+    ``<``, ``>`` and ``&`` become ``\\u`` escapes, which JSON.parse turns back
+    into the same characters. (``ensure_ascii``, the default, already
+    escapes everything else that could matter, U+2028/2029 included.)
+    """
+    text = json.dumps(value, ensure_ascii=True)
+    for char, escape in (("<", "\\u003c"), (">", "\\u003e"), ("&", "\\u0026")):
+        text = text.replace(char, escape)
+    return text
+
+
+def _phylo_tree_scripts(container_id: str, newick: str, tips: list[dict]) -> list:
+    """The tree's data and the call that draws it (phylo-init.js).
+
+    Round 9, item 9a: the snapshot-derived Newick and tip metadata go in a
+    non-executable ``application/json`` element, read with ``JSON.parse`` --
+    data, never code. The one script that runs is fixed text.
+    """
+    data_id = f"{container_id}-data"
+    return [
+        ui.tags.script(_json_for_script({"newick": newick, "tips": tips}),
+                       type="application/json", id=data_id),
+        ui.tags.script(
+            "(function () {"
+            f"var d = JSON.parse(document.getElementById({json.dumps(data_id)})"
+            ".textContent);"
+            f"window.bcRenderPhylotree({json.dumps(container_id)}, d.newick, "
+            "d.tips);"
+            "})();"),
+    ]
+
+
 def _unnamed_counts(groups) -> list[tuple[int, str, str]]:
     """``(count, label, colour)`` for the Species tab's two unnamed-BIN boxes,
     discordant in grade E's red and concordant in the screen's own colour."""
@@ -2479,10 +2516,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 class_="bc-phylo-hint",
             ))
             rows.append(ui.div(id=container_id, class_="bc-phylo-container"))
-            rows.append(ui.tags.script(
-                f"window.bcRenderPhylotree({json.dumps(container_id)}, "
-                f"{json.dumps(result.newick)}, {json.dumps(tips)});"
-            ))
+            rows.extend(_phylo_tree_scripts(container_id, result.newick, tips))
             return ui.div(*rows)
 
         @reactive.effect

@@ -190,6 +190,18 @@ themselves only. The zip already needs no administrator rights.
 app says so ("integrity of this download is NOT verified"). This is
 intended for ad-hoc sources.
 
+**P9, medium, fixed (2026-10-17): snapshot text could run script in the
+phylogeny view.** Found by a Copilot review. The tree's Newick and tip
+metadata (specimen labels built from snapshot fields) were written into an
+inline `<script>` with `json.dumps`, which leaves `</script>` as it is, so a
+crafted species name could close the element and run its own script in the
+app (confirmed against a doctored snapshot). Now the data goes in a
+non-executable `<script type="application/json">` element, with `<`, `>`
+and `&` escaped (`ui/app.py`, `_json_for_script`, `_phylo_tree_scripts`),
+and is read with `JSON.parse`; the one script that runs is fixed text. The
+same doctored snapshot now draws the name as text. Test:
+`test_tree_data_cannot_close_its_script_element` in `tests/test_ui.py`.
+
 ## Scanner results (steps 2 and 3)
 
 **Bandit** 1.9.4 (`[tool.bandit]` in `python/pyproject.toml`) raised 40
