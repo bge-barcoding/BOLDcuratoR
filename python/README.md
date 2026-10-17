@@ -209,7 +209,7 @@ The server only lets in the client that opened its launch URL, which
 carries a one-time token (`localguard.py`), so `gui` prints it ("Open
 BOLDcurator at ...") and each `drive_ui.py` run needs a fresh server.
 
-`drive_ui.py` makes 45 checks across every tab and exits non-zero on a
+`drive_ui.py` makes 56 checks across every tab and exits non-zero on a
 failure. When adding one, match against the table, not the panel -- the flag
 `<select>` contains every flag name, so a panel-wide text match passes for an
 annotation that never rendered.
