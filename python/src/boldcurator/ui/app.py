@@ -716,15 +716,17 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             .bc-scroll td {
                 max-width: 280px; overflow: hidden; text-overflow: ellipsis;
             }
-            /* Round 8, item 5.2: the Data tab in two columns, the
-               snapshot (the busier one) wider; one column when narrow. */
-            .bc-data-grid {
-                display: grid; gap: 16px 24px; align-items: start;
-                grid-template-columns: minmax(0, 3fr) minmax(360px, 2fr);
-                max-width: 1500px;
+            /* Round 9, item 6: the Data tab in one column -- snapshot,
+               then session, then the app -- now that the snapshot panel is
+               short (round 8 had two). A text box or list in a
+               ".bc-grow-row" takes the row's spare width, not its fixed
+               one: flex-basis wins over the inline width Shiny sets. */
+            .bc-data-stack {
+                display: grid; gap: 18px; max-width: 1200px;
+                grid-template-columns: minmax(0, 1fr);
             }
-            @media (max-width: 1100px) {
-                .bc-data-grid { grid-template-columns: minmax(0, 1fr); }
+            .bc-grow-row > .shiny-input-container {
+                flex: 1 1 320px; min-width: 220px;
             }
             /* Round 5, item 12: a download click's own visible
                acknowledgement -- see the click listener below. */
@@ -900,11 +902,10 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 # the running app, not only the one-time first-run setup
                 # screen (ui/setup.py, unchanged and still what a curator
                 # sees before any snapshot is configured at all).
-                # Round 8, item 5.2: two columns -- the snapshot on the
-                # left, session and app on the right -- instead of one
-                # 900px-wide column with the rest of the window empty; one
-                # column again when the window is narrow. Help texts trimmed
-                # to the facts. Item 5.1 removed the download-from-a-URL
+                # Round 8, item 5.2 put session and app in a second column;
+                # round 9, item 6 stacks them under the snapshot again, the
+                # panels and their text boxes using the width (".bc-data-stack",
+                # ".bc-grow-row"). Help texts trimmed to the facts. Item 5.1 removed the download-from-a-URL
                 # field (the CLI's ``fetch`` still takes any source), item
                 # 5.5 the attribution footer (the header link carries it).
                 ui.div(
@@ -937,6 +938,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                                     "snap_copy",
                                     "Copy into BOLDcurator's data folder",
                                     class_="btn-sm"),
+                                class_="bc-grow-row",
                                 style="display:flex;gap:8px;align-items:center;"
                                       "flex-wrap:wrap;margin-top:4px;",
                             ),
@@ -959,6 +961,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                                               width="200px"),
                                 ui.input_action_button("save_session", "Save",
                                                        class_="btn-sm"),
+                                class_="bc-grow-row",
                                 style="display:flex;gap:8px;align-items:center;"
                                       "flex-wrap:wrap;",
                             ),
@@ -970,6 +973,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                                 ui.input_action_button(
                                     "delete_session", "Delete",
                                     class_="btn-sm btn-outline-danger"),
+                                class_="bc-grow-row",
                                 style="display:flex;gap:8px;align-items:center;"
                                       "flex-wrap:wrap;margin-top:8px;",
                             ),
@@ -1004,7 +1008,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                             style=BOX_STYLE,
                         ),
                     ),
-                    class_="bc-data-grid",
+                    class_="bc-data-stack",
                 ),
                 value="data",
             ),
