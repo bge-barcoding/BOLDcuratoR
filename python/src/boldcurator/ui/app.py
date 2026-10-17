@@ -464,6 +464,102 @@ def _annotation_controls(prefix: str) -> list:
     ]
 
 
+#: The BAGS paper (Fontes et al. 2021, Molecular Ecology Resources).
+BAGS_PAPER_URL = "https://doi.org/10.1111/1755-0998.13262"
+
+
+def _guide_panel() -> ui.Tag:
+    """Round 9, item 7: the first tab -- how to use the app, in plain steps.
+
+    Static text, so a change to a screen's name or a button's label needs
+    the matching line here too.
+    """
+    def step(title: str, *body) -> ui.Tag:
+        return ui.tags.li(ui.tags.strong(title), " ", *body,
+                          style="margin-bottom:8px;")
+
+    grades = ui.tags.ul(
+        *[ui.tags.li(
+            ui.tags.span(f"{g}", style=f"background:{GRADE_COLOURS[g]};"
+                         "color:#fff;padding:0 8px;border-radius:10px;"
+                         "font-weight:600;margin-right:6px;"),
+            GRADE_DESCRIPTIONS[g]) for g in GRADES],
+        style="list-style:none;padding-left:0;margin:6px 0 0;",
+    )
+    return ui.nav_panel(
+        "Guide",
+        ui.div(
+            ui.tags.h5("How to use BOLDcurator", style="margin-top:0;"),
+            ui.tags.p(
+                "BOLDcurator checks the COI-5P barcode records of the taxa you "
+                "choose against a copy of BOLD's public data on this computer, "
+                "grades every species with BAGS (the Barcode, Audit & Grade "
+                "System) and helps you flag the records that need attention. "
+                "Nothing is sent to BOLD: what you record is downloaded as "
+                "files at the end."),
+            ui.tags.ol(
+                step("Get the data.",
+                     "On the Data tab, download the latest BOLD snapshot (once; "
+                     "about 2 GB) or point to a copy you already have."),
+                step("Type your name",
+                     "in the box at the top right, so your flags and notes "
+                     "carry it."),
+                step("Search.",
+                     "On the Search tab, type the taxa (one per line), and "
+                     "optionally countries, continents, or dataset and project "
+                     "codes. Check size says how big the result will be; "
+                     "Search runs it. Records that share a BIN with your "
+                     "taxa come in too, so every BIN is seen whole."),
+                step("Check what was found.",
+                     "Gap analysis lists every taxon you typed as found or "
+                     "missing. Species and BINs give the overview: grade "
+                     "counts, the species checklist, concordant and "
+                     "discordant BINs."),
+                step("Work through the BAGS screens, E and C first.",
+                     "They carry a coloured dot and \"work here first\": that is where "
+                     "the name and the barcode disagree. Each screen shows one "
+                     "problem at a time (a species, or a BIN); move with "
+                     "Previous and Next. BAGS C+E gathers species that are "
+                     "both split across BINs and share one, and Unnamed BINs "
+                     "the BINs no grade covers."),
+                step("Annotate.",
+                     "Tick Check on the records you mean (Check this group "
+                     "ticks them all), choose a flag, type a note or a "
+                     "Correct ID, and press Apply to checked. A blank flag "
+                     "leaves the flag as it is; Clear flag, or Clear "
+                     "annotations, undoes it."),
+                step("Pick representatives.",
+                     "Rep. marks the best record for each BIN in each "
+                     "country, picked for you on a new search; tick or untick "
+                     "it to change the pick. The Phylogeny tab builds a tree "
+                     "from them."),
+                step("Download.",
+                     "The Specimens tab holds every record, and the downloads: "
+                     "all, selected (the representatives) or annotated records "
+                     "as Excel, the selected process IDs as a list to make a "
+                     "dataset on BOLD, the BOLD curation report to send to "
+                     "BOLD, and FASTA sequences."),
+                step("Save your work.",
+                     "It saves itself every minute; on the Data tab you can "
+                     "name a session, and load it again later."),
+                style="padding-left:20px;margin-top:10px;",
+            ),
+            ui.tags.h6("BAGS grades", style="margin-top:14px;"),
+            grades,
+            ui.tags.p(
+                "BAGS is described in Fontes et al. (2021), ",
+                ui.tags.a("BAGS: an automated Barcode, Audit & Grade System "
+                          "for DNA barcode reference libraries",
+                          href=BAGS_PAPER_URL, target="_blank",
+                          rel="noopener noreferrer"),
+                ", Molecular Ecology Resources.",
+                style="margin-top:12px;"),
+            style="max-width:900px;",
+        ),
+        value="guide",
+    )
+
+
 def _grade_panel(grade: str) -> ui.Tag:
     """One grade's screen, with its colour and a mark if it is a priority.
 
@@ -890,6 +986,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         ui.output_ui("app_update_banner"),
         ui.div(
         ui.navset_pill_list(
+            _guide_panel(),
             ui.nav_panel(
                 "Data",
                 # Round 6, data input items 2/3: the snapshot-file panel

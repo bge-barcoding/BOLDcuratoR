@@ -92,10 +92,17 @@ def main(argv: list[str] | None = None) -> int:
             page.click(f"a.nav-link:has-text('{name}')")
             time.sleep(settle)
 
+        # Round 9, item 7: the app opens on the Guide, which links the paper.
+        check("the app opens on the Guide, linking the BAGS paper",
+              "Guide" in page.locator("a.nav-link.active").inner_text()
+              and page.locator("a[href='https://doi.org/10.1111/1755-0998.13262']")
+              .first.is_visible())
+        page.screenshot(path=str(args.out / "00-guide.png"), full_page=True)
+
         # -- the pre-check, before anything is fetched
-        # Round 6, data input items 2/3: "Data" (snapshot/session) is now
-        # the first tab, ahead of "Search" (renamed from "Data Input") --
-        # the taxa field isn't on the tab that's selected by default anymore.
+        # Round 6, data input items 2/3: "Data" (snapshot/session) and, since
+        # round 9, "Guide" come before "Search" -- the taxa field isn't on the
+        # tab that's selected by default.
         show("Search", settle=1.0)
         page.fill("#user", "Driver")
         page.fill("#taxa", args.taxon)

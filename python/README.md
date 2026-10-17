@@ -26,10 +26,11 @@ app and every export carry that attribution.
 ## What the app does
 
 The desktop app (`boldcurator-desktop`, or `boldcurator desktop`) opens on a
-first-run setup screen until it has a snapshot, then shows these tabs:
+first-run setup screen until it has a snapshot, then opens on the Guide:
 
 | Tab | What it is |
 |---|---|
+| **Guide** | The first screen: how to use the app in nine steps, the BAGS grades, and a link to the BAGS paper |
 | **Data** | The snapshot in use and others in the data folder; download the latest from Zenodo, check for an update, or add your own file/URL. Sessions: save, load, delete, autosave every 60 s |
 | **Search** | Taxa (one per line, synonyms after commas), countries, continents (a union with countries), dataset and project codes. **Check size** estimates records and BINs without fetching anything; results are BIN-expanded past the geographic filter |
 | **Gap analysis** | Each typed taxon, found or missing |

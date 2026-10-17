@@ -874,3 +874,13 @@ def test_the_flag_dropdown_keeps_by_default_and_offers_clear():
     assert FLAG_CLEAR not in FLAG_OPTIONS    # never stored
     html = str(TagList(*_annotation_controls("sp")))
     assert "Clear flag" in html and 'id="sp_clear_ann"' in html
+
+
+def test_the_guide_is_the_first_tab_and_links_the_bags_paper(fixture_snapshot):
+    """Round 9, item 7."""
+    from boldcurator.ui.app import BAGS_PAPER_URL, create_app
+
+    html = create_app(fixture_snapshot).ui["html"]
+    assert BAGS_PAPER_URL in html
+    tabs = [html.index(f'data-value="{v}"') for v in ("guide", "data", "input")]
+    assert tabs == sorted(tabs)
