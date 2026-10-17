@@ -386,6 +386,22 @@ uv tool uninstall boldcurator</code></pre>
         </details>
 
         <details>
+          <summary>The Mac/Linux install stops with "~/.zshrc: Permission denied"</summary>
+          <div class="answer">
+            That was the installer for uv (the tool that installs
+            BOLDcurator) trying to edit your shell's startup file, which
+            your account isn't allowed to change: usually a
+            <code>~/.zshrc</code> that belongs to the administrator account
+            (<code>ls -l ~/.zshrc</code> shows its owner). The install
+            command no longer stops for this, so run it again. The app and
+            its shortcut work either way; only the <code>boldcurator</code>
+            terminal command needs the startup file, and the installer says
+            what to add. To let it edit the file itself, make the file
+            yours: <code>sudo chown "$USER" ~/.zshrc</code>.
+          </div>
+        </details>
+
+        <details>
           <summary>Where do my downloads (TSV, FASTA, xlsx) go?</summary>
           <div class="answer">
             Your computer's usual Downloads folder, the same as any other
