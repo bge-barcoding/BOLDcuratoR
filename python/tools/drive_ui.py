@@ -176,6 +176,28 @@ def main(argv: list[str] | None = None) -> int:
         check("the note lands in the group's table", "driven by drive_ui" in annotated)
         page.screenshot(path=str(args.out / "04-annotated.png"), full_page=True)
 
+        # Round 9, item 5: a note alone leaves the flag; "Clear flag" removes
+        # just the flag; "Clear annotations" (confirmed) removes the rest.
+        page.fill(f"#g{grade}_note", "second note")
+        page.click(f"#g{grade}_apply")
+        time.sleep(SETTLE * 1.5)
+        annotated = table_text(f"#grade_{grade}_body")
+        check("applying only a note keeps the flag",
+              "synonym" in annotated and "second note" in annotated)
+        page.select_option(f"#g{grade}_flag", "__clear__")
+        time.sleep(SETTLE / 2)
+        page.click(f"#g{grade}_apply")
+        time.sleep(SETTLE * 1.5)
+        annotated = table_text(f"#grade_{grade}_body")
+        check('"Clear flag" removes the flag and keeps the note',
+              "synonym" not in annotated and "second note" in annotated)
+        page.click(f"#g{grade}_clear_ann")
+        time.sleep(SETTLE)
+        page.click("#confirm_clear_ann")
+        time.sleep(SETTLE * 1.5)
+        check('"Clear annotations" removes the note too, once confirmed',
+              "second note" not in table_text(f"#grade_{grade}_body"))
+
         if page.locator(f"#group_{grade} option").count() > 1:
             page.click(f"#next_{grade}")
             time.sleep(SETTLE * 1.5)

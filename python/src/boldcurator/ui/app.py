@@ -43,6 +43,7 @@ from ..config.constants import (
     DEFAULT_SNAPSHOT_ZENODO_DOI,
     DOWNLOAD_LIMITS,
     FLAG_CHOICES,
+    FLAG_CLEAR,
     PHYLOGENY_LIMITS,
 )
 from ..core.grouping import (
@@ -454,6 +455,12 @@ def _annotation_controls(prefix: str) -> list:
                      placeholder="Correct ID", width="225px"),
         ui.input_action_button(f"{prefix}_apply", "Apply to checked",
                                class_="btn-primary btn-sm"),
+        # Round 9, item 5: the undo -- asks first (``_confirm_clear``).
+        ui.input_action_button(
+            f"{prefix}_clear_ann", "Clear annotations",
+            class_="btn-outline-danger btn-sm",
+            title="Remove the flag, note and Correct ID from the checked "
+                  "records"),
     ]
 
 
@@ -2219,6 +2226,13 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                         if group is not None else set())
                 _apply(f"g{grade}", scope=scope)
 
+            @reactive.effect
+            @reactive.event(input[f"g{grade}_clear_ann"])
+            def _clear_group_annotations():
+                group = _current_group(grade)
+                _confirm_clear({str(pid) for pid in group.specimens["processid"]}
+                               if group is not None else set())
+
         def _current_group(grade: str):
             search = state.search
             if search is None:
@@ -2459,6 +2473,13 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
 
         # -- annotation, shared by every screen ----------------------------
 
+        def _tell(text: str) -> None:
+            """The status line, which only the Search tab shows -- and a
+            notification, since the toolbars are on the other tabs."""
+            status.set(text)
+            ui.notification_show(text, duration=5)
+            touch()
+
         def _apply(prefix: str, scope: set[str] | None = None) -> None:
             """Flag/note/update the *checked* records, never the
             representative pick -- see ``io.annotations``'s module docstring.
@@ -2475,21 +2496,79 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             working = state.annotations.working
             checked = sorted(working if scope is None else working & scope)
             if not checked:
-                status.set("Nothing checked.")
-                touch()
+                _tell("Nothing checked.")
                 return
             user = (input.user() or "").strip()
             flag = input[f"{prefix}_flag"]() or ""
             note = (input[f"{prefix}_note"]() or "").strip()
             updated = (input[f"{prefix}_updated_id"]() or "").strip()
+            if not (flag or note or updated):
+                _tell("Nothing to apply -- choose a flag, or type a note or "
+                      "Correct ID.")
+                return
             for pid in checked:
-                state.annotations.set_flag(pid, flag, user=user)
+                # Round 9, item 5: a blank flag leaves the flag alone, so a
+                # note can be added without wiping it; "Clear flag" removes
+                # it.
+                if flag == FLAG_CLEAR:
+                    state.annotations.set_flag(pid, "", user=user)
+                elif flag:
+                    state.annotations.set_flag(pid, flag, user=user)
                 if note:
                     state.annotations.set_note(pid, note, user=user)
                 if updated:
                     state.annotations.set_updated_id(pid, updated, user=user)
             status.set(f"Annotated {len(checked):,} records")
             touch()
+
+        #: ``(how many, the processids)`` a "Clear annotations" click is
+        #: waiting to have confirmed.
+        pending_clear: reactive.Value = reactive.Value(None)
+
+        def _confirm_clear(scope: set[str] | None = None) -> None:
+            """Round 9, item 5: "Clear annotations" removes the flag, note
+            and Correct ID from the checked records (in ``scope``, as
+            ``_apply``), after a confirmation -- there's no undoing it."""
+            working = state.annotations.working
+            checked = sorted(working if scope is None else working & scope)
+            annotated = state.annotations.annotated_processids()
+            targets = [p for p in checked if p in annotated]
+            if not targets:
+                _tell("Nothing to clear -- none of the checked records has a "
+                      "flag, note or Correct ID." if checked
+                      else "Nothing checked.")
+                return
+            pending_clear.set(targets)
+            ui.modal_show(ui.modal(
+                f"Remove the flag, note and Correct ID from {len(targets):,} "
+                "checked record(s)? This cannot be undone.",
+                title="Clear annotations",
+                footer=ui.div(
+                    ui.input_action_button("cancel_clear_ann", "Cancel",
+                                           class_="btn-sm"),
+                    ui.input_action_button("confirm_clear_ann", "Clear",
+                                           class_="btn-sm btn-danger"),
+                ),
+                easy_close=True,
+            ))
+
+        @reactive.effect
+        @reactive.event(input.cancel_clear_ann)
+        def _cancel_clear():
+            pending_clear.set(None)
+            ui.modal_remove()
+
+        @reactive.effect
+        @reactive.event(input.confirm_clear_ann)
+        def _do_clear():
+            targets = pending_clear.get() or []
+            pending_clear.set(None)
+            ui.modal_remove()
+            for pid in targets:
+                state.annotations.set_flag(pid, "")
+                state.annotations.set_note(pid, "")
+                state.annotations.set_updated_id(pid, "")
+            _tell(f"Cleared the annotations on {len(targets):,} records.")
 
         # -- the paged specimen table --------------------------------------
 
@@ -2733,6 +2812,11 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         @reactive.event(input.sp_apply)
         def _apply_specimens():
             _apply("sp")
+
+        @reactive.effect
+        @reactive.event(input.sp_clear_ann)
+        def _clear_specimens():
+            _confirm_clear()
 
         # -- downloads -------------------------------------------------------
         #

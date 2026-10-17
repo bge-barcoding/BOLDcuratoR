@@ -276,11 +276,17 @@ LEGACY_FLAGS: dict[str, str] = {
     "id_uncertain": "ID Uncertain",
 }
 
-#: The toolbar dropdown: labels shown, keys stored. Blank first, because
-#: applying a blank flag clears it (``Annotations.set_flag``).
+#: The toolbar choice that removes the flag from the checked records (round
+#: 9, item 5). Never stored: ``Annotations.set_flag`` is handed ``""``.
+FLAG_CLEAR = "__clear__"
+
+#: The toolbar dropdown: labels shown, keys stored. Blank first, and blank
+#: leaves each record's flag as it is (round 9, item 5: it used to clear it,
+#: so applying only a note wiped the flags); "Clear flag" last.
 FLAG_CHOICES: dict[str, str] = {
-    key: ("" if key == "" else label) for key, label in FLAG_OPTIONS.items()
-}
+    key: ("(no change)" if key == "" else label)
+    for key, label in FLAG_OPTIONS.items()
+} | {FLAG_CLEAR: "Clear flag"}
 
 # --------------------------------------------------------------------------
 # Download limits

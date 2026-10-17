@@ -858,3 +858,19 @@ def test_selected_processids_are_this_result_s_representatives(store, tmp_path):
     pid = list(rows[0]).index("processid")
     assert sorted(r[pid] for r in rows[1:]) == sorted(ids)
 
+
+
+def test_the_flag_dropdown_keeps_by_default_and_offers_clear():
+    """Round 9, item 5: blank leaves the flag alone (applying a note used
+    to wipe it) and "Clear flag" is the undo; Clear annotations is beside
+    Apply."""
+    from htmltools import TagList
+
+    from boldcurator.config.constants import FLAG_CHOICES, FLAG_CLEAR, FLAG_OPTIONS
+    from boldcurator.ui.app import _annotation_controls
+
+    assert list(FLAG_CHOICES)[0] == "" and FLAG_CHOICES[""] == "(no change)"
+    assert list(FLAG_CHOICES)[-1] == FLAG_CLEAR
+    assert FLAG_CLEAR not in FLAG_OPTIONS    # never stored
+    html = str(TagList(*_annotation_controls("sp")))
+    assert "Clear flag" in html and 'id="sp_clear_ann"' in html
