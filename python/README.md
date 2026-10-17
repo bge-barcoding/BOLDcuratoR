@@ -100,7 +100,7 @@ Extras: `gui` (Shiny), `desktop` (Shiny, uvicorn, pywebview), `bench`
 | Command | What it does |
 |---|---|
 | `desktop` | The packaged app: first-run setup, then the app in a window |
-| `gui --snapshot FILE` | The Shiny app in a browser, for development (`--port`, `--sessions`) |
+| `gui --snapshot FILE` | The Shiny app in a browser, for development (`--port`, `--sessions`); open the URL it prints, which carries a one-time launch token |
 | `search --snapshot FILE --taxa ...` | Search, score, rank and grade; `--out DIR` writes the full export set |
 | `resolve --snapshot FILE NAME...` | Resolve taxon names to ranks |
 | `info` / `verify --snapshot FILE` | Describe / verify a snapshot (read-only) |
@@ -200,8 +200,12 @@ python tests/make_fake_package.py --out /tmp/fake.tsv.gz --rows 5000
 python tools/build_snapshot.py --tsv /tmp/fake.tsv.gz --out /tmp/fake.duckdb
 python -m boldcurator.cli gui --snapshot /tmp/fake.duckdb --port 8765 &
 pip install playwright && playwright install chromium
-python tools/drive_ui.py --out /tmp/shots
+python tools/drive_ui.py --out /tmp/shots --url "<the URL gui printed>"
 ```
+
+The server only lets in the client that opened its launch URL, which
+carries a one-time token (`localguard.py`), so `gui` prints it ("Open
+BOLDcurator at ...") and each `drive_ui.py` run needs a fresh server.
 
 `drive_ui.py` makes 45 checks across every tab and exits non-zero on a
 failure. When adding one, match against the table, not the panel -- the flag
@@ -254,6 +258,7 @@ src/boldcurator/
   ui/          Shiny app and first-run setup -- the ONLY place a GUI framework is imported
   cli.py       the `boldcurator` command
   desktop.py   window strategies, config, local server
+  localguard.py  the local server's host check and one-time launch token
   launcher.py  `boldcurator-desktop` entry point
   shortcuts.py desktop shortcuts for uv/pip installs
 tools/         build, verify, fetch, reorder, benchmark snapshot, drive-ui

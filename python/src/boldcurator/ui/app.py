@@ -3468,7 +3468,18 @@ def run(snapshot: str | Path, *, host: str = "127.0.0.1", port: int = 8000,
     import shiny
 
     from ..desktop import WEBSOCKET_KEEPALIVE
+    from ..localguard import LocalGuard, is_loopback
 
-    shiny.run_app(
+    # Round 9, item 9b: behind the same guard as the desktop window, so
+    # this prints the one URL (with its one-time token) that gets in.
+    guarded = LocalGuard(
         create_app(snapshot, page_size=page_size, sessions_path=sessions_path),
-        host=host, port=port, **WEBSOCKET_KEEPALIVE)
+        check_host=is_loopback(host))
+    shown = "127.0.0.1" if host in ("0.0.0.0", "::") else host  # nosec B104 # comparing, not binding
+    if not is_loopback(host):
+        print(f"WARNING: serving on {host}, not this computer only: anyone on "
+              "the network can reach the port, over plain HTTP, and whoever "
+              "opens the URL below first gets the session.", flush=True)
+    print(f"Open BOLDcurator at {guarded.launch_url(f'http://{shown}:{port}')}",
+          flush=True)
+    shiny.run_app(guarded, host=host, port=port, **WEBSOCKET_KEEPALIVE)

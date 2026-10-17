@@ -16,7 +16,7 @@ legacy R Shiny app got a lighter review for **critical** problems only (see
 | Secrets in git history | gitleaks: none. **A manual search found two BOLD-API-key-shaped values in old commits (S1, S2).** Not purged: rotating them is your call. |
 | Python app, server binding | `127.0.0.1` only |
 | Python app, outbound network | `zenodo.org` over HTTPS only: an update check (daily at most, can be switched off) and snapshot downloads the user starts. No telemetry. |
-| Python app, code findings | 1 medium (P1, not fixed: needs a design decision), 3 low **fixed** (P2, P3, P5), 4 low/info recommendations (P4, P6–P8) |
+| Python app, code findings | 2 medium **fixed** (P1 and P9, 2026-10-17), 3 low **fixed** (P2, P3, P5), 4 low/info recommendations (P4, P6–P8) |
 | Bandit | 40 raw findings, 0 genuine. All suppressed line by line with a reason. |
 | pip-audit | 80 locked packages, 0 known vulnerabilities |
 | zizmor | 54 findings across the six existing workflows, now 0 |
@@ -122,7 +122,7 @@ caches and the files CI writes.
 
 ## Python app findings
 
-**P1, medium, not fixed: the local server does not check who connects.**
+**P1, medium, fixed (2026-10-17): the local server did not check who connects.**
 uvicorn and Shiny accept any client that reaches the port and do not check
 the `Host` header. This affects two groups:
 - other users logged in to the same computer at the same time (on shared
@@ -138,6 +138,33 @@ notes, start downloads, and (before P2) delete files.
 desktop window a random per-launch token in its URL, checked on connect. I
 left this unfixed because it changes behaviour for anyone who deliberately
 serves with `--host 0.0.0.0`.
+
+*Fixed* (round 9 of curator feedback, after a Copilot review raised it
+again), with both of those, in `python/src/boldcurator/localguard.py`, an
+ASGI wrapper around the desktop app, the first-run setup screen and
+`boldcurator gui`:
+- **Host check.** On loopback, a request (or websocket) whose `Host` isn't
+  `127.0.0.1`, `localhost` or `[::1]`, or a websocket whose `Origin` names
+  another host, is refused with 403. This stops DNS rebinding.
+- **One-time launch token.** The server opens its window at
+  `/?bc_token=<random>`. The first request with it gets an `HttpOnly`,
+  `SameSite=Strict` cookie holding a different random secret (its name is
+  random per server, so two servers in one browser don't collide) and a
+  redirect without the token. Every later request needs the cookie. The
+  token works once, so reading it later from the browser's command line
+  (visible to other users of the machine) is useless. Another user's
+  client, or another site's page, has neither.
+- `boldcurator gui` prints the launch URL ("Open BOLDcurator at ...").
+  Bound to a non-loopback address the host check is off (there is no fixed
+  list of names), the token still applies, and it prints a warning: the app
+  is then served over plain HTTP to the network, and whoever opens the
+  printed URL first gets the session.
+
+Residual: a local process that reads the URL *and* uses it before the
+window does would get the session (the window then shows "can't connect").
+That is a race of a fraction of a second at launch. Tests:
+`tests/test_localguard.py`, `test_run_server_serves_the_app_and_stop_shuts_it_down`;
+`tools/drive_ui.py` and both CI smoke tests check a cookieless client gets 403.
 
 **P2, low, fixed: "delete snapshot" trusted a path sent by the page.**
 The delete button's `data-path` comes back over the websocket, and the

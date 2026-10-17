@@ -36,11 +36,12 @@ Zenodo under the concept DOI
   - `boldcurator gui` (for developers): port 8000 by default. `--host` can
     override the interface, but it is never changed unless someone passes
     that flag.
-- The local server has **no login**. Another user logged in to the *same*
-  computer at the same time could connect to the port while the app is
-  running. The data shown is public BOLD data, but see
-  [SECURITY_FINDINGS.md](SECURITY_FINDINGS.md) (finding P1) before using it on
-  shared, multi-user machines.
+- The local server only serves **the window it opened**: that window starts
+  from a one-time launch token, swapped for a cookie, and every request
+  without the cookie, or naming a host other than `127.0.0.1`/`localhost`,
+  is refused. So another user logged in to the same computer, or a web page
+  trying DNS rebinding, can't drive it
+  ([SECURITY_FINDINGS.md](SECURITY_FINDINGS.md), finding P1, fixed).
 
 ## Network behaviour
 

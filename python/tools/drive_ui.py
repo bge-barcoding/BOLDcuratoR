@@ -12,7 +12,11 @@ the old page count) turned up on the next run.
 Start the app, then drive it::
 
     python -m boldcurator.cli gui --snapshot fixture.duckdb --port 8765 &
-    python tools/drive_ui.py --out /tmp/shots
+    python tools/drive_ui.py --out /tmp/shots --url <the URL gui printed>
+
+The URL carries the server's one-time launch token (``localguard.py``), so
+it is the one ``gui`` prints ("Open BOLDcurator at ..."), and each run of
+this script needs a fresh server.
 
 Needs a browser, which the test suite deliberately does not::
 
@@ -27,6 +31,7 @@ import argparse
 import re
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 SETTLE = 2.0          # seconds to let Shiny round-trip after an interaction
 
@@ -34,7 +39,8 @@ SETTLE = 2.0          # seconds to let Shiny round-trip after an interaction
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--url", default="http://127.0.0.1:8765/")
+    parser.add_argument("--url", required=True,
+                        help="the URL `boldcurator gui` printed, token and all")
     parser.add_argument("--out", type=Path, default=Path("ui-screenshots"))
     parser.add_argument("--taxon", default="Lepidoptera")
     parser.add_argument("--browser", default=None,
@@ -65,6 +71,9 @@ def main(argv: list[str] | None = None) -> int:
         js_errors: list[str] = []
         page.on("pageerror", lambda e: js_errors.append(str(e)))
         page.goto(args.url, wait_until="networkidle")
+        # The launch token works once (localguard.py): later requests go to
+        # the bare server and carry the cookie it set.
+        base = "{0.scheme}://{0.netloc}".format(urlsplit(args.url))
 
         def table_text(selector: str) -> str:
             """Only the table(s), not the surrounding panel.
@@ -475,7 +484,7 @@ def main(argv: list[str] | None = None) -> int:
               and page.locator("#specimens_body table").count() > 0,
               f"tab {active!r}")
         href = page.get_attribute("#dl_all", "href") or ""
-        download = page.request.get(args.url.rstrip("/") + "/" + href.lstrip("/"))
+        download = page.request.get(f"{base}/{href.lstrip('/')}")
         check("a download after reconnecting is the file, not an error",
               download.ok and "json" not in download.headers.get("content-type", ""),
               f"{download.status} {download.headers.get('content-type')}")
@@ -484,12 +493,20 @@ def main(argv: list[str] | None = None) -> int:
               download.body()[:2] == b"PK",
               download.headers.get("content-disposition", ""))
         href = page.get_attribute("#dl_selected_ids", "href") or ""
-        ids = page.request.get(args.url.rstrip("/") + "/" + href.lstrip("/"))
+        ids = page.request.get(f"{base}/{href.lstrip('/')}")
         lines = ids.text().splitlines()
         check("Selected process IDs is one processid per line",
               ids.ok and len(lines) > 0
               and all(re.fullmatch(r"[A-Za-z0-9-]+", line) for line in lines),
               f"{len(lines)} lines, first {lines[:2]}")
+
+        # Round 9, item 9b: a client that didn't open the launch URL -- here
+        # a fresh browser profile, so no cookie -- is refused.
+        stranger = browser.new_context()
+        refused = stranger.request.get(base + "/")
+        check("a browser without the launch cookie is refused",
+              refused.status == 403, str(refused.status))
+        stranger.close()
 
         check("no javascript errors", not js_errors, "; ".join(js_errors))
         browser.close()

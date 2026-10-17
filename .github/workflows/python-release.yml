@@ -333,26 +333,37 @@ jobs:
         # third-party dependency -- it 404s with no exception anywhere, so a
         # curator just sees a blank tree canvas with nothing in the app to
         # explain why. Found exactly this way on a real Windows build.
+        #
+        # The server only lets in the client holding its one-time launch
+        # token (localguard.py), so: read the URL it prints, swap the token
+        # for the cookie (-L follows the redirect), and fetch with that.
         shell: bash
         run: |
-          "$BIN" gui --snapshot fixture.duckdb --port 8901 &
+          "$BIN" gui --snapshot fixture.duckdb --port 8901 > gui.log 2>&1 &
           pid=$!
           up=0
           for i in $(seq 1 30); do
-            if curl -sf http://127.0.0.1:8901/ >/dev/null 2>&1; then up=1; break; fi
+            url=$(sed -n 's/^Open BOLDcurator at //p' gui.log | tr -d '\r')
+            if [ -n "$url" ] && curl -sf -c jar -b jar -L "$url" >/dev/null 2>&1; then up=1; break; fi
             sleep 1
           done
           if [ "$up" != "1" ]; then
             kill "$pid" 2>/dev/null || true
+            cat gui.log
             echo "The frozen GUI server never came up"
             exit 1
           fi
-          if ! curl -sf http://127.0.0.1:8901/phylo-assets/phylo-init.js >/dev/null 2>&1; then
+          if ! curl -sf -b jar http://127.0.0.1:8901/phylo-assets/phylo-init.js >/dev/null 2>&1; then
             kill "$pid" 2>/dev/null || true
             echo "Phylogeny tab's static JS was not bundled (/phylo-assets/phylo-init.js 404s)"
             exit 1
           fi
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8901/)
           kill "$pid" 2>/dev/null || true
+          if [ "$code" != "403" ]; then
+            echo "A client without the launch cookie got $code, not 403"
+            exit 1
+          fi
 
       - name: macOS -- zip the .app on the Mac, then check the zip itself
         # ditto, on the Mac, is the only step that may zip the .app:

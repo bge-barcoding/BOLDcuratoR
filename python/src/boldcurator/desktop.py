@@ -261,14 +261,21 @@ WEBSOCKET_KEEPALIVE = {"ws_ping_interval": None, "ws_ping_timeout": None}
 def run_server(app, *, host: str = "127.0.0.1", port: int | None = None):
     """Start an ASGI ``app`` in a background thread. Returns ``(url, stop)``.
 
+    ``app`` is served behind :class:`localguard.LocalGuard`, and ``url``
+    carries its one-time launch token: open it in exactly one window.
+
     Runs uvicorn directly rather than ``shiny.run_app`` -- that call blocks
     and owns the process's signal handling, neither of which fits a window
     that needs to keep running until pywebview's own event loop returns.
     """
     import uvicorn
 
+    from .localguard import LocalGuard, is_loopback
+
     port = port if port is not None else _free_port()
-    config = uvicorn.Config(app, host=host, port=port, log_level="warning",
+    # Round 9, item 9b: only the window opened at the returned URL gets in.
+    guarded = LocalGuard(app, check_host=is_loopback(host))
+    config = uvicorn.Config(guarded, host=host, port=port, log_level="warning",
                             **WEBSOCKET_KEEPALIVE)
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, daemon=True)
@@ -280,7 +287,7 @@ def run_server(app, *, host: str = "127.0.0.1", port: int | None = None):
         server.should_exit = True
         thread.join(timeout=5)
 
-    return f"http://{host}:{port}", stop
+    return guarded.launch_url(f"http://{host}:{port}"), stop
 
 
 #: Where to look for a Chromium-based browser's executable, in preference
