@@ -12,7 +12,7 @@ similar bug resurfaces and you want to see how it was fixed last time.
 
 ## Round 9 curator feedback (2026-10-17) -- in progress
 
-- [ ] 1 Phylogeny: tip labels not underlined, still clickable.
+- [x] 1 Phylogeny: tip labels not underlined, still clickable -- Bootstrap (and the browser) underline every `<a>`, the tree's SVG ones too. `phylo.css` now sets `text-decoration:none` on the link and its text; hovering turns the name blue with a pointer. `drive_ui.py` checks the computed style, hovered.
 - [ ] 2 Search the records and annotate the results in bulk. Two designs to compare before building: (a) a filter box per table column, or (b) one search box beside "Check this group"; either way, check everything the search returns, then annotate.
 - [ ] 3 Specimens tab: a "Selected process ids" button that downloads the selected processids as a text file, for building a BOLD dataset.
 - [ ] 4 Specimens tab: "Download All", "Download Selected" and "Download Annotated Records" as Excel, not TSV.

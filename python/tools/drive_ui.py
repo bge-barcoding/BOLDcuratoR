@@ -388,6 +388,20 @@ def main(argv: list[str] | None = None) -> int:
         check("tip names start with the BIN and link to it on BOLD",
               bool(tip_link) and "[bin]" in tip_link[0]
               and tip_link[1].startswith("BOLD:"), str(tip_link))
+        # Round 9, item 1: a link, but not underlined -- hovered too.
+        page.locator("#phylo-tree-container a.bc-phylo-tip-link").first.hover()
+        underline = page.evaluate("""
+            () => {
+                const a = document.querySelector(
+                    '#phylo-tree-container a.bc-phylo-tip-link');
+                const t = a && a.querySelector('text');
+                return t ? [getComputedStyle(a).textDecorationLine,
+                            getComputedStyle(t).textDecorationLine] : null;
+            }
+        """)
+        check("tip names are not underlined, even hovered",
+              bool(underline) and all(u == "none" for u in underline),
+              str(underline))
 
         # -- reroot: right-click (dispatched directly -- see phylo-init.js's
         # own contextmenu listener; a real synthetic right-click through
