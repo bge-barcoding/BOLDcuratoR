@@ -10,6 +10,18 @@ performance investigation, the packaging saga) was trimmed from this file on
 2026-09-26 -- it is in git history (`git log -- python/PROGRESS.md`) if a
 similar bug resurfaces and you want to see how it was fixed last time.
 
+## Round 9 curator feedback (2026-10-17) -- in progress
+
+- [ ] 1 Phylogeny: tip labels not underlined, still clickable.
+- [ ] 2 Search the records and annotate the results in bulk. Two designs to compare before building: (a) a filter box per table column, or (b) one search box beside "Check this group"; either way, check everything the search returns, then annotate.
+- [ ] 3 Specimens tab: a "Selected process ids" button that downloads the selected processids as a text file, for building a BOLD dataset.
+- [ ] 4 Specimens tab: "Download All", "Download Selected" and "Download Annotated Records" as Excel, not TSV.
+- [ ] 5 A way to undo / clear a flag.
+- [ ] 6 Data tab: move "BOLDcurator app" and "Session" below the snapshot file; widen the text boxes to use the width.
+- [ ] 7 A "Guide" tab at the top: how to use the app in simple steps, with a link to the BAGS paper.
+- [ ] 8 macOS (11.7, Intel) one-command install stops after installing uv: `~/.zshrc: Permission denied`, then `mkdir ~/.config/fish/conf.d: Permission denied`.
+- [ ] 9 Security hardening (Copilot review, with Rutger's notes): (a) stored XSS -- snapshot text in the phylogeny's inline `<script>` can close it; (b) the local server doesn't authenticate its client (host check + per-launch token); (c) no size ceiling on snapshot downloads / decompression. Options to compare before building.
+
 ## Round 8 curator feedback (2026-10-05) -- done
 
 All 17 items closed; each note says what changed. Still to confirm on a real
