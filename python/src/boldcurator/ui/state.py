@@ -224,7 +224,10 @@ class SearchState:
     # wrote, or ``None`` when there is nothing to write -- a curator should
     # not be able to click "Download Selected" into an empty file.
 
-    def export_specimens(self, store: SnapshotStore, kind: str, path) -> "Path | None":
+    def export_specimens(self, store: SnapshotStore, kind: str, path, *,
+                         excel: bool = False) -> "Path | None":
+        """``excel`` writes a workbook instead of a TSV (round 9, item 4:
+        the Specimens tab's All / Selected / Annotated downloads)."""
         from ..io import exports as export_io
 
         result = self.analysis(store)
@@ -246,7 +249,18 @@ class SearchState:
 
         if len(rows) == 0:
             return None
+        if excel:
+            return export_io.write_xlsx(rows, path, snapshot_id=result.snapshot_id)
         return export_io.write_tsv(rows, path, snapshot_id=result.snapshot_id)
+
+    def representative_processids(self) -> list[str]:
+        """This result's representative picks (what "Download Selected"
+        exports), in table order -- round 9, item 3's list for building a
+        dataset on BOLD. From the table, so it needs no analysis and works
+        at any result size; picks from an earlier search in the session
+        aren't in it."""
+        ann = self.annotations if self.annotations is not None else Annotations()
+        return [p for p in self.table.all_processids() if p in ann.selected]
 
     def export_search_results(self, store: SnapshotStore, path) -> "Path | None":
         from ..io import exports as export_io

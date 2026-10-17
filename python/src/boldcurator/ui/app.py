@@ -87,6 +87,9 @@ from .state import AppState, ResultTooLargeToAnalyse
 
 PAGE_SIZES = [25, 50, 100, 250, 500]
 
+XLSX_MEDIA_TYPE = ("application/vnd.openxmlformats-officedocument"
+                   ".spreadsheetml.sheet")
+
 
 # --------------------------------------------------------------------------
 # Snapshot file management (round 5, file handling items 1-3)
@@ -275,7 +278,7 @@ def _all_columns_ordered(frame: pd.DataFrame) -> list[str]:
     rest = [c for c in frame.columns if c not in GROUP_COLUMNS]
     return preferred + rest
 
-#: Why each specimen-handling TSV download can come back empty, keyed the same
+#: Why each specimen-handling download can come back empty, keyed the same
 #: way ``SearchState.export_specimens`` is.
 _EMPTY_REASONS = {
     "all": "no records in this result",
@@ -2557,11 +2560,20 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                           "border:1px solid #dee2e6;border-radius:5px;",
                 ),
                 ui.div(
-                    ui.download_button("dl_all", "Download All", class_="btn-sm"),
-                    ui.download_button("dl_selected", "Download Selected",
+                    ui.download_button("dl_all", "Download All (xlsx)",
                                        class_="btn-sm"),
-                    ui.download_button("dl_annotated", "Download Annotated Records",
+                    ui.download_button("dl_selected", "Download Selected (xlsx)",
                                        class_="btn-sm"),
+                    ui.download_button("dl_annotated",
+                                       "Download Annotated Records (xlsx)",
+                                       class_="btn-sm"),
+                    # Round 9, item 3: the same records as Download Selected,
+                    # as a plain list for making a dataset on BOLD.
+                    ui.download_button(
+                        "dl_selected_ids", "Selected process IDs (txt)",
+                        class_="btn-sm",
+                        title="The representatives' process IDs, one per "
+                              "line -- paste them into a new dataset on BOLD."),
                     ui.download_button("dl_curation_report",
                                        "Download BOLD Curation Report",
                                        class_="btn-sm"),
@@ -2747,31 +2759,60 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             "curation_report": "bold_curation_report",
         }
 
-        def _register_tsv_download(kind: str, output_id: str):
+        def _register_specimen_download(kind: str, output_id: str, *,
+                                        excel: bool):
+            """Round 9, item 4: All / Selected / Annotated are workbooks; the
+            curation report stays the TSV BOLD is sent."""
+            suffix = "xlsx" if excel else "tsv"
+
             @output(id=output_id)
             @render.download_button(
                 filename=lambda: (f"{_TSV_FILENAME_STEM[kind]}_"
-                                  f"{export_io.timestamp()}.tsv"))
+                                  f"{export_io.timestamp()}.{suffix}"),
+                media_type=XLSX_MEDIA_TYPE if excel else None)
             def _handler():
                 search = state.search
                 if search is None:
                     yield from _empty_download("run a search first")
                     return
                 tmpdir = tempfile.TemporaryDirectory()
-                path = Path(tmpdir.name) / "export.tsv"
-                written = search.export_specimens(store, kind, path)
+                path = Path(tmpdir.name) / f"export.{suffix}"
+                written = search.export_specimens(store, kind, path, excel=excel)
+                if written is None and excel:
+                    # Still a workbook, so it opens: the reason in one cell.
+                    written = export_io.write_xlsx(
+                        pd.DataFrame({"message": [
+                            f"Nothing to export: {_EMPTY_REASONS[kind]}."]}),
+                        path, snapshot_id=info.snapshot_id)
                 if written is None:
                     tmpdir.cleanup()
                     yield from _empty_download(_EMPTY_REASONS[kind])
                     return
                 yield from _stream_file(written, tmpdir)
 
-        for _kind, _output_id in (
-            ("all", "dl_all"), ("selected", "dl_selected"),
-            ("annotated", "dl_annotated"),
-            ("curation_report", "dl_curation_report"),
+        for _kind, _output_id, _excel in (
+            ("all", "dl_all", True), ("selected", "dl_selected", True),
+            ("annotated", "dl_annotated", True),
+            ("curation_report", "dl_curation_report", False),
         ):
-            _register_tsv_download(_kind, _output_id)
+            _register_specimen_download(_kind, _output_id, excel=_excel)
+
+        @output(id="dl_selected_ids")
+        @render.download_button(
+            filename=lambda: f"selected_processids_{export_io.timestamp()}.txt",
+            media_type="text/plain")
+        def _dl_selected_ids():
+            """Round 9, item 3: the representatives' processids, one per
+            line, to paste into a new dataset on BOLD."""
+            search = state.search
+            if search is None:
+                yield from _empty_download("run a search first")
+                return
+            ids = search.representative_processids()
+            if not ids:
+                yield from _empty_download("no specimens selected")
+                return
+            yield "".join(f"{p}\n" for p in ids)
 
         def _register_fasta_download(output_id: str, *, selected_only: bool):
             @output(id=output_id)
@@ -2823,8 +2864,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         @output(id="dl_bin_analysis")
         @render.download_button(
             filename=lambda: f"bin_analysis_{export_io.timestamp()}.xlsx",
-            media_type="application/vnd.openxmlformats-officedocument"
-                       ".spreadsheetml.sheet")
+            media_type=XLSX_MEDIA_TYPE)
         def _dl_bin_analysis():
             search = state.search
             if search is None:
@@ -2861,8 +2901,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             @output(id=output_id)
             @render.download_button(
                 filename=lambda: f"species_analysis_{export_io.timestamp()}.xlsx",
-                media_type="application/vnd.openxmlformats-officedocument"
-                           ".spreadsheetml.sheet")
+                media_type=XLSX_MEDIA_TYPE)
             def _handler():
                 yield from _species_analysis_download()
 

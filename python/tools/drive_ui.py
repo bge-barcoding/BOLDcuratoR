@@ -450,6 +450,17 @@ def main(argv: list[str] | None = None) -> int:
         check("a download after reconnecting is the file, not an error",
               download.ok and "json" not in download.headers.get("content-type", ""),
               f"{download.status} {download.headers.get('content-type')}")
+        # Round 9, items 3 and 4.
+        check("Download All is an Excel workbook",
+              download.body()[:2] == b"PK",
+              download.headers.get("content-disposition", ""))
+        href = page.get_attribute("#dl_selected_ids", "href") or ""
+        ids = page.request.get(args.url.rstrip("/") + "/" + href.lstrip("/"))
+        lines = ids.text().splitlines()
+        check("Selected process IDs is one processid per line",
+              ids.ok and len(lines) > 0
+              and all(re.fullmatch(r"[A-Za-z0-9-]+", line) for line in lines),
+              f"{len(lines)} lines, first {lines[:2]}")
 
         check("no javascript errors", not js_errors, "; ".join(js_errors))
         browser.close()

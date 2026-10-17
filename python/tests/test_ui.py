@@ -830,3 +830,31 @@ def test_the_server_never_pings_its_own_window_away():
     from boldcurator.desktop import WEBSOCKET_KEEPALIVE
 
     assert WEBSOCKET_KEEPALIVE == {"ws_ping_interval": None, "ws_ping_timeout": None}
+
+
+def test_selected_processids_are_this_result_s_representatives(store, tmp_path):
+    """Round 9, items 3 and 4: the processid list is what Download Selected
+    exports (this search's representatives, not a previous search's), and
+    the record downloads can be written as workbooks."""
+    from openpyxl import load_workbook
+
+    from boldcurator.ui.state import AppState
+
+    state = AppState(store)
+    state.run_search("Pieris")
+    state.search.analysis(store)
+    pieris = set(state.search.representative_processids())
+    assert pieris
+    state.run_search("Danaus")
+    result = state.search.analysis(store)
+    ids = state.search.representative_processids()
+    assert ids and not set(ids) & pieris
+    assert set(ids) <= set(result.specimens["processid"].astype(str))
+    assert set(ids) <= state.annotations.selected_processids()
+
+    path = state.search.export_specimens(store, "selected", tmp_path / "s.xlsx",
+                                         excel=True)
+    rows = list(load_workbook(path, read_only=True)["Records"].values)
+    pid = list(rows[0]).index("processid")
+    assert sorted(r[pid] for r in rows[1:]) == sorted(ids)
+

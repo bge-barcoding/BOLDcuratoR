@@ -105,6 +105,79 @@ def write_csv(frame: pd.DataFrame, path: Path, *, snapshot_id: str = "") -> Path
     return path
 
 
+def write_processid_list(processids: Iterable[str], path: Path) -> Path:
+    """One processid per line and nothing else (round 9, item 3): what BOLD
+    takes when adding records to a dataset, so no provenance header to
+    delete first."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(f"{p}\n" for p in processids), encoding="utf-8")
+    return path
+
+
+#: Excel's own limit on one cell's text.
+_XLSX_MAX_CELL = 32_767
+
+
+def _xlsx_value(value):
+    """One cell, as openpyxl can write it: missing -> empty, numpy scalars ->
+    Python, text cleaned of the control characters a worksheet can't hold."""
+    from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
+
+    if value is None:
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):      # a list or array: written as text
+        pass
+    if hasattr(value, "item") and not isinstance(value, (str, bytes)):
+        value = value.item()
+    if isinstance(value, (bool, int, float)):
+        return value
+    text = ILLEGAL_CHARACTERS_RE.sub("", str(value))
+    return text[:_XLSX_MAX_CELL]
+
+
+def write_xlsx(frame: pd.DataFrame, path: Path, *, snapshot_id: str = "",
+               sheet_name: str = "Records") -> Path:
+    """One table as a workbook: the rows on the first sheet, header frozen,
+    and the provenance ``write_tsv`` puts in its comment lines on an "About"
+    sheet (round 9, item 4).
+
+    Written in openpyxl's write-only mode, row by row, so a large result
+    streams instead of building every cell in memory first. A text value
+    starting with ``=`` is written as text, never as a formula: the values
+    come from the snapshot and from curators, and a spreadsheet must not
+    run them.
+    """
+    from openpyxl import Workbook
+    from openpyxl.cell import WriteOnlyCell
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    book = Workbook(write_only=True)
+    sheet = book.create_sheet(sheet_name)
+    sheet.freeze_panes = "A2"
+    sheet.append([str(c) for c in frame.columns])
+
+    def cell(value):
+        value = _xlsx_value(value)
+        if isinstance(value, str) and value.startswith("="):
+            out = WriteOnlyCell(sheet, value)
+            out.data_type = "s"
+            return out
+        return value
+
+    for row in frame.itertuples(index=False, name=None):
+        sheet.append([cell(v) for v in row])
+    about = book.create_sheet("About")
+    for line in _provenance(snapshot_id):
+        about.append([line.lstrip("# ")])
+    book.save(path)
+    return path
+
+
 # --------------------------------------------------------------------------
 # Row selection
 # --------------------------------------------------------------------------
