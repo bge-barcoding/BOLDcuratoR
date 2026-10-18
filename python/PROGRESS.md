@@ -14,7 +14,18 @@ similar bug resurfaces and you want to see how it was fixed last time.
 
 - [x] 1 Guide: use the window's width (it stopped at 900px) -- two columns (`.bc-guide-grid`, 3:1): the steps, and the grades and the BAGS paper in a box beside them; one column below 1100px. Found on the way: the list's padding cut "10." to "0.".
 - [x] 2 Default search: "Sialidae", not "Nymphalidae" (the Search tab's taxa box).
-- [ ] 3 Speed: the first table after a large search, and large Excel downloads, are slow, and the download toast disappears long before the save dialog. Options to discuss before changing anything.
+- [ ] 3 Speed: the first table after a large search, and large Excel downloads, are slow, and the download toast disappears long before the save dialog. Options to discuss before changing anything -- measured, options put to the owner, awaiting a choice. On a 200,000-record fake-package snapshot (`make_fake_package.py --rows 200000`; its Nymphalidae is 85,067 records, about the real family's size), this sandbox:
+
+  | Step | Pieridae (28,329) | Nymphalidae (85,067) |
+  |---|---|---|
+  | Search (plan) | 0.02 s | 0.03 s |
+  | First summary screen (`SearchState.analysis`): fetch 0.7, process 0.6, **score 1.6**, BAGS 0.75, auto-select 0.5, BINs 0.3 | 1.7 s | **5.1 s** |
+  | Checklist, groups, one specimen page | < 0.4 s | < 0.4 s |
+  | Download All, xlsx (openpyxl) | 15 s | **50 s** |
+  | Download All, TSV | 0.7 s | 2.0 s |
+  | Prototype hand-written xlsx (inline strings, streamed into the zip; reopens in openpyxl) | -- | **5.2 s** |
+
+  Also found: Shiny runs a download's generator, and every render, on its one event loop (`shiny/session/_session.py`, `wrap_content_sync`), so while either runs the **whole app is frozen** -- every button, every tab. That, plus a 4-second toast, is why a curator is left wondering. The real 7.95 GB file will fetch more slowly than this one; `boldcurator benchmark --snapshot FILE --taxon Nymphalidae` gives the real numbers.
 
 ## Round 9 curator feedback (2026-10-17) -- done
 
