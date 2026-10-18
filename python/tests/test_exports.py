@@ -284,3 +284,29 @@ def test_processid_list_is_one_per_line_with_no_header(tmp_path):
     """Round 9, item 3: pasted straight into a BOLD dataset."""
     path = exports.write_processid_list(["P1", "P2"], tmp_path / "ids.txt")
     assert path.read_text(encoding="utf-8") == "P1\nP2\n"
+
+
+def test_xlsx_header_is_bold_and_frozen_and_progress_is_reported(tmp_path):
+    """Round 10, item 3: the hand-written workbook (openpyxl was ten times
+    slower) is still a proper one -- bold, frozen header -- and says how far
+    it has got, for the download's progress line."""
+    import numpy as np
+    from openpyxl import load_workbook
+
+    n = exports._XLSX_CHUNK_ROWS * 2 + 5
+    frame = pd.DataFrame({"processid": [f"P{i}" for i in range(n)],
+                          "count": np.arange(n, dtype=np.int64),
+                          "score": np.linspace(0, 1, n),
+                          "flag": [np.bool_(i % 2) for i in range(n)],
+                          "big": [float("inf")] + [1.5] * (n - 1),
+                          "long": ["x" * 40_000] + [""] * (n - 1)})
+    seen = []
+    path = exports.write_xlsx(frame, tmp_path / "p.xlsx",
+                              progress=lambda done, total: seen.append((done, total)))
+    assert seen[-1] == (n, n) and len(seen) == 3
+    sheet = load_workbook(path)["Records"]
+    assert sheet.freeze_panes == "A2" and sheet["A1"].font.b
+    assert (sheet["B3"].value, sheet["D2"].value, sheet["D3"].value) == (1, False, True)
+    assert sheet["E2"].value is None and sheet["E3"].value == 1.5    # inf: empty
+    assert len(sheet["F2"].value) == 32_767 and sheet["F3"].value is None
+    assert sheet.max_row == n + 1

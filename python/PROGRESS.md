@@ -25,6 +25,10 @@ similar bug resurfaces and you want to see how it was fixed last time.
   | Download All, TSV | 0.7 s | 2.0 s |
   | Prototype hand-written xlsx (inline strings, streamed into the zip; reopens in openpyxl) | -- | **5.2 s** |
 
+  The owner chose A1 (faster writer) + A2 (prepare in the background, then save) + B1 (analyse in the background). A TSV-then-convert route was considered and dropped: the conversion *is* the Excel writing.
+  - [x] A1 `write_xlsx` writes the spreadsheet XML itself, streamed into the zip 2,000 rows at a time, with inline strings (never formulas), a bold frozen header and the About sheet: Nymphalidae's 85,067 x 83 in **5.5 s** (was 50 s). Checked by reopening in openpyxl and converting with LibreOffice (`=1+1` stays text). It reports progress per chunk.
+  - [x] Groundwork: `SnapshotStore.connection` gives each thread its own cursor (same read-only, locked-down database, its own registrations).
+
   Also found: Shiny runs a download's generator, and every render, on its one event loop (`shiny/session/_session.py`, `wrap_content_sync`), so while either runs the **whole app is frozen** -- every button, every tab. That, plus a 4-second toast, is why a curator is left wondering. The real 7.95 GB file will fetch more slowly than this one; `boldcurator benchmark --snapshot FILE --taxon Nymphalidae` gives the real numbers.
 
 ## Round 9 curator feedback (2026-10-17) -- done
