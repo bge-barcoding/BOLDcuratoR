@@ -497,6 +497,7 @@ def _guide_panel() -> ui.Tag:
                 "System) and helps you flag the records that need attention. "
                 "Nothing is sent to BOLD: what you record is downloaded as "
                 "files at the end."),
+            ui.div(
             ui.tags.ol(
                 step("Get the data.",
                      "On the Data tab, download the latest BOLD snapshot (once; "
@@ -547,19 +548,23 @@ def _guide_panel() -> ui.Tag:
                 step("Save your work.",
                      "It saves itself every minute; on the Data tab you can "
                      "name a session, and load it again later."),
-                style="padding-left:20px;margin-top:10px;",
+                style="padding-left:28px;margin:0;",
             ),
-            ui.tags.h6("BAGS grades", style="margin-top:14px;"),
-            grades,
-            ui.tags.p(
-                "BAGS is described in Fontes et al. (2021), ",
-                ui.tags.a("BAGS: an automated Barcode, Audit & Grade System "
-                          "for DNA barcode reference libraries",
-                          href=BAGS_PAPER_URL, target="_blank",
-                          rel="noopener noreferrer"),
-                ", Molecular Ecology Resources.",
-                style="margin-top:12px;"),
-            style="max-width:900px;",
+            ui.div(
+                ui.tags.h6("BAGS grades", style="margin-top:0;"),
+                grades,
+                ui.tags.p(
+                    "BAGS is described in Fontes et al. (2021), ",
+                    ui.tags.a("BAGS: an automated Barcode, Audit & Grade "
+                              "System for DNA barcode reference libraries",
+                              href=BAGS_PAPER_URL, target="_blank",
+                              rel="noopener noreferrer"),
+                    ", Molecular Ecology Resources.",
+                    style="margin-top:12px;"),
+                style=BOX_STYLE,
+            ),
+            class_="bc-guide-grid",
+            ),
         ),
         value="guide",
     )
@@ -903,6 +908,16 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             .bc-data-stack {
                 display: grid; gap: 18px; max-width: 1200px;
                 grid-template-columns: minmax(0, 1fr);
+            }
+            /* Round 10, item 1: the Guide uses the window's width -- the
+               steps, and the grades beside them; stacked when narrow. */
+            .bc-guide-grid {
+                display: grid; gap: 16px 32px; align-items: start;
+                grid-template-columns: minmax(0, 3fr) minmax(260px, 1fr);
+                margin-top: 10px;
+            }
+            @media (max-width: 1100px) {
+                .bc-guide-grid { grid-template-columns: minmax(0, 1fr); }
             }
             .bc-grow-row > .shiny-input-container {
                 flex: 1 1 320px; min-width: 220px;
