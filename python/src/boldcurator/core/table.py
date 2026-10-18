@@ -27,7 +27,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from ..data.queries import ROW_ID_COLUMN, SearchPlan, fetch_rows
+from ..data.queries import ROW_ID_COLUMN, SearchPlan, fetch_rows, match_rows
 from ..data.snapshot import SnapshotStore
 from ..io.annotations import Annotations, merge_annotations
 from .pipeline import process_specimen_data
@@ -49,6 +49,9 @@ DERIVED_COLUMNS = frozenset({
 ANNOTATION_SORT_COLUMNS = frozenset({
     "selected", "checked", "flag", "updated_id", "curator_notes",
 })
+
+#: The annotation columns the search box can look in -- the text ones.
+ANNOTATION_SEARCH_COLUMNS = ("flag", "updated_id", "curator_notes")
 
 DEFAULT_PAGE_SIZE = 100
 
@@ -102,8 +105,14 @@ class SpecimenTable:
         self.page_size = max(1, int(page_size))
         self.annotations = annotations if annotations is not None else Annotations()
         self.user = user
-        self._order: np.ndarray = np.asarray(plan.row_ids)
+        #: The whole result in display order; ``_order`` is that, narrowed
+        #: to the records the search box matches (round 9, item 2).
+        self._sorted: np.ndarray = np.asarray(plan.row_ids)
+        self._order: np.ndarray = self._sorted
         self.sort_column: str | None = None
+        #: ``(column or None for any, text)``, or ``None`` for no search.
+        self.search: tuple[str | None, str] | None = None
+        self._matching: np.ndarray | None = None
         self.sort_descending: bool = False
         #: processid per rowid, filled in only if something needs the whole
         #: result's identity -- "select every matching record", for instance.
@@ -124,6 +133,59 @@ class SpecimenTable:
         return [c for c in self.store.app_columns if c not in DERIVED_COLUMNS] \
             + list(ANNOTATION_SORT_COLUMNS)
 
+    @property
+    def searchable_columns(self) -> list[str]:
+        """What the search box's column list offers: every stored column and
+        the three annotation text columns -- not the per-page computed ones,
+        for the same reason they can't be sorted."""
+        return [c for c in self.store.app_columns if c not in DERIVED_COLUMNS] \
+            + list(ANNOTATION_SEARCH_COLUMNS)
+
+    # -- the search box (round 9, item 2) ---------------------------------
+
+    def search_for(self, text: str, column: str | None = None) -> int:
+        """Show only the records whose ``column`` (``None``: any column)
+        contains ``text``, ignoring case; ``""`` shows every record again.
+        Returns how many match. The sort order is kept, and paging, "check
+        all" and :meth:`all_processids` act on the matches."""
+        text = (text or "").strip()
+        if not text:
+            self.search, self._matching = None, None
+            self._order = self._sorted
+            return self.total_rows
+        if column is not None and column in DERIVED_COLUMNS:
+            raise ValueError(f"{column!r} is computed per page, not stored, "
+                             "so it can't be searched.")
+        rows = np.asarray(self.plan.row_ids)
+        found: set = set()
+        if column is None or column not in ANNOTATION_SEARCH_COLUMNS:
+            found.update(match_rows(self.store, rows, text, column=column).tolist())
+        if column is None or column in ANNOTATION_SEARCH_COLUMNS:
+            found.update(self._annotation_matches(
+                text, [column] if column else list(ANNOTATION_SEARCH_COLUMNS)))
+        self.search = (column, text)
+        self._matching = np.fromiter(found, dtype=rows.dtype, count=len(found))
+        self._apply_search()
+        return self.total_rows
+
+    def _annotation_matches(self, text: str, columns: list[str]) -> list:
+        """Rowids whose annotation (flag, Correct ID, note) contains ``text``."""
+        self.all_processids()
+        ids = self._processids
+        frame = self.annotations.to_frame([str(p) for p in ids])
+        needle = text.lower()
+        hit = np.zeros(len(frame), dtype=bool)
+        for column in columns:
+            hit |= frame[column].str.lower().str.contains(needle, regex=False) \
+                .to_numpy()
+        return ids.index.to_numpy()[hit].tolist()
+
+    def _apply_search(self) -> None:
+        if self._matching is None:
+            self._order = self._sorted
+        else:
+            self._order = self._sorted[np.isin(self._sorted, self._matching)]
+
     # -- ordering ----------------------------------------------------------
 
     def sort_by(self, column: str | None, *, descending: bool = False) -> None:
@@ -135,8 +197,9 @@ class SpecimenTable:
         the snapshot -- see :meth:`_sort_by_annotation`.
         """
         if column is None:
-            self._order = np.asarray(self.plan.row_ids)
+            self._sorted = np.asarray(self.plan.row_ids)
             self.sort_column, self.sort_descending = None, False
+            self._apply_search()
             return
         if column in ANNOTATION_SORT_COLUMNS:
             self._sort_by_annotation(column, descending=descending)
@@ -152,8 +215,9 @@ class SpecimenTable:
         ordered = keys.sort_values(
             column, ascending=not descending, kind="stable", na_position="last"
         )
-        self._order = ordered[ROW_ID_COLUMN].to_numpy()
+        self._sorted = ordered[ROW_ID_COLUMN].to_numpy()
         self.sort_column, self.sort_descending = column, bool(descending)
+        self._apply_search()
 
     def _sort_by_annotation(self, column: str, *, descending: bool) -> None:
         """Order the whole result by a curator annotation, not a snapshot column.
@@ -178,8 +242,9 @@ class SpecimenTable:
         order = order.sort_values(
             "key", ascending=not descending, kind="stable", na_position="last"
         )
-        self._order = order["rid"].to_numpy()
+        self._sorted = order["rid"].to_numpy()
         self.sort_column, self.sort_descending = column, bool(descending)
+        self._apply_search()
 
     # -- paging ------------------------------------------------------------
 
@@ -220,8 +285,9 @@ class SpecimenTable:
         frame = frame.set_index(ROW_ID_COLUMN).reindex(wanted)
         return [str(p) for p in frame["processid"]]
 
-    def all_processids(self) -> list[str]:
-        """Every processid in the result, in display order.
+    def all_processids(self, *, found_only: bool = True) -> list[str]:
+        """Every processid in the result, in display order -- only the ones
+        the search box found, unless ``found_only=False``.
 
         One narrow column for the whole result -- about 30 MB even for the
         2.1 M-row case, against the gigabytes the full rows would cost. Cached,
@@ -231,7 +297,8 @@ class SpecimenTable:
             frame = fetch_rows(self.store, self.plan.row_ids,
                                columns=["processid"], with_row_id=True)
             self._processids = frame.set_index(ROW_ID_COLUMN)["processid"]
-        ordered = self._processids.reindex(self._order)
+        ordered = self._processids.reindex(self._order if found_only
+                                           else self._sorted)
         return [str(p) for p in ordered]
 
     # -- the representative pick --------------------------------------------
@@ -308,3 +375,32 @@ class SpecimenTable:
         if processids is None:
             return sorted(self.annotations.working)
         return [str(p) for p in processids]
+
+
+def search_frame(frame: pd.DataFrame, text: str,
+                 column: str | None = None) -> pd.DataFrame:
+    """The rows of an in-memory table (one BAGS group) whose ``column``
+    (``None``: any column) contains ``text``, ignoring case -- the same rule
+    as :meth:`SpecimenTable.search_for`, for the tables already in memory.
+    ``""`` returns ``frame`` unchanged."""
+    text = (text or "").strip().lower()
+    if not text or frame is None or not len(frame):
+        return frame
+    columns = [column] if column is not None else list(frame.columns)
+    hit = np.zeros(len(frame), dtype=bool)
+    for name in columns:
+        if name not in frame.columns:
+            continue
+        values = frame[name].astype(object)
+        hit |= np.array([not _missing(v) and text in str(v).lower()
+                         for v in values], dtype=bool)
+    return frame[hit]
+
+
+def _missing(value) -> bool:
+    if value is None:
+        return True
+    try:
+        return bool(pd.isna(value))
+    except (TypeError, ValueError):
+        return False

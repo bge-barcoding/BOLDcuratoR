@@ -10,6 +10,53 @@ performance investigation, the packaging saga) was trimmed from this file on
 2026-09-26 -- it is in git history (`git log -- python/PROGRESS.md`) if a
 similar bug resurfaces and you want to see how it was fixed last time.
 
+## Round 10 curator feedback (2026-10-18) -- done
+
+- [x] 1 Guide: use the window's width (it stopped at 900px) -- two columns (`.bc-guide-grid`, 3:1): the steps, and the grades and the BAGS paper in a box beside them; one column below 1100px. Found on the way: the list's padding cut "10." to "0.".
+- [x] 2 Default search: "Sialidae", not "Nymphalidae" (the Search tab's taxa box).
+- [x] 3 Speed: the first table after a large search, and large Excel downloads, are slow, and the download toast disappears long before the save dialog. Options to discuss before changing anything -- measured, options put to the owner, awaiting a choice. On a 200,000-record fake-package snapshot (`make_fake_package.py --rows 200000`; its Nymphalidae is 85,067 records, about the real family's size), this sandbox:
+
+  | Step | Pieridae (28,329) | Nymphalidae (85,067) |
+  |---|---|---|
+  | Search (plan) | 0.02 s | 0.03 s |
+  | First summary screen (`SearchState.analysis`): fetch 0.7, process 0.6, **score 1.6**, BAGS 0.75, auto-select 0.5, BINs 0.3 | 1.7 s | **5.1 s** |
+  | Checklist, groups, one specimen page | < 0.4 s | < 0.4 s |
+  | Download All, xlsx (openpyxl) | 15 s | **50 s** |
+  | Download All, TSV | 0.7 s | 2.0 s |
+  | Prototype hand-written xlsx (inline strings, streamed into the zip; reopens in openpyxl) | -- | **5.2 s** |
+
+  The owner chose A1 (faster writer) + A2 (prepare in the background, then save) + B1 (analyse in the background). A TSV-then-convert route was considered and dropped: the conversion *is* the Excel writing.
+  - [x] A1 `write_xlsx` writes the spreadsheet XML itself, streamed into the zip 2,000 rows at a time, with inline strings (never formulas), a bold frozen header and the About sheet: Nymphalidae's 85,067 x 83 in **5.5 s** (was 50 s). Checked by reopening in openpyxl and converting with LibreOffice (`=1+1` stays text). It reports progress per chunk.
+  - [x] B1 The analysis starts on a background thread as soon as there is a search (also after loading a session or reconnecting): `_start_analysis` in `ui/app.py`. `SearchState.analysis` holds a lock, so anything else asking waits for that run; the result is published only once representatives are chosen, from a copy of the picks, swapped in as a new dict. Every summary screen shows the stage ("Fetching 85,067 records...", scoring, BAGS, BINs, representatives) with a spinner, and the Specimens tab works meanwhile: on the 85,067-record search, the progress line at 0.1 s, a specimen page at 1.8 s with the analysis still running, the checklist at 8 s. Autosave skips while it runs (saving needs the result).
+  - [x] A2 Download All / Selected / Annotated are now buttons that prepare the workbook on a background thread (`_start_prep`), from a copy of the annotations taken at the click (`Annotations.snapshot`). A panel in the corner, on every tab, shows "Preparing all_specimens_....xlsx" with a bar and "40,000 of 85,067 rows". When it's written, the server asks the page (custom message `bc_click`) to click the hidden `dl_prepared` link, and the save starts by itself; the panel says it's ready, offers "Save it again", and goes after 20 s. With nothing to export it says why instead of saving an empty workbook (replacing round 9's one-cell workbook). The hidden link needs `suspend_when_hidden=False`: Shiny never gives a hidden download link its address. Measured, Nymphalidae, clicked the moment the search ran: waiting for the analysis 4 s, then writing, saved at **10.4 s** (was over 55 s, frozen), and the table paged in 0.6 s meanwhile. `drive_ui.py` checks the save starts by itself. The curation report (TSV), FASTA and the process-ID list are still direct downloads. **To confirm on a real machine:** the native window starts a download the page clicks for it (WebView2, WKWebView).
+  - [x] Groundwork: `SnapshotStore.connection` gives each thread its own cursor (same read-only, locked-down database, its own registrations).
+
+  Also found: Shiny runs a download's generator, and every render, on its one event loop (`shiny/session/_session.py`, `wrap_content_sync`), so while either runs the **whole app is frozen** -- every button, every tab. That, plus a 4-second toast, is why a curator is left wondering. The real 7.95 GB file will fetch more slowly than this one; `boldcurator benchmark --snapshot FILE --taxon Nymphalidae` gives the real numbers.
+
+## Round 9 curator feedback (2026-10-17) -- done
+
+All items closed; 9c deliberately not done (owner's call). Still to confirm
+on a real machine: the native window keeps the launch cookie (9b), and the
+macOS one-command install on the curator's Mac (8).
+
+
+- [x] 1 Phylogeny: tip labels not underlined, still clickable -- Bootstrap (and the browser) underline every `<a>`, the tree's SVG ones too. `phylo.css` now sets `text-decoration:none` on the link and its text; hovering turns the name blue with a pointer. `drive_ui.py` checks the computed style, hovered.
+- [x] 2 Search the records and annotate the results in bulk. Two designs to compare before building: (a) a filter box per table column, or (b) one search box beside "Check this group"; either way, check everything the search returns, then annotate -- the owner chose (b) with a column picker. **Find records** (`_search_controls`) sits above the toolbar on Specimens and every BAGS group screen: a column (or "Any column"), the text, Search (or Enter), Clear search. The table then shows only records whose column contains the text, ignoring case and taken literally (`%`, `_` are not wildcards), and says "268 of 2,823 records with "Canada" in Country/Ocean". The check button becomes **Check all N found** / **Check the N found** and checks only those. Apply to checked and Clear annotations act only on the found records too, so a check hidden by the search is never annotated unseen.
+  - Specimens: server-side, at any result size. `SpecimenTable.search_for` narrows the display order and keeps the sort (`_sorted` vs `_order`). Stored columns match in DuckDB over the result's rowids (`data/queries.match_rows`, "Any column" through `concat_ws` with U+001F, so a match never spans two columns), plus the flag / Correct ID / note annotations in memory. Computed columns (score, rank, grade) can't be searched, as they can't be sorted.
+  - Groups: `core/table.search_frame`, the same rule in pandas, after annotations are merged. A group screen's search stays while moving to the next group and is dropped by a new search or a loaded session.
+  - Not narrowed by a search: the downloads, and the process-ID list (item 3). A search is evaluated when run: after changing a flag, press Search again to re-match on it.
+  - Considered and not chosen: a filter under every column (about 70 columns, most off-screen, and boxes inside a table that re-renders on every click lose their typing). Filters that combine (country *and* identifier) would need a second row; not asked for.
+- [x] 3 Specimens tab: a "Selected process ids" button that downloads the selected processids as a text file, for building a BOLD dataset -- **Selected process IDs (txt)**: this result's representatives (the same records as Download Selected; the curator chose these over the checked set), one per line in table order, no header (`SearchState.representative_processids`, from the table, so it needs no analysis).
+- [x] 4 Specimens tab: "Download All", "Download Selected" and "Download Annotated Records" as Excel, not TSV -- now `.xlsx` (`io.exports.write_xlsx`): records on the first sheet with the header frozen, the TSV's provenance and licence lines on an About sheet. openpyxl write-only mode (no new dependency; xlsxwriter measured no faster), about 150,000 cells a second here, so a 50,000-record "All" takes roughly half a minute. A value starting with `=` is written as text, never a formula. An empty download is still a workbook, with the reason in it. The BOLD curation report stays TSV, and the CLI's `export_all` is unchanged.
+- [x] 5 A way to undo / clear a flag -- the flag dropdown now starts at **(no change)** and ends with **Clear flag** (`FLAG_CLEAR`, never stored), and **Clear annotations** beside Apply removes the flag, note and Correct ID from the checked records (in a BAGS group, only that group's), after a confirmation. Found on the way: a blank flag used to *clear* the flag, so applying just a note to flagged records silently wiped their flags; blank now leaves it alone. Toolbar messages ("Nothing checked." and so on) were set on the Search tab's status line only, so they never showed on the tabs with the toolbars; they are now notifications too. `drive_ui.py` checks all three.
+- [x] 6 Data tab: move "BOLDcurator app" and "Session" below the snapshot file; widen the text boxes to use the width -- one column again (`.bc-data-stack`, up to 1200px): snapshot, session, app. In a `.bc-grow-row` the path box, session name and session list take the row's spare width (flex-basis over Shiny's inline width), and the buttons stay their own size. Checked at 1700px and 900px.
+- [x] 7 A "Guide" tab at the top: how to use the app in simple steps, with a link to the BAGS paper -- `_guide_panel` (`ui/app.py`), the first tab and the one the app opens on: nine steps (data, name, search, gap analysis, BAGS E and C first, annotate, representatives, downloads, sessions), the five grades in their colours, and Fontes et al. (2021), `BAGS_PAPER_URL` (doi 10.1111/1755-0998.13262, as the website cites). It is static text: rename a button and its line here needs changing too.
+- [x] 8 macOS (11.7, Intel) one-command install stops after installing uv: `~/.zshrc: Permission denied`, then `mkdir ~/.config/fish/conf.d: Permission denied` -- a real issue, though not a Mac one: uv's installer (Astral's, run by `website/install.sh`) installs uv and then edits `~/.zshrc`, `~/.bashrc` and the fish config to put it on PATH. This account can't write those (most likely a `~/.zshrc` owned by root), so the installer exited with an error, and `set -e` stopped `install.sh` before BOLDcurator was installed. Now `install.sh` runs uv's installer with `UV_NO_MODIFY_PATH=1` (checked in uv 0.13.1's installer), carries on whenever uv is there afterwards, and if `uv tool update-shell` can't edit the startup file either, finishes and prints the `export PATH=...` line to add. Exercised with stub `curl`/`uv` reproducing the failure. A new website FAQ explains the message and the `sudo chown "$USER" ~/.zshrc` fix. The curator can just run the command again.
+- [x] 9 Security hardening (owner chose (a) and (b); (c) not now) (Copilot review, with Rutger's notes): (a) stored XSS -- snapshot text in the phylogeny's inline `<script>` can close it; (b) the local server doesn't authenticate its client (host check + per-launch token); (c) no size ceiling on snapshot downloads / decompression. Options to compare before building.
+  - [x] 9a XSS -- confirmed, then fixed as option A2: the tree's data goes in a non-executable `<script type="application/json">` element, `<` `>` `&` escaped (`_json_for_script`), read with `JSON.parse` by a fixed script (`_phylo_tree_scripts`). Proved end to end: a doctored snapshot with `</script><script>window.__pwned=1</script>` in a species name ran the script and broke the tree before, and draws it as text after. Recorded as P9 in `docs/SECURITY_FINDINGS.md`.
+  - [x] 9b The local server doesn't authenticate its client -- fixed with both the host check and a one-time launch token (`localguard.py`, wrapping the app, the setup screen and `boldcurator gui`). Off loopback the host check is off but the token stays, with a printed warning. The window opens `/?bc_token=<random>`, which is swapped once for an `HttpOnly`, `SameSite=Strict` cookie (random name per server) and redirected away; everything else without the cookie, or with a foreign `Host`/`Origin`, gets 403. `gui` prints the URL it must be opened at, so `drive_ui.py` now takes `--url` (required) and needs a fresh server per run. The CI smoke tests (`python-tests.yml`, `python-release.yml`) read that URL, swap it for the cookie and also assert a cookieless 403. **To confirm on real machines:** the native window (WebView2, WKWebView) keeps the cookie through the first redirect and for downloads -- reasoned, not observed, like open item 1. P1 in `docs/SECURITY_FINDINGS.md` is now fixed.
+  - [ ] 9c Download/decompression size ceiling -- not now (the owner's call): the app only downloads from Zenodo since round 8; only the developer CLI takes other sources.
+
 ## Round 8 curator feedback (2026-10-05) -- done
 
 All 17 items closed; each note says what changed. Still to confirm on a real
@@ -34,16 +81,19 @@ websocket), and the installer's licence page (built by CI only).
 - [x] 9.1 Phylogeny: tip name "bin-processid-identification-country" -- `core/phylogeny.py:tip_label` now gives `BOLD:AAG9765-PID-Species-Country` (`No BIN-...` when blank). Biopython quotes the colon in Newick; a round-trip test covers it.
 - [x] 9.2 Phylogeny: tip name links to the BIN on BOLD -- each tip name is an SVG link to `bold_bin_url` (`bin_url` in `_phylo_tips`, `phylo-init.js`). A click that ends a pan drag does not follow the link. `drive_ui.py` checks it.
 
-## State (2026-10-05)
+## State (2026-10-17)
 
-Feature-complete and in curators' hands. Eight rounds of curator-reported
+Feature-complete and in curators' hands. Nine rounds of curator-reported
 issues are closed; there are no open curator bugs.
 
-- **The app:** Data, Search, Gap analysis, Species, BINs, BAGS A-E (E and C
-  marked "work here first"), Phylogeny and Specimens tabs; per-record
-  annotations (flag, note, corrected ID) and representative picks; session
-  save/load with 60-second autosave; TSV/CSV/xlsx/FASTA/Newick downloads and
-  the BOLD curation report, all stamped with the CC BY-SA 4.0 attribution.
+- **The app:** Guide, Data, Search, Gap analysis, Species, BINs, BAGS A-E (E
+  and C marked "work here first"), Phylogeny and Specimens tabs; per-record
+  annotations (flag, note, corrected ID; clearable) and representative picks;
+  Find records on Specimens and every group; session save/load with
+  60-second autosave; xlsx/CSV/FASTA/Newick downloads, a process-ID list and
+  the BOLD curation report (TSV), all stamped with the CC BY-SA 4.0
+  attribution. The local server only serves the window it opened
+  (`localguard.py`).
   See the README's "What the app does".
 - **Snapshots:** built from the BOLD public data package by
   `build/snapshot_builder.py`, published on Zenodo (concept DOI
@@ -58,9 +108,9 @@ issues are closed; there are no open curator bugs.
   shortcut command. The version comes from the release tag everywhere
   (`packaging/stamp_version.py`); the frozen build's `--version` is checked in
   CI. Unsigned, deliberately.
-- **Tests:** about 630 pytest tests, the R parity gate (PASS, nine recorded
+- **Tests:** about 645 pytest tests, the R parity gate (PASS, nine recorded
   divergences) and CI on Linux, macOS and Windows. `tools/drive_ui.py` makes
-  42 checks against the running UI.
+  56 checks against the running UI (it needs the URL `gui` prints).
 
 ## Open items
 
@@ -71,7 +121,11 @@ Nothing here blocks curators. Roughly in priority order:
    - a native window's Save As keeps the file extension
      (`desktop._patch_edgechromium_download_extension`);
    - native-window downloads work at all (`desktop._enable_webview_downloads`,
-     `ALLOW_DOWNLOADS`).
+     `ALLOW_DOWNLOADS`);
+   - the native window (WebView2 here, WKWebView on macOS) keeps the
+     launch cookie through the first redirect and sends it with downloads
+     (round 9, item 9b). If it doesn't, the window shows "can't connect"
+     straight away.
 2. **Confirm by hand, on real machines:** the native **Browse…** file picker
    (needs a display); the macOS `.app` opened from a real, quarantined
    browser download; a clean-VM install of each platform's download. CI's
@@ -120,13 +174,16 @@ Nothing here blocks curators. Roughly in priority order:
 | Dataset/project codes | Implemented properly via `specimen_recordset` |
 | BAGS grade E | Evaluated against the whole snapshot, not just downloaded records |
 | BAGS C+E membership | A C+E group shows the species' own records in every BIN, **plus the other species in its shared BINs**, plus higher-rank riders (round 8, item 8.1, reversing the earlier "own records only" choice): the problem is the BIN, so the whole BIN is shown. |
+| Flag dropdown | Blank means "no change"; "Clear flag" and "Clear annotations" undo (round 9, item 5). A blank flag used to clear, which silently wiped flags when only a note was applied. |
+| Local server access | Only the window that opened the one-time launch URL, plus a loopback `Host` check (`localguard.py`, round 9, item 9b). Don't add an unguarded route or serve the app without `LocalGuard`. |
+| Record search | One "Find records" row (column or any, contains, case-insensitive) per screen, not a filter per column (round 9, item 2). |
 | Connection loss | The loopback server never pings its window (`desktop.WEBSOCKET_KEEPALIVE`). If the socket drops anyway, the page reloads itself and the server restores the session (round 8, item 1.1). Don't reintroduce uvicorn's default pings. |
 | BIN-less records | Excluded from BAGS entirely (project owner's instruction, reversing an earlier match to R): a species-level record with no BIN is not counted, and a species with no BIN-assigned records gets no grade. They still appear in the specimen table. |
 | GUI | Shiny for Python. No widget ever receives a whole result: the specimen table is server-side paged from `core/table.py` |
 | Desktop window | Best effort: `auto` tries a native pywebview window, then a Chromium `--app` window, then a browser tab. A pywebview failure never crashes the app |
 | Signing | Not signed (project owner's call) |
 | Versions | From the release tag only; `pyproject.toml` keeps `0.0.0.dev0` and is never edited by hand |
-| Performance | Closed. Reopen only with a measurement showing a real user waiting |
+| Performance | Closed. Reopen only with a measurement showing a real user waiting (round 10 did). Slow work goes on a background thread with visible progress, never in a render or a download handler: Shiny runs those on its one event loop, so they freeze the whole app. A background thread uses `store.connection` (its own cursor) and reads a copy of the annotations. |
 
 ## Known divergences from the R app -- all deliberate, all tested
 

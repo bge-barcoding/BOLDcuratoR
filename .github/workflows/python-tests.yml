@@ -125,18 +125,26 @@ jobs:
           boldcurator info --snapshot fixture.duckdb
 
       - name: The installed GUI server starts and serves its own static files
+        # Through the launch token, as a window would (localguard.py): read
+        # the printed URL, swap the token for the cookie, fetch with it --
+        # and a client without the cookie must be refused.
         run: |
-          boldcurator gui --snapshot fixture.duckdb --port 8902 &
+          boldcurator gui --snapshot fixture.duckdb --port 8902 > gui.log 2>&1 &
           pid=$!
           up=0
           for i in $(seq 1 30); do
-            if curl -sf http://127.0.0.1:8902/ >/dev/null 2>&1; then up=1; break; fi
+            url=$(sed -n 's/^Open BOLDcurator at //p' gui.log | tr -d '\r')
+            if [ -n "$url" ] && curl -sf -c jar -b jar -L "$url" >/dev/null 2>&1; then up=1; break; fi
             sleep 1
           done
           ok=1
-          [ "$up" = 1 ] || { echo "::error::The installed GUI server never came up"; ok=0; }
-          if [ "$ok" = 1 ] && ! curl -sf http://127.0.0.1:8902/phylo-assets/phylo-init.js >/dev/null; then
+          [ "$up" = 1 ] || { cat gui.log; echo "::error::The installed GUI server never came up"; ok=0; }
+          if [ "$ok" = 1 ] && ! curl -sf -b jar http://127.0.0.1:8902/phylo-assets/phylo-init.js >/dev/null; then
             echo "::error::/phylo-assets/phylo-init.js 404s -- package data missing from the wheel"; ok=0
+          fi
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8902/)
+          if [ "$ok" = 1 ] && [ "$code" != 403 ]; then
+            echo "::error::a client without the launch cookie got $code, not 403"; ok=0
           fi
           kill "$pid" 2>/dev/null || true
           [ "$ok" = 1 ]

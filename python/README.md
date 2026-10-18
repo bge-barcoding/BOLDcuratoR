@@ -26,10 +26,11 @@ app and every export carry that attribution.
 ## What the app does
 
 The desktop app (`boldcurator-desktop`, or `boldcurator desktop`) opens on a
-first-run setup screen until it has a snapshot, then shows these tabs:
+first-run setup screen until it has a snapshot, then opens on the Guide:
 
 | Tab | What it is |
 |---|---|
+| **Guide** | The first screen: how to use the app in ten steps, the BAGS grades, and a link to the BAGS paper |
 | **Data** | The snapshot in use and others in the data folder; download the latest from Zenodo, check for an update, or add your own file/URL. Sessions: save, load, delete, autosave every 60 s |
 | **Search** | Taxa (one per line, synonyms after commas), countries, continents (a union with countries), dataset and project codes. **Check size** estimates records and BINs without fetching anything; results are BIN-expanded past the geographic filter |
 | **Gap analysis** | Each typed taxon, found or missing |
@@ -56,13 +57,17 @@ BINs tab) when it holds two different species-level names -- strictly, so
 one genus, family or order, whatever rank they were identified to. A
 record identified only to the BIN's own genus changes nothing.
 | **Phylogeny** | Neighbour-joining tree (K2P, reference-anchored alignment) of one representative per selected BIN x country, with monophyly badges for grade-C species; warns above 500 tips, refuses above 1,000 |
-| **Specimens** | Every record, server-side paged and sortable |
+| **Specimens** | Every record, server-side paged and sortable; Find records narrows it to one column's (or any column's) text |
 
 Across the tables: per-record annotations (flag, curator note, corrected
-identification), "checked" records and a separate representative pick
+identification, and Clear annotations to undo them), "Find records" on
+Specimens and every BAGS group (check all it found, then annotate them),
+"checked" records and a separate representative pick
 (auto-selected per BIN x country on a fresh search). Downloads: all /
-selected / annotated records (TSV), the BOLD curation report, FASTA, CSV,
-xlsx species and BIN analyses, and the tree as Newick.
+selected / annotated records (xlsx, prepared in the background with a
+progress panel, then saved by themselves), the selected process IDs (one per line,
+for a BOLD dataset), the BOLD curation report (TSV), FASTA, CSV, xlsx
+species and BIN analyses, and the tree as Newick.
 
 The window is a native pywebview window where that works, else a Chromium
 `--app` window, else a browser tab (`--window auto|native|browser-app|tab`).
@@ -98,7 +103,7 @@ Extras: `gui` (Shiny), `desktop` (Shiny, uvicorn, pywebview), `bench`
 | Command | What it does |
 |---|---|
 | `desktop` | The packaged app: first-run setup, then the app in a window |
-| `gui --snapshot FILE` | The Shiny app in a browser, for development (`--port`, `--sessions`) |
+| `gui --snapshot FILE` | The Shiny app in a browser, for development (`--port`, `--sessions`); open the URL it prints, which carries a one-time launch token |
 | `search --snapshot FILE --taxa ...` | Search, score, rank and grade; `--out DIR` writes the full export set |
 | `resolve --snapshot FILE NAME...` | Resolve taxon names to ranks |
 | `info` / `verify --snapshot FILE` | Describe / verify a snapshot (read-only) |
@@ -198,10 +203,14 @@ python tests/make_fake_package.py --out /tmp/fake.tsv.gz --rows 5000
 python tools/build_snapshot.py --tsv /tmp/fake.tsv.gz --out /tmp/fake.duckdb
 python -m boldcurator.cli gui --snapshot /tmp/fake.duckdb --port 8765 &
 pip install playwright && playwright install chromium
-python tools/drive_ui.py --out /tmp/shots
+python tools/drive_ui.py --out /tmp/shots --url "<the URL gui printed>"
 ```
 
-`drive_ui.py` makes 42 checks across every tab and exits non-zero on a
+The server only lets in the client that opened its launch URL, which
+carries a one-time token (`localguard.py`), so `gui` prints it ("Open
+BOLDcurator at ...") and each `drive_ui.py` run needs a fresh server.
+
+`drive_ui.py` makes 57 checks across every tab and exits non-zero on a
 failure. When adding one, match against the table, not the panel -- the flag
 `<select>` contains every flag name, so a panel-wide text match passes for an
 annotation that never rendered.
@@ -222,6 +231,7 @@ Measured on the real 7.95 GB snapshot:
 | Search, `Nymphalidae` (89,479 records) | 8.2 s | 2.1 s |
 | Fetch 183 sequences | 7.4 s, +6 GB RSS | **0.44 s**, +169 MB |
 | One page of the specimen table, any result size | -- | ~50 ms |
+| Download All as xlsx, 85,067 records (fake-package snapshot) | 50 s | 5.5 s |
 
 Three rules came out of it; keep them:
 
@@ -237,7 +247,10 @@ Three rules came out of it; keep them:
   15 ms.
 
 Performance is closed: reopen it only with a measurement showing a curator
-waiting.
+waiting. (Round 10 did: large searches and Excel downloads. Anything slow
+now runs on a background thread with visible progress -- Shiny serves every
+render, click and download from one event loop, so slow work there freezes
+the whole app.)
 
 ## Architecture
 
@@ -252,6 +265,7 @@ src/boldcurator/
   ui/          Shiny app and first-run setup -- the ONLY place a GUI framework is imported
   cli.py       the `boldcurator` command
   desktop.py   window strategies, config, local server
+  localguard.py  the local server's host check and one-time launch token
   launcher.py  `boldcurator-desktop` entry point
   shortcuts.py desktop shortcuts for uv/pip installs
 tools/         build, verify, fetch, reorder, benchmark snapshot, drive-ui

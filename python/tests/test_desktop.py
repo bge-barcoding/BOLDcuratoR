@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import sys
 import types
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -76,8 +77,18 @@ def test_run_server_serves_the_app_and_stop_shuts_it_down():
 
     url, stop = desktop.run_server(app)
     try:
-        with urllib.request.urlopen(url, timeout=5) as resp:
+        # Behind localguard (round 9, item 9b): the launch URL, with a
+        # cookie jar to carry its cookie through the redirect, gets in;
+        # the bare server does not.
+        import http.cookiejar
+
+        opener = urllib.request.build_opener(
+            urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+        with opener.open(url, timeout=5) as resp:
             assert resp.read() == b"ok"
+        with pytest.raises(urllib.error.HTTPError) as refused:
+            urllib.request.urlopen(url.split("?")[0], timeout=5)
+        assert refused.value.code == 403
     finally:
         stop()
 

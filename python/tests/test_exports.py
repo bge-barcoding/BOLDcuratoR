@@ -240,3 +240,85 @@ def test_explicit_annotations_override_auto_selection(store, tmp_path):
     result = run_search(store, taxa_text="Danaus plexippus")
     out = exports.export_all(result, tmp_path, annotations=Annotations(), store=store)
     assert "selected" in out.skipped
+
+
+def test_xlsx_export_holds_the_rows_and_the_provenance(tmp_path, annotations):
+    """Round 9, item 4: the Specimens tab's All / Selected / Annotated
+    downloads are workbooks -- the rows first, the provenance and licence
+    the TSV carries in comments on an About sheet."""
+    from openpyxl import load_workbook
+
+    merged = merge_annotations(_frame(), annotations)
+    path = exports.write_xlsx(merged, tmp_path / "out.xlsx", snapshot_id="2026-09-11")
+    book = load_workbook(path, read_only=True)
+    assert book.sheetnames == ["Records", "About"]
+    rows = list(book["Records"].values)
+    assert list(rows[0]) == list(merged.columns)
+    assert len(rows) == 4
+    pids = [r[list(merged.columns).index("processid")] for r in rows[1:]]
+    assert pids == ["P1", "P2", "P3"]
+    about = " ".join(str(r[0]) for r in book["About"].values)
+    assert "snapshot: 2026-09-11" in about
+    assert "CC BY-SA 4.0" in about
+
+
+def test_xlsx_export_never_writes_a_value_as_a_formula(tmp_path):
+    """Snapshot text and curator notes are data: one starting with "=" must
+    reach the spreadsheet as text, not as a formula Excel would run."""
+    from openpyxl import load_workbook
+
+    frame = pd.DataFrame({"processid": ["P1", "P2"],
+                          "notes": ['=HYPERLINK("http://x","y")', None],
+                          "count": [3, pd.NA],
+                          "bad": ["tab\tok, bell\x07 gone", "fine"]})
+    path = exports.write_xlsx(frame, tmp_path / "f.xlsx")
+    sheet = load_workbook(path)["Records"]
+    assert sheet["B2"].data_type == "s"
+    assert sheet["B2"].value == '=HYPERLINK("http://x","y")'
+    assert sheet["B3"].value is None
+    assert sheet["C2"].value == 3 and sheet["C3"].value is None
+    assert sheet["D2"].value == "tab\tok, bell gone"
+
+
+def test_processid_list_is_one_per_line_with_no_header(tmp_path):
+    """Round 9, item 3: pasted straight into a BOLD dataset."""
+    path = exports.write_processid_list(["P1", "P2"], tmp_path / "ids.txt")
+    assert path.read_text(encoding="utf-8") == "P1\nP2\n"
+
+
+def test_xlsx_header_is_bold_and_frozen_and_progress_is_reported(tmp_path):
+    """Round 10, item 3: the hand-written workbook (openpyxl was ten times
+    slower) is still a proper one -- bold, frozen header -- and says how far
+    it has got, for the download's progress line."""
+    import numpy as np
+    from openpyxl import load_workbook
+
+    n = exports._XLSX_CHUNK_ROWS * 2 + 5
+    frame = pd.DataFrame({"processid": [f"P{i}" for i in range(n)],
+                          "count": np.arange(n, dtype=np.int64),
+                          "score": np.linspace(0, 1, n),
+                          "flag": [np.bool_(i % 2) for i in range(n)],
+                          "big": [float("inf")] + [1.5] * (n - 1),
+                          "long": ["x" * 40_000] + [""] * (n - 1)})
+    seen = []
+    path = exports.write_xlsx(frame, tmp_path / "p.xlsx",
+                              progress=lambda done, total: seen.append((done, total)))
+    assert seen[-1] == (n, n) and len(seen) == 3
+    sheet = load_workbook(path)["Records"]
+    assert sheet.freeze_panes == "A2" and sheet["A1"].font.b
+    assert (sheet["B3"].value, sheet["D2"].value, sheet["D3"].value) == (1, False, True)
+    assert sheet["E2"].value is None and sheet["E3"].value == 1.5    # inf: empty
+    assert len(sheet["F2"].value) == 32_767 and sheet["F3"].value is None
+    assert sheet.max_row == n + 1
+
+
+def test_an_annotations_snapshot_does_not_follow_later_changes(annotations):
+    """Round 10, item 3: a download prepared in the background writes the
+    annotations as they were when it was clicked."""
+    copy = annotations.snapshot()
+    annotations.set_flag("P1", "synonym")
+    annotations.set_selected("P9")
+    annotations.set_working("P3")
+    assert "P1" not in copy.flags and "P9" not in copy.selected
+    assert not copy.working
+    assert copy.to_dict()["curator_notes"] == {"P3": annotations.curator_notes["P3"]}

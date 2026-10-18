@@ -830,3 +830,119 @@ def test_the_server_never_pings_its_own_window_away():
     from boldcurator.desktop import WEBSOCKET_KEEPALIVE
 
     assert WEBSOCKET_KEEPALIVE == {"ws_ping_interval": None, "ws_ping_timeout": None}
+
+
+def test_selected_processids_are_this_result_s_representatives(store, tmp_path):
+    """Round 9, items 3 and 4: the processid list is what Download Selected
+    exports (this search's representatives, not a previous search's), and
+    the record downloads can be written as workbooks."""
+    from openpyxl import load_workbook
+
+    from boldcurator.ui.state import AppState
+
+    state = AppState(store)
+    state.run_search("Pieris")
+    state.search.analysis(store)
+    pieris = set(state.search.representative_processids())
+    assert pieris
+    state.run_search("Danaus")
+    result = state.search.analysis(store)
+    ids = state.search.representative_processids()
+    assert ids and not set(ids) & pieris
+    assert set(ids) <= set(result.specimens["processid"].astype(str))
+    assert set(ids) <= state.annotations.selected_processids()
+    state.search.table.search_for("no such text anywhere")
+    assert state.search.representative_processids() == ids   # not narrowed
+
+    path = state.search.export_specimens(store, "selected", tmp_path / "s.xlsx",
+                                         excel=True)
+    rows = list(load_workbook(path, read_only=True)["Records"].values)
+    pid = list(rows[0]).index("processid")
+    assert sorted(r[pid] for r in rows[1:]) == sorted(ids)
+
+
+
+def test_the_flag_dropdown_keeps_by_default_and_offers_clear():
+    """Round 9, item 5: blank leaves the flag alone (applying a note used
+    to wipe it) and "Clear flag" is the undo; Clear annotations is beside
+    Apply."""
+    from htmltools import TagList
+
+    from boldcurator.config.constants import FLAG_CHOICES, FLAG_CLEAR, FLAG_OPTIONS
+    from boldcurator.ui.app import _annotation_controls
+
+    assert list(FLAG_CHOICES)[0] == "" and FLAG_CHOICES[""] == "(no change)"
+    assert list(FLAG_CHOICES)[-1] == FLAG_CLEAR
+    assert FLAG_CLEAR not in FLAG_OPTIONS    # never stored
+    html = str(TagList(*_annotation_controls("sp")))
+    assert "Clear flag" in html and 'id="sp_clear_ann"' in html
+
+
+def test_the_guide_is_the_first_tab_and_links_the_bags_paper(fixture_snapshot):
+    """Round 9, item 7."""
+    from boldcurator.ui.app import BAGS_PAPER_URL, create_app
+
+    html = create_app(fixture_snapshot).ui["html"]
+    assert BAGS_PAPER_URL in html
+    tabs = [html.index(f'data-value="{v}"') for v in ("guide", "data", "input")]
+    assert tabs == sorted(tabs)
+
+
+def test_tree_data_cannot_close_its_script_element():
+    """Round 9, item 9a (stored XSS): snapshot text in the tree's data --
+    a tip label, a species -- must not be able to end the element it sits
+    in and run a script of its own. It goes in a non-executable JSON
+    element, HTML-safe encoded, and parses back unchanged."""
+    import json
+    import re
+
+    from htmltools import TagList
+
+    from boldcurator.ui.app import _json_for_script, _phylo_tree_scripts
+
+    evil = "</script><script>alert(1)</script><!-- & 'x'  "
+    tips = [{"tip": evil, "species": evil, "flags": [evil]}]
+    html = str(TagList(*_phylo_tree_scripts("tree", f"({evil}:1);", tips)))
+    # Exactly the two elements written, both closed where intended.
+    assert html.count("<script") == 2 and html.count("</script>") == 2
+    assert "alert(1)</script>" not in html and "<!--" not in html
+    data = re.search(r'<script type="application/json" id="tree-data">(.*?)</script>',
+                     html, re.S).group(1)
+    assert json.loads(data) == {"newick": f"({evil}:1);", "tips": tips}
+    assert json.loads(_json_for_script(evil)) == evil
+
+
+def test_the_analysis_runs_once_however_many_threads_ask(store, monkeypatch):
+    """Round 10, item 3: the app starts the analysis on a background thread
+    as soon as a search is made; a screen asking at the same time must wait
+    for that run, not start a second (which would also auto-select twice)."""
+    import threading
+    import time
+
+    from boldcurator.ui import state as state_module
+    from boldcurator.ui.state import AppState
+
+    real = state_module.analyse_plan
+    calls = []
+
+    def slow(*args, **kwargs):
+        calls.append(1)
+        time.sleep(0.3)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(state_module, "analyse_plan", slow)
+    app_state = AppState(store)
+    app_state.run_search("Pieris")
+    search = app_state.search
+    stages: list[str] = []
+    results = []
+    worker = threading.Thread(
+        target=lambda: results.append(search.analysis(store, progress=stages.append)))
+    worker.start()
+    time.sleep(0.05)
+    assert not search.analysis_is_ready             # published only when done
+    results.append(search.analysis(store))
+    worker.join()
+    assert len(calls) == 1 and results[0] is results[1]
+    assert stages[0].startswith("Fetching") and stages[-1] == "Choosing representatives"
+    assert app_state.annotations.selected            # representatives chosen

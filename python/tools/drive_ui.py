@@ -12,7 +12,11 @@ the old page count) turned up on the next run.
 Start the app, then drive it::
 
     python -m boldcurator.cli gui --snapshot fixture.duckdb --port 8765 &
-    python tools/drive_ui.py --out /tmp/shots
+    python tools/drive_ui.py --out /tmp/shots --url <the URL gui printed>
+
+The URL carries the server's one-time launch token (``localguard.py``), so
+it is the one ``gui`` prints ("Open BOLDcurator at ..."), and each run of
+this script needs a fresh server.
 
 Needs a browser, which the test suite deliberately does not::
 
@@ -27,6 +31,7 @@ import argparse
 import re
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 SETTLE = 2.0          # seconds to let Shiny round-trip after an interaction
 
@@ -34,7 +39,8 @@ SETTLE = 2.0          # seconds to let Shiny round-trip after an interaction
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--url", default="http://127.0.0.1:8765/")
+    parser.add_argument("--url", required=True,
+                        help="the URL `boldcurator gui` printed, token and all")
     parser.add_argument("--out", type=Path, default=Path("ui-screenshots"))
     parser.add_argument("--taxon", default="Lepidoptera")
     parser.add_argument("--browser", default=None,
@@ -65,6 +71,9 @@ def main(argv: list[str] | None = None) -> int:
         js_errors: list[str] = []
         page.on("pageerror", lambda e: js_errors.append(str(e)))
         page.goto(args.url, wait_until="networkidle")
+        # The launch token works once (localguard.py): later requests go to
+        # the bare server and carry the cookie it set.
+        base = "{0.scheme}://{0.netloc}".format(urlsplit(args.url))
 
         def table_text(selector: str) -> str:
             """Only the table(s), not the surrounding panel.
@@ -86,16 +95,35 @@ def main(argv: list[str] | None = None) -> int:
             bodies = page.locator(f"{selector} table tbody")
             return "\n".join(bodies.nth(i).inner_text() for i in range(bodies.count()))
 
+        def column_values(selector: str, label: str) -> list[str]:
+            """One column's cells, by its header text, in a table."""
+            return page.evaluate("""([sel, label]) => {
+                const table = document.querySelector(sel + ' table');
+                if (!table) return [];
+                const heads = Array.from(table.querySelectorAll('thead th'));
+                const i = heads.findIndex(th => th.innerText.trim() === label);
+                if (i < 0) return [];
+                return Array.from(table.querySelectorAll('tbody tr'))
+                    .map(tr => tr.children[i].innerText.trim());
+            }""", [selector, label])
+
         def show(name: str, settle: float = 3.0) -> None:
             # has-text, not text-is: the priority grades carry a bullet in
             # their label, so an exact match finds nothing.
             page.click(f"a.nav-link:has-text('{name}')")
             time.sleep(settle)
 
+        # Round 9, item 7: the app opens on the Guide, which links the paper.
+        check("the app opens on the Guide, linking the BAGS paper",
+              "Guide" in page.locator("a.nav-link.active").inner_text()
+              and page.locator("a[href='https://doi.org/10.1111/1755-0998.13262']")
+              .first.is_visible())
+        page.screenshot(path=str(args.out / "00-guide.png"), full_page=True)
+
         # -- the pre-check, before anything is fetched
-        # Round 6, data input items 2/3: "Data" (snapshot/session) is now
-        # the first tab, ahead of "Search" (renamed from "Data Input") --
-        # the taxa field isn't on the tab that's selected by default anymore.
+        # Round 6, data input items 2/3: "Data" (snapshot/session) and, since
+        # round 9, "Guide" come before "Search" -- the taxa field isn't on the
+        # tab that's selected by default.
         show("Search", settle=1.0)
         page.fill("#user", "Driver")
         page.fill("#taxa", args.taxon)
@@ -176,6 +204,28 @@ def main(argv: list[str] | None = None) -> int:
         check("the note lands in the group's table", "driven by drive_ui" in annotated)
         page.screenshot(path=str(args.out / "04-annotated.png"), full_page=True)
 
+        # Round 9, item 5: a note alone leaves the flag; "Clear flag" removes
+        # just the flag; "Clear annotations" (confirmed) removes the rest.
+        page.fill(f"#g{grade}_note", "second note")
+        page.click(f"#g{grade}_apply")
+        time.sleep(SETTLE * 1.5)
+        annotated = table_text(f"#grade_{grade}_body")
+        check("applying only a note keeps the flag",
+              "synonym" in annotated and "second note" in annotated)
+        page.select_option(f"#g{grade}_flag", "__clear__")
+        time.sleep(SETTLE / 2)
+        page.click(f"#g{grade}_apply")
+        time.sleep(SETTLE * 1.5)
+        annotated = table_text(f"#grade_{grade}_body")
+        check('"Clear flag" removes the flag and keeps the note',
+              "synonym" not in annotated and "second note" in annotated)
+        page.click(f"#g{grade}_clear_ann")
+        time.sleep(SETTLE)
+        page.click("#confirm_clear_ann")
+        time.sleep(SETTLE * 1.5)
+        check('"Clear annotations" removes the note too, once confirmed',
+              "second note" not in table_text(f"#grade_{grade}_body"))
+
         if page.locator(f"#group_{grade} option").count() > 1:
             page.click(f"#next_{grade}")
             time.sleep(SETTLE * 1.5)
@@ -209,8 +259,63 @@ def main(argv: list[str] | None = None) -> int:
             check("a check left in a different group is not swept into that apply",
                   "data_issue" not in table_text(f"#grade_{grade}_body"))
 
+        # Round 9, item 2: Find records in a group -- the table shows only
+        # the matches and "Check the N found" checks exactly those.
+        page.select_option(f"#find_col_{grade}", "identified_by")
+        time.sleep(SETTLE / 2)
+        page.fill(f"#find_text_{grade}", "smith")
+        page.click(f"#find_go_{grade}")
+        time.sleep(SETTLE * 1.5)
+        who = column_values(f"#grade_{grade}_body", "Identified by")
+        check("Find records narrows a group to the matches",
+              bool(who) and all("smith" in w.lower() for w in who),
+              f"{len(who)} rows")
+        page.click(f"#selall_{grade}")
+        time.sleep(SETTLE)
+        here = page.locator(f"#grade_{grade}_body").inner_text()
+        check('"Check the N found" checks just the matches',
+              f"{len(who)} checked here" in here,
+              re.search(r"\d+ checked here", here).group(0) if
+              re.search(r"\d+ checked here", here) else "")
+        page.click(f"#find_clear_{grade}")
+        time.sleep(SETTLE)
+        page.click(f"#clear_{grade}")
+        time.sleep(SETTLE)
+
         # -- the paged specimen table
         show("Specimens", settle=SETTLE * 1.5)
+        pages_before = page.locator("#specimens_body").inner_text()
+        page.select_option("#find_col_sp", "country.ocean")
+        time.sleep(SETTLE / 2)
+        page.fill("#find_text_sp", "Canada")
+        page.press("#find_text_sp", "Enter")          # Enter searches too
+        time.sleep(SETTLE * 1.5)
+        countries = column_values("#specimens_body", "Country/Ocean")
+        body = page.locator("#specimens_body").inner_text()
+        found = re.search(r"Check all ([\d,]+) found", body)
+        check("Find records narrows the specimen table, Enter to search",
+              bool(countries) and set(countries) == {"Canada"} and bool(found),
+              f"{len(countries)} rows on the page, {found.group(0) if found else 'no count'}")
+        page.click("#select_all")
+        time.sleep(SETTLE)
+        checked = re.search(r"([\d,]+) checked",
+                            page.locator("#specimens_body").inner_text())
+        check('"Check all N found" checks just the matches',
+              bool(found and checked) and checked.group(1) == found.group(1),
+              checked.group(0) if checked else "")
+        page.click("#clear_selection")
+        time.sleep(SETTLE)
+        page.click("#find_clear_sp")
+        time.sleep(SETTLE * 1.5)
+        pages_after = page.locator("#specimens_body").inner_text()
+
+        def page_count(text: str) -> str:
+            m = re.search(r"\b1 / ([\d,]+)", text)
+            return m.group(1) if m else "?"
+        check("Clear search shows every record again",
+              not re.search(r"Check all [\d,]+ found", pages_after)
+              and page_count(pages_after) == page_count(pages_before) != "?",
+              f"pages {page_count(pages_before)} -> {page_count(pages_after)}")
         header = page.locator("#specimens_body table thead").inner_text()
         check("the specimen table carries the BAGS grade once analysed",
               "BAGS" in header, header.replace("\n", " "))
@@ -388,6 +493,20 @@ def main(argv: list[str] | None = None) -> int:
         check("tip names start with the BIN and link to it on BOLD",
               bool(tip_link) and "[bin]" in tip_link[0]
               and tip_link[1].startswith("BOLD:"), str(tip_link))
+        # Round 9, item 1: a link, but not underlined -- hovered too.
+        page.locator("#phylo-tree-container a.bc-phylo-tip-link").first.hover()
+        underline = page.evaluate("""
+            () => {
+                const a = document.querySelector(
+                    '#phylo-tree-container a.bc-phylo-tip-link');
+                const t = a && a.querySelector('text');
+                return t ? [getComputedStyle(a).textDecorationLine,
+                            getComputedStyle(t).textDecorationLine] : null;
+            }
+        """)
+        check("tip names are not underlined, even hovered",
+              bool(underline) and all(u == "none" for u in underline),
+              str(underline))
 
         # -- reroot: right-click (dispatched directly -- see phylo-init.js's
         # own contextmenu listener; a real synthetic right-click through
@@ -431,11 +550,43 @@ def main(argv: list[str] | None = None) -> int:
               new_session != old_session and "Specimens" in active
               and page.locator("#specimens_body table").count() > 0,
               f"tab {active!r}")
-        href = page.get_attribute("#dl_all", "href") or ""
-        download = page.request.get(args.url.rstrip("/") + "/" + href.lstrip("/"))
+        href = page.get_attribute("#dl_curation_report", "href") or ""
+        download = page.request.get(f"{base}/{href.lstrip('/')}")
         check("a download after reconnecting is the file, not an error",
               download.ok and "json" not in download.headers.get("content-type", ""),
               f"{download.status} {download.headers.get('content-type')}")
+        # Round 9, item 4 and round 10, item 3: Download All is an Excel
+        # workbook, prepared in the background with a progress panel, and
+        # its save starts by itself once it's written.
+        with page.expect_download(timeout=120_000) as saved:
+            page.click("#prep_all")
+            page.wait_for_selector(".bc-prep", timeout=10_000)
+            panel = page.locator(".bc-prep").inner_text()
+        workbook = Path(saved.value.path()).read_bytes()
+        check("Download All is prepared with a progress panel, then saves itself",
+              # The fixture is small enough to be ready at once.
+              ("Preparing all_specimens_" in panel or "is ready" in panel)
+              and saved.value.suggested_filename.endswith(".xlsx")
+              and workbook[:2] == b"PK",
+              f"{saved.value.suggested_filename}, {len(workbook):,} bytes")
+        time.sleep(SETTLE)
+        check("the panel then says it's ready",
+              "is ready" in page.locator(".bc-prep").inner_text())
+        href = page.get_attribute("#dl_selected_ids", "href") or ""
+        ids = page.request.get(f"{base}/{href.lstrip('/')}")
+        lines = ids.text().splitlines()
+        check("Selected process IDs is one processid per line",
+              ids.ok and len(lines) > 0
+              and all(re.fullmatch(r"[A-Za-z0-9-]+", line) for line in lines),
+              f"{len(lines)} lines, first {lines[:2]}")
+
+        # Round 9, item 9b: a client that didn't open the launch URL -- here
+        # a fresh browser profile, so no cookie -- is refused.
+        stranger = browser.new_context()
+        refused = stranger.request.get(base + "/")
+        check("a browser without the launch cookie is refused",
+              refused.status == 403, str(refused.status))
+        stranger.close()
 
         check("no javascript errors", not js_errors, "; ".join(js_errors))
         browser.close()

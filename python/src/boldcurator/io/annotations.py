@@ -175,6 +175,15 @@ class Annotations:
             }
         )
 
+    def snapshot(self) -> "Annotations":
+        """A copy to read on another thread while this one keeps changing
+        (round 10, item 3: a download prepared in the background). Each
+        ``dict()`` copy is one atomic step under the GIL."""
+        return Annotations(selected=dict(self.selected), flags=dict(self.flags),
+                           updated_ids=dict(self.updated_ids),
+                           curator_notes=dict(self.curator_notes),
+                           working=set(self.working))
+
     # -- serialisation -----------------------------------------------------
 
     def to_dict(self) -> dict[str, dict]:

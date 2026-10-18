@@ -17,6 +17,7 @@ plain tables).
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -149,12 +150,28 @@ class SnapshotStore:
             raise SnapshotError(f"Cannot open {self.path} read-only: {exc}") from exc
         self._meta: dict[str, str] | None = None
         self._columns: list[str] | None = None
+        self._owner = threading.get_ident()
+        self._local = threading.local()
 
     # -- lifecycle ---------------------------------------------------------
 
     @property
     def connection(self) -> duckdb.DuckDBPyConnection:
-        return self._con
+        """This thread's connection to the snapshot.
+
+        Round 10, item 3: the app analyses a search and prepares a download
+        on background threads. One DuckDB connection is not safe to use from
+        two threads at once, and ``fetch_rows`` registers its row list under
+        a fixed name a second thread would overwrite -- so every other
+        thread gets its own cursor: the same database, read-only and locked
+        down as ``connect_snapshot`` left it, with its own registrations.
+        """
+        if threading.get_ident() == self._owner:
+            return self._con
+        cursor = getattr(self._local, "cursor", None)
+        if cursor is None:
+            cursor = self._local.cursor = self._con.cursor()
+        return cursor
 
     def close(self) -> None:
         self._con.close()
@@ -170,7 +187,7 @@ class SnapshotStore:
     @property
     def meta(self) -> dict[str, str]:
         if self._meta is None:
-            self._meta = dict(self._con.execute("SELECT key, value FROM _meta").fetchall())
+            self._meta = dict(self.connection.execute("SELECT key, value FROM _meta").fetchall())
         return self._meta
 
     @property
@@ -178,7 +195,7 @@ class SnapshotStore:
         """Physical ``specimen`` columns, excluding the surrogate key."""
         if self._columns is None:
             self._columns = [
-                r[0] for r in self._con.execute("DESCRIBE specimen").fetchall()
+                r[0] for r in self.connection.execute("DESCRIBE specimen").fetchall()
                 if r[0] != "sid"
             ]
         return self._columns
@@ -219,7 +236,7 @@ class SnapshotStore:
     @property
     def has_recordsets(self) -> bool:
         return (
-            self._con.execute(
+            self.connection.execute(
                 "SELECT count(*) FROM specimen_recordset"
             ).fetchone()[0]
             > 0

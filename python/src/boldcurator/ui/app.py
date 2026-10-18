@@ -43,6 +43,7 @@ from ..config.constants import (
     DEFAULT_SNAPSHOT_ZENODO_DOI,
     DOWNLOAD_LIMITS,
     FLAG_CHOICES,
+    FLAG_CLEAR,
     PHYLOGENY_LIMITS,
 )
 from ..core.grouping import (
@@ -56,7 +57,7 @@ from ..core.grouping import (
     SPECIES_GRADES,
 )
 from ..core.species import SPECIES_LEVEL_STATUSES
-from ..core.table import DEFAULT_PAGE_SIZE
+from ..core.table import DEFAULT_PAGE_SIZE, search_frame
 from ..data.snapshot import SnapshotError, SnapshotStore
 from ..desktop import DEFAULT_CONFIG_PATH, load_snapshot_path, save_snapshot_path
 from ..io import exports as export_io
@@ -86,6 +87,12 @@ from .format import (
 from .state import AppState, ResultTooLargeToAnalyse
 
 PAGE_SIZES = [25, 50, 100, 250, 500]
+
+#: How long the download panel stays up after a workbook is ready.
+PREP_PANEL_SECONDS = 20
+
+XLSX_MEDIA_TYPE = ("application/vnd.openxmlformats-officedocument"
+                   ".spreadsheetml.sheet")
 
 
 # --------------------------------------------------------------------------
@@ -275,7 +282,7 @@ def _all_columns_ordered(frame: pd.DataFrame) -> list[str]:
     rest = [c for c in frame.columns if c not in GROUP_COLUMNS]
     return preferred + rest
 
-#: Why each specimen-handling TSV download can come back empty, keyed the same
+#: Why each specimen-handling download can come back empty, keyed the same
 #: way ``SearchState.export_specimens`` is.
 _EMPTY_REASONS = {
     "all": "no records in this result",
@@ -451,7 +458,160 @@ def _annotation_controls(prefix: str) -> list:
                      placeholder="Correct ID", width="225px"),
         ui.input_action_button(f"{prefix}_apply", "Apply to checked",
                                class_="btn-primary btn-sm"),
+        # Round 9, item 5: the undo -- asks first (``_confirm_clear``).
+        ui.input_action_button(
+            f"{prefix}_clear_ann", "Clear annotations",
+            class_="btn-outline-danger btn-sm",
+            title="Remove the flag, note and Correct ID from the checked "
+                  "records"),
     ]
+
+
+#: The BAGS paper (Fontes et al. 2021, Molecular Ecology Resources).
+BAGS_PAPER_URL = "https://doi.org/10.1111/1755-0998.13262"
+
+
+def _guide_panel() -> ui.Tag:
+    """Round 9, item 7: the first tab -- how to use the app, in plain steps.
+
+    Static text, so a change to a screen's name or a button's label needs
+    the matching line here too.
+    """
+    def step(title: str, *body) -> ui.Tag:
+        return ui.tags.li(ui.tags.strong(title), " ", *body,
+                          style="margin-bottom:8px;")
+
+    grades = ui.tags.ul(
+        *[ui.tags.li(
+            ui.tags.span(f"{g}", style=f"background:{GRADE_COLOURS[g]};"
+                         "color:#fff;padding:0 8px;border-radius:10px;"
+                         "font-weight:600;margin-right:6px;"),
+            GRADE_DESCRIPTIONS[g]) for g in GRADES],
+        style="list-style:none;padding-left:0;margin:6px 0 0;",
+    )
+    return ui.nav_panel(
+        "Guide",
+        ui.div(
+            ui.tags.h5("How to use BOLDcurator", style="margin-top:0;"),
+            ui.tags.p(
+                "BOLDcurator checks the COI-5P barcode records of the taxa you "
+                "choose against a copy of BOLD's public data on this computer, "
+                "grades every species with BAGS (the Barcode, Audit & Grade "
+                "System) and helps you flag the records that need attention. "
+                "Nothing is sent to BOLD: what you record is downloaded as "
+                "files at the end."),
+            ui.div(
+            ui.tags.ol(
+                step("Get the data.",
+                     "On the Data tab, download the latest BOLD snapshot (once; "
+                     "about 2 GB) or point to a copy you already have."),
+                step("Type your name",
+                     "in the box at the top right, so your flags and notes "
+                     "carry it."),
+                step("Search.",
+                     "On the Search tab, type the taxa (one per line), and "
+                     "optionally countries, continents, or dataset and project "
+                     "codes. Check size says how big the result will be; "
+                     "Search runs it. Records that share a BIN with your "
+                     "taxa come in too, so every BIN is seen whole."),
+                step("Check what was found.",
+                     "Gap analysis lists every taxon you typed as found or "
+                     "missing. Species and BINs give the overview: grade "
+                     "counts, the species checklist, concordant and "
+                     "discordant BINs."),
+                step("Work through the BAGS screens, E and C first.",
+                     "They carry a coloured dot and \"work here first\": that is where "
+                     "the name and the barcode disagree. Each screen shows one "
+                     "problem at a time (a species, or a BIN); move with "
+                     "Previous and Next. BAGS C+E gathers species that are "
+                     "both split across BINs and share one, and Unnamed BINs "
+                     "the BINs no grade covers."),
+                step("Find records.",
+                     "On Specimens and every BAGS screen, Find records shows "
+                     "only the records with some text in a column you choose, "
+                     "or in any column: a country, a collector or identifier, "
+                     "a BIN. The check button above then checks just those."),
+                step("Annotate.",
+                     "Tick Check on the records you mean (Check this group "
+                     "ticks them all), choose a flag, type a note or a "
+                     "Correct ID, and press Apply to checked. A blank flag "
+                     "leaves the flag as it is; Clear flag, or Clear "
+                     "annotations, undoes it."),
+                step("Pick representatives.",
+                     "Rep. marks the best record for each BIN in each "
+                     "country, picked for you on a new search; tick or untick "
+                     "it to change the pick. The Phylogeny tab builds a tree "
+                     "from them."),
+                step("Download.",
+                     "The Specimens tab holds every record, and the downloads: "
+                     "all, selected (the representatives) or annotated records "
+                     "as Excel, the selected process IDs as a list to make a "
+                     "dataset on BOLD, the BOLD curation report to send to "
+                     "BOLD, and FASTA sequences."),
+                step("Save your work.",
+                     "It saves itself every minute; on the Data tab you can "
+                     "name a session, and load it again later."),
+                style="padding-left:28px;margin:0;",
+            ),
+            ui.div(
+                ui.tags.h6("BAGS grades", style="margin-top:0;"),
+                grades,
+                ui.tags.p(
+                    "BAGS is described in Fontes et al. (2021), ",
+                    ui.tags.a("BAGS: an automated Barcode, Audit & Grade "
+                              "System for DNA barcode reference libraries",
+                              href=BAGS_PAPER_URL, target="_blank",
+                              rel="noopener noreferrer"),
+                    ", Molecular Ecology Resources.",
+                    style="margin-top:12px;"),
+                style=BOX_STYLE,
+            ),
+            class_="bc-guide-grid",
+            ),
+        ),
+        value="guide",
+    )
+
+
+#: Columns the search box never offers: the two checkbox columns.
+_UNSEARCHABLE = frozenset({"selected", "checked"})
+
+
+def _search_controls(key: str, columns: list[str], *,
+                     current: tuple[str | None, str] | None,
+                     matches: int, total: int) -> ui.Tag:
+    """Round 9, item 2: "Find records" -- a column (or any) and some text;
+    the table then shows only the records containing it, and the check
+    button above checks just those. ``key`` is ``sp`` (Specimens) or a
+    group screen's grade; ``current`` is the search in force, if any.
+
+    Enter in the text box runs the search (the delegated keydown listener
+    in ``create_app``).
+    """
+    column, text = current if current else (None, "")
+    choices = {"": "Any column"} | {
+        c: GROUP_LABELS.get(c, c) for c in columns if c not in _UNSEARCHABLE}
+    parts = [
+        ui.tags.span("Find records", class_="small text-muted"),
+        ui.input_select(f"find_col_{key}", None, choices=choices,
+                        selected=column or "", width="190px"),
+        ui.input_text(f"find_text_{key}", None, value=text,
+                      placeholder="e.g. Canada, a name, BOLD:AAA1234",
+                      width="260px"),
+        ui.input_action_button(f"find_go_{key}", "Search", class_="btn-sm"),
+    ]
+    if current:
+        where = GROUP_LABELS.get(column, column) if column else "any column"
+        parts += [
+            ui.input_action_button(f"find_clear_{key}", "Clear search",
+                                   class_="btn-sm"),
+            ui.tags.span(
+                f"{matches:,} of {total:,} records with \u201c{text}\u201d "
+                f"in {where}", class_="small",
+                style="font-weight:600;color:#0d6efd;"),
+        ]
+    return ui.div(*parts, style="display:flex;align-items:center;gap:8px;"
+                                "flex-wrap:wrap;margin-bottom:6px;")
 
 
 def _grade_panel(grade: str) -> ui.Tag:
@@ -567,6 +727,43 @@ def _phylo_tips(result, grade_by_species: dict[str, str]) -> list[dict]:
             "flags": result.flags.get(row["_tip_label"], []),
         })
     return tips
+
+
+def _json_for_script(value) -> str:
+    """JSON that is safe inside a ``<script>`` element (round 9, item 9a).
+
+    ``json.dumps`` leaves ``</script>`` as it is, and a browser ends the
+    element at the first one, whatever the JSON around it -- so a specimen
+    label in a crafted snapshot could close the script and run its own.
+    ``<``, ``>`` and ``&`` become ``\\u`` escapes, which JSON.parse turns back
+    into the same characters. (``ensure_ascii``, the default, already
+    escapes everything else that could matter, U+2028/2029 included.)
+    """
+    text = json.dumps(value, ensure_ascii=True)
+    for char, escape in (("<", "\\u003c"), (">", "\\u003e"), ("&", "\\u0026")):
+        text = text.replace(char, escape)
+    return text
+
+
+def _phylo_tree_scripts(container_id: str, newick: str, tips: list[dict]) -> list:
+    """The tree's data and the call that draws it (phylo-init.js).
+
+    Round 9, item 9a: the snapshot-derived Newick and tip metadata go in a
+    non-executable ``application/json`` element, read with ``JSON.parse`` --
+    data, never code. The one script that runs is fixed text.
+    """
+    data_id = f"{container_id}-data"
+    return [
+        ui.tags.script(_json_for_script({"newick": newick, "tips": tips}),
+                       type="application/json", id=data_id),
+        ui.tags.script(
+            "(function () {"
+            f"var d = JSON.parse(document.getElementById({json.dumps(data_id)})"
+            ".textContent);"
+            f"window.bcRenderPhylotree({json.dumps(container_id)}, d.newick, "
+            "d.tips);"
+            "})();"),
+    ]
 
 
 def _unnamed_counts(groups) -> list[tuple[int, str, str]]:
@@ -706,15 +903,39 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             .bc-scroll td {
                 max-width: 280px; overflow: hidden; text-overflow: ellipsis;
             }
-            /* Round 8, item 5.2: the Data tab in two columns, the
-               snapshot (the busier one) wider; one column when narrow. */
-            .bc-data-grid {
-                display: grid; gap: 16px 24px; align-items: start;
-                grid-template-columns: minmax(0, 3fr) minmax(360px, 2fr);
-                max-width: 1500px;
+            /* Round 9, item 6: the Data tab in one column -- snapshot,
+               then session, then the app -- now that the snapshot panel is
+               short (round 8 had two). A text box or list in a
+               ".bc-grow-row" takes the row's spare width, not its fixed
+               one: flex-basis wins over the inline width Shiny sets. */
+            .bc-data-stack {
+                display: grid; gap: 18px; max-width: 1200px;
+                grid-template-columns: minmax(0, 1fr);
+            }
+            /* Round 10, item 1: the Guide uses the window's width -- the
+               steps, and the grades beside them; stacked when narrow. */
+            .bc-guide-grid {
+                display: grid; gap: 16px 32px; align-items: start;
+                grid-template-columns: minmax(0, 3fr) minmax(260px, 1fr);
+                margin-top: 10px;
             }
             @media (max-width: 1100px) {
-                .bc-data-grid { grid-template-columns: minmax(0, 1fr); }
+                .bc-guide-grid { grid-template-columns: minmax(0, 1fr); }
+            }
+            .bc-grow-row > .shiny-input-container {
+                flex: 1 1 320px; min-width: 220px;
+            }
+            /* Round 10, item 3: a background download's progress panel. */
+            .bc-prep {
+                position: fixed; bottom: 20px; right: 20px; z-index: 2001;
+                width: 360px; background: #fff; border: 1px solid #ced4da;
+                border-left: 4px solid #0d6efd; border-radius: 6px;
+                padding: 10px 14px; box-shadow: 0 2px 10px rgba(0,0,0,.2);
+                font-size: 14px;
+            }
+            .bc-prep-close {
+                float: right; margin-left: 8px; color: #6c757d;
+                text-decoration: none;
             }
             /* Round 5, item 12: a download click's own visible
                acknowledgement -- see the click listener below. */
@@ -728,6 +949,10 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         """),
         ui.tags.style(INLINE_INPUT_CSS),
         ui.tags.div(id="bc-toast", class_="bc-toast"),
+        # Round 10, item 3: a prepared Excel download's progress, on every
+        # tab, and the hidden link the page clicks to save it.
+        ui.output_ui("prep_status"),
+        ui.div(ui.download_button("dl_prepared", "Save"), style="display:none;"),
         ui.tags.div(
             ui.tags.span("Lost the connection to BOLDcurator -- reconnecting "
                          "and restoring your work..."),
@@ -748,6 +973,12 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         # re-attaching after every render and silently stop working after the
         # first. Delegating to `document` sidesteps that entirely.
         ui.tags.script(f"""
+            // Round 10, item 3: the server says a prepared download is ready
+            // by asking the page to click its hidden save link.
+            Shiny.addCustomMessageHandler('bc_click', function(msg) {{
+                var el = document.getElementById(msg.id);
+                if (el) el.click();
+            }});
             document.addEventListener('change', function(e) {{
                 if (!e.target) return;
                 if (e.target.classList.contains('{ROW_CHECK_CLASS}')) {{
@@ -759,6 +990,19 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                         {{pid: e.target.dataset.pid, checked: e.target.checked}},
                         {{priority: 'event'}});
                 }}
+            }});
+            // Round 9, item 2: Enter in a "Find records" box runs the
+            // search. The box's value is sent first: Shiny debounces text
+            // inputs, and the click must not search for the text before.
+            document.addEventListener('keydown', function(e) {{
+                var box = e.target;
+                if (e.key !== 'Enter' || !box || !box.id
+                        || box.id.indexOf('find_text_') !== 0) return;
+                e.preventDefault();
+                Shiny.setInputValue(box.id, box.value);
+                var go = document.getElementById(
+                    'find_go_' + box.id.slice('find_text_'.length));
+                if (go) go.click();
             }});
             document.addEventListener('click', function(e) {{
                 var th = e.target.closest && e.target.closest('.{SORT_HEADER_CLASS}');
@@ -790,7 +1034,9 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 // visible, whichever window mode is running.)
                 var dl = e.target.closest &&
                     e.target.closest('a.shiny-download-link');
-                if (dl && !dl.classList.contains('disabled')) {{
+                // (Not for a prepared Excel download: its own panel says it.)
+                if (dl && !dl.classList.contains('disabled')
+                        && dl.id !== 'dl_prepared') {{
                     var toast = document.getElementById('bc-toast');
                     if (toast) {{
                         toast.textContent = 'Downloading -- check your '
@@ -878,6 +1124,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         ui.output_ui("app_update_banner"),
         ui.div(
         ui.navset_pill_list(
+            _guide_panel(),
             ui.nav_panel(
                 "Data",
                 # Round 6, data input items 2/3: the snapshot-file panel
@@ -890,11 +1137,10 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 # the running app, not only the one-time first-run setup
                 # screen (ui/setup.py, unchanged and still what a curator
                 # sees before any snapshot is configured at all).
-                # Round 8, item 5.2: two columns -- the snapshot on the
-                # left, session and app on the right -- instead of one
-                # 900px-wide column with the rest of the window empty; one
-                # column again when the window is narrow. Help texts trimmed
-                # to the facts. Item 5.1 removed the download-from-a-URL
+                # Round 8, item 5.2 put session and app in a second column;
+                # round 9, item 6 stacks them under the snapshot again, the
+                # panels and their text boxes using the width (".bc-data-stack",
+                # ".bc-grow-row"). Help texts trimmed to the facts. Item 5.1 removed the download-from-a-URL
                 # field (the CLI's ``fetch`` still takes any source), item
                 # 5.5 the attribution footer (the header link carries it).
                 ui.div(
@@ -927,6 +1173,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                                     "snap_copy",
                                     "Copy into BOLDcurator's data folder",
                                     class_="btn-sm"),
+                                class_="bc-grow-row",
                                 style="display:flex;gap:8px;align-items:center;"
                                       "flex-wrap:wrap;margin-top:4px;",
                             ),
@@ -949,6 +1196,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                                               width="200px"),
                                 ui.input_action_button("save_session", "Save",
                                                        class_="btn-sm"),
+                                class_="bc-grow-row",
                                 style="display:flex;gap:8px;align-items:center;"
                                       "flex-wrap:wrap;",
                             ),
@@ -960,6 +1208,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                                 ui.input_action_button(
                                     "delete_session", "Delete",
                                     class_="btn-sm btn-outline-danger"),
+                                class_="bc-grow-row",
                                 style="display:flex;gap:8px;align-items:center;"
                                       "flex-wrap:wrap;margin-top:8px;",
                             ),
@@ -994,7 +1243,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                             style=BOX_STYLE,
                         ),
                     ),
-                    class_="bc-data-grid",
+                    class_="bc-data-stack",
                 ),
                 value="data",
             ),
@@ -1004,7 +1253,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     ui.column(5,
                         ui.input_text_area(
                             "taxa", "Taxa — one per line, synonyms after commas",
-                            value="Nymphalidae", rows=5, width="100%"),
+                            value="Sialidae", rows=5, width="100%"),
                         ui.input_text_area(
                             "countries", "Countries / oceans — one per line",
                             rows=3, width="100%"),
@@ -1112,6 +1361,10 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         #: -- (column, descending). The specimen table sorts differently
         #: (server-side, via SpecimenTable.sort_by) because it is never
         #: materialised whole; see _spec_sort_click below.
+        #: Each group screen's "Find records" search, ``grade -> (column or
+        #: None, text)`` (round 9, item 2); kept while moving between groups,
+        #: dropped by a new search. The Specimens tab's lives on its table.
+        find_state: dict[str, tuple[str | None, str]] = {}
         checklist_sort = reactive.Value(("", False))
         gap_sort = reactive.Value(("", False))
         bins_sort = reactive.Value(("", False))
@@ -1119,6 +1372,67 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
 
         def touch() -> None:
             revision.set(revision.get() + 1)
+
+        # -- the analysis, on a background thread (round 10, item 3) ---------
+        #
+        # A search's whole-result analysis (fetch, score, grade, BINs,
+        # representatives) took 5 s for 85,000 records, and running inside a
+        # render it froze the whole app meanwhile -- Shiny serves every
+        # render and click from one event loop. It now starts on its own
+        # thread as soon as there is a search (SearchState.analysis holds a
+        # lock, so anything else asking waits for this one); the summary
+        # screens show its progress, and the Specimens tab, which pages
+        # straight from the snapshot, works meanwhile. Same plain-dict +
+        # polled-tick pattern as the snapshot download and the tree.
+        analysis_job: dict = {"running": False, "message": "", "error": "",
+                              "search": None, "seen": True}
+        analysis_tick = reactive.Value(0)
+        analysis_seq = reactive.Value(0)
+
+        def _start_analysis() -> None:
+            search = state.search
+            if (search is None or not search.can_analyse
+                    or search.analysis_is_ready
+                    or (analysis_job["running"]
+                        and analysis_job["search"] is search)):
+                return
+            analysis_job.update(
+                running=True, error="", search=search, seen=False,
+                message=f"Analysing {search.record_count:,} records")
+
+            def run() -> None:
+                def progress(text: str) -> None:
+                    if analysis_job["search"] is search:
+                        analysis_job["message"] = text
+                try:
+                    search.analysis(store, progress=progress)
+                except Exception as exc:  # noqa: BLE001 -- shown on the screens
+                    if analysis_job["search"] is search:
+                        analysis_job["error"] = f"Could not analyse this result: {exc}"
+                finally:
+                    # Plain dict only, from this thread -- see _snap_poll.
+                    if analysis_job["search"] is search:
+                        analysis_job["running"] = False
+
+            threading.Thread(target=run, daemon=True).start()
+            analysis_seq.set(analysis_seq.get() + 1)
+
+        @reactive.effect
+        def _analysis_poll():
+            analysis_seq.get()
+            if analysis_job["running"]:
+                reactive.invalidate_later(0.4)
+            with reactive.isolate():
+                analysis_tick.set(analysis_tick.get() + 1)
+                if not analysis_job["running"] and not analysis_job["seen"]:
+                    # Done: every screen (and the counts on Search, which
+                    # the representatives just changed) shows the result.
+                    analysis_job["seen"] = True
+                    touch()
+
+        def _analysing(search) -> bool:
+            return (analysis_job["running"] and analysis_job["search"] is search
+                    and not search.analysis_is_ready)
 
         # -- snapshot file management (round 5, file handling 1-3) ---------
         #
@@ -1669,8 +1983,10 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             # so it may still land after this reset; the curator can always
             # click "Build tree" again.
             phylo_state.update(running=False, message="", result=None, error="")
+            find_state.clear()
             if state.search is not None:
                 ui.update_navset("nav", selected="species")
+            _start_analysis()
             touch()
 
         # -- session save/resume (plan 3.8) ---------------------------------
@@ -1709,6 +2025,13 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             if state.search is None:
                 if not quiet_on_no_search:
                     session_msg.set("Run a search first.")
+                return
+            if _analysing(state.search):
+                # Saving needs the analysed result; waiting for it here
+                # would freeze the app until it's done.
+                if not quiet_on_no_search:
+                    session_msg.set("Still analysing this search -- save again "
+                                    "in a moment.")
                 return
             session_id = _slugify(name) or _slugify(default_name)
             try:
@@ -1756,10 +2079,12 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             state.user = (input.user() or "").strip() or state.user
             text, warnings = state.resume_session(saved)
             offset.set(0)
+            find_state.clear()
             for value in group_index.values():
                 value.set(0)
             ui.update_navset("nav", selected="species")
             session_msg.set(" ".join([text] + warnings))
+            _start_analysis()
             touch()
 
         resume_tries = {"n": 0}
@@ -1792,6 +2117,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     for grade, value in group_index.items():
                         value.set(note.get("groups", {}).get(grade, 0))
                     session_msg.set(" ".join([text] + warnings))
+                    _start_analysis()
                     touch()
                 if note.get("tab"):
                     ui.update_navset("nav", selected=note["tab"])
@@ -1908,6 +2234,22 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             search = current()
             if search is None:
                 return ui.div("Run a search first.", class_="text-muted")
+            if _analysing(search):
+                analysis_tick.get()
+                return ui.div(
+                    ui.div(
+                        ui.tags.span(class_="spinner-border spinner-border-sm",
+                                     role="status"),
+                        ui.tags.strong(f"{analysis_job['message']}..."),
+                        style="display:flex;align-items:center;gap:10px;"),
+                    ui.div("This screen fills in when it's done. The "
+                           "Specimens tab works meanwhile.",
+                           class_="small text-muted mt-1"),
+                    class_="alert alert-info py-2 px-3")
+            if analysis_job["search"] is search and analysis_job["error"] \
+                    and not search.analysis_is_ready:
+                return ui.div(analysis_job["error"],
+                              class_="alert alert-warning py-2 px-3")
             try:
                 was_ready = search.analysis_is_ready
                 result = render_body(search)
@@ -2053,11 +2395,11 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                         class_="text-muted")
                 index = min(group_index[grade].get(), len(groups) - 1)
                 group = groups[index]
-                rows = _sorted_by(
-                    _with_checked(
-                        merge_annotations(group.specimens, state.annotations),
-                        state.annotations),
-                    group_sort)
+                all_rows = _with_checked(
+                    merge_annotations(group.specimens, state.annotations),
+                    state.annotations)
+                found = find_state.get(grade)
+                rows = _sorted_by(_found_rows(grade, all_rows), group_sort)
                 # "Apply to checked" (and the count below) must act only on
                 # this group's own records -- Annotations.working is one
                 # global set, and checking rows via the per-row checkbox
@@ -2111,6 +2453,9 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                            class_="mb-1"),
                     ui.div(group.note, class_="alert alert-info py-1 px-2 small")
                     if group.note else ui.div(),
+                    _search_controls(grade, _all_columns_ordered(all_rows),
+                                     current=found, matches=len(rows),
+                                     total=len(all_rows)),
                     # Round 6, curation tools item 6: one flat row, not a
                     # column of buttons/count beside a separately-aligned
                     # cluster of labelled inputs -- that mix of a
@@ -2119,7 +2464,9 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     # than it needed to be.
                     ui.div(
                         ui.input_action_button(
-                            f"selall_{grade}", "Check this group",
+                            f"selall_{grade}",
+                            f"Check the {len(rows):,} found" if found
+                            else "Check this group",
                             class_="btn-sm"),
                         ui.input_action_button(f"clear_{grade}",
                                                "Clear checked",
@@ -2194,10 +2541,27 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     # silently re-annotate the first -- which is the opposite
                     # of working through one problem at a time. This never
                     # touches the representative pick (annotations.selected).
+                    # With a search in force, only what it found.
                     state.annotations.clear_working()
-                    for pid in group.specimens["processid"]:
-                        state.annotations.set_working(str(pid))
+                    for pid in _group_scope(grade, group):
+                        state.annotations.set_working(pid)
                     touch()
+
+            @reactive.effect
+            @reactive.event(input[f"find_go_{grade}"])
+            def _find_in_group():
+                text = (input[f"find_text_{grade}"]() or "").strip()
+                if text:
+                    find_state[grade] = (input[f"find_col_{grade}"]() or None, text)
+                else:
+                    find_state.pop(grade, None)
+                touch()
+
+            @reactive.effect
+            @reactive.event(input[f"find_clear_{grade}"])
+            def _clear_find_in_group():
+                find_state.pop(grade, None)
+                touch()
 
             @reactive.effect
             @reactive.event(input[f"clear_{grade}"])
@@ -2212,9 +2576,31 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             @reactive.event(input[f"g{grade}_apply"])
             def _apply_group():
                 group = _current_group(grade)
-                scope = ({str(pid) for pid in group.specimens["processid"]}
-                        if group is not None else set())
+                scope = _group_scope(grade, group) if group is not None else set()
                 _apply(f"g{grade}", scope=scope)
+
+            @reactive.effect
+            @reactive.event(input[f"g{grade}_clear_ann"])
+            def _clear_group_annotations():
+                group = _current_group(grade)
+                _confirm_clear(_group_scope(grade, group)
+                               if group is not None else set())
+
+        def _found_rows(grade: str, rows: pd.DataFrame) -> pd.DataFrame:
+            """``rows`` (a group's, annotations merged) narrowed to the
+            screen's search, if one is in force."""
+            found = find_state.get(grade)
+            return search_frame(rows, found[1], found[0]) if found else rows
+
+        def _group_scope(grade: str, group) -> set[str]:
+            """The records the group's check / apply / clear buttons act on:
+            the whole group, or only what its search found -- annotations
+            merged first, so a search by flag or note finds the same records
+            the table shows."""
+            rows = group.specimens
+            if grade in find_state:
+                rows = _found_rows(grade, merge_annotations(rows, state.annotations))
+            return {str(pid) for pid in rows["processid"]}
 
         def _current_group(grade: str):
             search = state.search
@@ -2361,10 +2747,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 class_="bc-phylo-hint",
             ))
             rows.append(ui.div(id=container_id, class_="bc-phylo-container"))
-            rows.append(ui.tags.script(
-                f"window.bcRenderPhylotree({json.dumps(container_id)}, "
-                f"{json.dumps(result.newick)}, {json.dumps(tips)});"
-            ))
+            rows.extend(_phylo_tree_scripts(container_id, result.newick, tips))
             return ui.div(*rows)
 
         @reactive.effect
@@ -2456,6 +2839,13 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
 
         # -- annotation, shared by every screen ----------------------------
 
+        def _tell(text: str) -> None:
+            """The status line, which only the Search tab shows -- and a
+            notification, since the toolbars are on the other tabs."""
+            status.set(text)
+            ui.notification_show(text, duration=5)
+            touch()
+
         def _apply(prefix: str, scope: set[str] | None = None) -> None:
             """Flag/note/update the *checked* records, never the
             representative pick -- see ``io.annotations``'s module docstring.
@@ -2464,29 +2854,88 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             checked AND in ``scope`` -- the current BAGS group, so a check
             left over from a different group (checked individually, not via
             "Check this group", which replaces the whole set) never gets
-            annotated alongside it. The Specimens tab passes no scope: it is
-            one continuous table across pages, not a different table per
-            page, so a checked-then-paged-away record is still meant to be
-            included.
+            annotated alongside it -- or only what the screen's "Find
+            records" search found (round 9, item 2). Without a search the
+            Specimens tab passes no scope: it is one continuous table across
+            pages, not a different table per page, so a checked-then-paged-
+            away record is still meant to be included.
             """
             working = state.annotations.working
             checked = sorted(working if scope is None else working & scope)
             if not checked:
-                status.set("Nothing checked.")
-                touch()
+                _tell("Nothing checked.")
                 return
             user = (input.user() or "").strip()
             flag = input[f"{prefix}_flag"]() or ""
             note = (input[f"{prefix}_note"]() or "").strip()
             updated = (input[f"{prefix}_updated_id"]() or "").strip()
+            if not (flag or note or updated):
+                _tell("Nothing to apply -- choose a flag, or type a note or "
+                      "Correct ID.")
+                return
             for pid in checked:
-                state.annotations.set_flag(pid, flag, user=user)
+                # Round 9, item 5: a blank flag leaves the flag alone, so a
+                # note can be added without wiping it; "Clear flag" removes
+                # it.
+                if flag == FLAG_CLEAR:
+                    state.annotations.set_flag(pid, "", user=user)
+                elif flag:
+                    state.annotations.set_flag(pid, flag, user=user)
                 if note:
                     state.annotations.set_note(pid, note, user=user)
                 if updated:
                     state.annotations.set_updated_id(pid, updated, user=user)
             status.set(f"Annotated {len(checked):,} records")
             touch()
+
+        #: ``(how many, the processids)`` a "Clear annotations" click is
+        #: waiting to have confirmed.
+        pending_clear: reactive.Value = reactive.Value(None)
+
+        def _confirm_clear(scope: set[str] | None = None) -> None:
+            """Round 9, item 5: "Clear annotations" removes the flag, note
+            and Correct ID from the checked records (in ``scope``, as
+            ``_apply``), after a confirmation -- there's no undoing it."""
+            working = state.annotations.working
+            checked = sorted(working if scope is None else working & scope)
+            annotated = state.annotations.annotated_processids()
+            targets = [p for p in checked if p in annotated]
+            if not targets:
+                _tell("Nothing to clear -- none of the checked records has a "
+                      "flag, note or Correct ID." if checked
+                      else "Nothing checked.")
+                return
+            pending_clear.set(targets)
+            ui.modal_show(ui.modal(
+                f"Remove the flag, note and Correct ID from {len(targets):,} "
+                "checked record(s)? This cannot be undone.",
+                title="Clear annotations",
+                footer=ui.div(
+                    ui.input_action_button("cancel_clear_ann", "Cancel",
+                                           class_="btn-sm"),
+                    ui.input_action_button("confirm_clear_ann", "Clear",
+                                           class_="btn-sm btn-danger"),
+                ),
+                easy_close=True,
+            ))
+
+        @reactive.effect
+        @reactive.event(input.cancel_clear_ann)
+        def _cancel_clear():
+            pending_clear.set(None)
+            ui.modal_remove()
+
+        @reactive.effect
+        @reactive.event(input.confirm_clear_ann)
+        def _do_clear():
+            targets = pending_clear.get() or []
+            pending_clear.set(None)
+            ui.modal_remove()
+            for pid in targets:
+                state.annotations.set_flag(pid, "")
+                state.annotations.set_note(pid, "")
+                state.annotations.set_updated_id(pid, "")
+            _tell(f"Cleared the annotations on {len(targets):,} records.")
 
         # -- the paged specimen table --------------------------------------
 
@@ -2512,6 +2961,10 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     for s, ok in zip(rows["species"].astype(object), level)
                 ]
 
+            found = table.search
+            searchable = table.searchable_columns
+            searchable = ([c for c in GROUP_COLUMNS if c in searchable]
+                          + [c for c in searchable if c not in GROUP_COLUMNS])
             sort_label = (
                 f"Sorted by {table.sort_column} "
                 f"({'desc' if table.sort_descending else 'asc'})"
@@ -2540,13 +2993,18 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     style="display:flex;align-items:center;gap:10px;"
                           "flex-wrap:wrap;margin-bottom:8px;",
                 ),
+                _search_controls("sp", searchable, current=found,
+                                 matches=table.total_rows,
+                                 total=search.plan.expanded_records),
                 # Round 6, curation tools item 6: one flat row -- see the
                 # matching change in _grade_body for why.
                 ui.div(
                     ui.input_action_button("select_page", "Check page",
                                            class_="btn-sm"),
-                    ui.input_action_button("select_all", "Check all",
-                                           class_="btn-sm"),
+                    ui.input_action_button(
+                        "select_all",
+                        f"Check all {table.total_rows:,} found" if found
+                        else "Check all", class_="btn-sm"),
                     ui.input_action_button("clear_selection", "Clear checked",
                                            class_="btn-sm"),
                     ui.tags.span(f"{len(state.annotations.working):,} checked",
@@ -2557,11 +3015,23 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                           "border:1px solid #dee2e6;border-radius:5px;",
                 ),
                 ui.div(
-                    ui.download_button("dl_all", "Download All", class_="btn-sm"),
-                    ui.download_button("dl_selected", "Download Selected",
-                                       class_="btn-sm"),
-                    ui.download_button("dl_annotated", "Download Annotated Records",
-                                       class_="btn-sm"),
+                    # Round 10, item 3: prepared in the background, saved by
+                    # itself when ready (prep_status, dl_prepared).
+                    ui.input_action_button("prep_all", "Download All (xlsx)",
+                                           class_="btn-sm"),
+                    ui.input_action_button("prep_selected",
+                                           "Download Selected (xlsx)",
+                                           class_="btn-sm"),
+                    ui.input_action_button("prep_annotated",
+                                           "Download Annotated Records (xlsx)",
+                                           class_="btn-sm"),
+                    # Round 9, item 3: the same records as Download Selected,
+                    # as a plain list for making a dataset on BOLD.
+                    ui.download_button(
+                        "dl_selected_ids", "Selected process IDs (txt)",
+                        class_="btn-sm",
+                        title="The representatives' process IDs, one per "
+                              "line -- paste them into a new dataset on BOLD."),
                     ui.download_button("dl_curation_report",
                                        "Download BOLD Curation Report",
                                        class_="btn-sm"),
@@ -2717,10 +3187,47 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 state.annotations.unset_selected(pid)
             touch()
 
+        def _specimen_scope() -> set[str] | None:
+            """With a search in force, Apply and Clear annotations act only
+            on the checked records it found -- the ones the table shows."""
+            search = state.search
+            if search is None or search.table.search is None:
+                return None
+            return set(search.table.all_processids())
+
         @reactive.effect
         @reactive.event(input.sp_apply)
         def _apply_specimens():
-            _apply("sp")
+            _apply("sp", scope=_specimen_scope())
+
+        @reactive.effect
+        @reactive.event(input.sp_clear_ann)
+        def _clear_specimens():
+            _confirm_clear(_specimen_scope())
+
+        @reactive.effect
+        @reactive.event(input.find_go_sp)
+        def _find_specimens():
+            """Round 9, item 2: the Specimens tab's "Find records"."""
+            search = state.search
+            if search is None:
+                return
+            text = (input.find_text_sp() or "").strip()
+            try:
+                search.table.search_for(text, input.find_col_sp() or None)
+            except (KeyError, ValueError) as exc:
+                _tell(str(exc))
+                return
+            offset.set(0)
+            touch()
+
+        @reactive.effect
+        @reactive.event(input.find_clear_sp)
+        def _clear_find_specimens():
+            if state.search is not None:
+                state.search.table.search_for("")
+                offset.set(0)
+                touch()
 
         # -- downloads -------------------------------------------------------
         #
@@ -2747,31 +3254,189 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             "curation_report": "bold_curation_report",
         }
 
-        def _register_tsv_download(kind: str, output_id: str):
-            @output(id=output_id)
-            @render.download_button(
-                filename=lambda: (f"{_TSV_FILENAME_STEM[kind]}_"
-                                  f"{export_io.timestamp()}.tsv"))
-            def _handler():
-                search = state.search
-                if search is None:
-                    yield from _empty_download("run a search first")
-                    return
-                tmpdir = tempfile.TemporaryDirectory()
-                path = Path(tmpdir.name) / "export.tsv"
-                written = search.export_specimens(store, kind, path)
-                if written is None:
-                    tmpdir.cleanup()
-                    yield from _empty_download(_EMPTY_REASONS[kind])
-                    return
-                yield from _stream_file(written, tmpdir)
+        @output(id="dl_curation_report")
+        @render.download_button(
+            filename=lambda: (f"{_TSV_FILENAME_STEM['curation_report']}_"
+                              f"{export_io.timestamp()}.tsv"))
+        def _dl_curation_report():
+            """The TSV BOLD is sent -- small, so still a direct download."""
+            search = state.search
+            if search is None:
+                yield from _empty_download("run a search first")
+                return
+            tmpdir = tempfile.TemporaryDirectory()
+            path = Path(tmpdir.name) / "export.tsv"
+            written = search.export_specimens(store, "curation_report", path)
+            if written is None:
+                tmpdir.cleanup()
+                yield from _empty_download(_EMPTY_REASONS["curation_report"])
+                return
+            yield from _stream_file(written, tmpdir)
 
-        for _kind, _output_id in (
-            ("all", "dl_all"), ("selected", "dl_selected"),
-            ("annotated", "dl_annotated"),
-            ("curation_report", "dl_curation_report"),
-        ):
-            _register_tsv_download(_kind, _output_id)
+        # -- Excel downloads, prepared in the background (round 10, item 3) --
+        #
+        # All / Selected / Annotated (round 9, item 4) took 50 s as Excel for
+        # 85,000 records and, as a download handler, ran on Shiny's one event
+        # loop: the app froze and the 4-second "Downloading" toast was long
+        # gone before anything happened. Now a click starts the workbook on a
+        # thread, with the annotations copied as they were at the click; a
+        # panel on every tab says how far it has got; and when it's written
+        # the page clicks the hidden "dl_prepared" link, which saves it.
+        prep_job: dict = {"running": False, "kind": "", "filename": "",
+                          "done": 0, "total": 0, "stage": "", "error": "",
+                          "path": None, "tmpdir": None, "delivered": True,
+                          "finished_at": 0.0}
+        prep_tick = reactive.Value(0)
+        prep_seq = reactive.Value(0)
+
+        def _start_prep(kind: str) -> None:
+            search = state.search
+            if search is None:
+                _tell("Run a search first.")
+                return
+            if prep_job["running"]:
+                _tell(f"Still preparing {prep_job['filename']} -- it saves "
+                      "when it's done.")
+                return
+            if prep_job["tmpdir"] is not None:
+                prep_job["tmpdir"].cleanup()
+            tmpdir = tempfile.TemporaryDirectory()
+            filename = f"{_TSV_FILENAME_STEM[kind]}_{export_io.timestamp()}.xlsx"
+            prep_job.update(running=True, kind=kind, filename=filename, done=0,
+                            total=0, error="", path=None, tmpdir=tmpdir,
+                            delivered=False,
+                            stage="Waiting for the analysis"
+                            if not search.analysis_is_ready else "Collecting records")
+            annotations = state.annotations.snapshot()
+
+            def run() -> None:
+                def progress(done: int, total: int) -> None:
+                    prep_job.update(stage="Writing", done=done, total=total)
+                try:
+                    search.analysis(store)
+                    prep_job["stage"] = "Collecting records"
+                    written = search.export_specimens(
+                        store, kind, Path(tmpdir.name) / "export.xlsx",
+                        excel=True, annotations=annotations, progress=progress)
+                    if written is None:
+                        prep_job["error"] = f"Nothing to export: {_EMPTY_REASONS[kind]}."
+                    else:
+                        prep_job["path"] = written
+                except Exception as exc:  # noqa: BLE001 -- shown in the panel
+                    prep_job["error"] = f"Could not prepare {filename}: {exc}"
+                finally:
+                    # Plain dict only, from this thread -- see _snap_poll.
+                    prep_job["finished_at"] = time.monotonic()
+                    prep_job["running"] = False
+
+            threading.Thread(target=run, daemon=True).start()
+            prep_seq.set(prep_seq.get() + 1)
+
+        for _kind in ("all", "selected", "annotated"):
+            def _register_prep(kind: str = _kind):
+                @reactive.effect
+                @reactive.event(input[f"prep_{kind}"])
+                def _prep():
+                    _start_prep(kind)
+            _register_prep()
+
+        @reactive.effect
+        async def _prep_poll():
+            prep_seq.get()
+            if prep_job["running"]:
+                reactive.invalidate_later(0.3)
+            elif prep_job["finished_at"] and \
+                    time.monotonic() - prep_job["finished_at"] < PREP_PANEL_SECONDS:
+                reactive.invalidate_later(1)       # to hide the panel again
+            with reactive.isolate():
+                prep_tick.set(prep_tick.get() + 1)
+            if not prep_job["running"] and not prep_job["delivered"]:
+                prep_job["delivered"] = True
+                if prep_job["path"] is not None:
+                    await session.send_custom_message("bc_click",
+                                                      {"id": "dl_prepared"})
+
+        @reactive.effect
+        @reactive.event(input.prep_dismiss)
+        def _prep_dismiss():
+            prep_job["finished_at"] = 0.0
+            prep_tick.set(prep_tick.get() + 1)
+
+        @output
+        @render.ui
+        def prep_status():
+            prep_tick.get()
+            job = prep_job
+            close = ui.input_action_link("prep_dismiss", "\u2715",
+                                         class_="bc-prep-close",
+                                         title="Hide this")
+            if job["running"]:
+                total, done = job["total"], job["done"]
+                share = done / total if total else 0
+                detail = (f"{done:,} of {total:,} rows." if total
+                          else job["stage"] + "...")
+                return ui.div(
+                    ui.div(ui.tags.span(class_="spinner-border spinner-border-sm"),
+                           ui.tags.strong(f"Preparing {job['filename']}"),
+                           style="display:flex;gap:8px;align-items:center;"),
+                    ui.div(ui.div(style=f"width:{share:.0%};height:100%;"
+                                        "background:#0d6efd;"),
+                           style="height:6px;background:#dee2e6;"
+                                 "border-radius:3px;margin:6px 0 4px;"),
+                    ui.div(detail + " It saves by itself when it's ready; "
+                           "keep working meanwhile.", class_="small"),
+                    class_="bc-prep")
+            if not job["finished_at"] or \
+                    time.monotonic() - job["finished_at"] >= PREP_PANEL_SECONDS:
+                return ui.div()
+            if job["error"]:
+                return ui.div(close, job["error"], class_="bc-prep")
+            return ui.div(
+                close,
+                ui.tags.strong(f"{job['filename']} is ready"),
+                ui.div("Saving to your Downloads folder (or a save dialog). ",
+                       ui.tags.a("Save it again", href="#",
+                                 onclick="document.getElementById("
+                                         "'dl_prepared').click();return false;"),
+                       class_="small"),
+                class_="bc-prep")
+
+        # suspend_when_hidden=False: the link is hidden, and Shiny otherwise
+        # never gives a hidden download link its address.
+        @output(id="dl_prepared", suspend_when_hidden=False)
+        @render.download_button(filename=lambda: prep_job["filename"] or "export.xlsx",
+                                media_type=XLSX_MEDIA_TYPE)
+        def _dl_prepared():
+            path = prep_job["path"]
+            if prep_job["running"] or path is None or not Path(path).exists():
+                yield from _empty_download("nothing has been prepared yet")
+                return
+            with open(path, "rb") as fh:
+                while chunk := fh.read(1 << 20):
+                    yield chunk
+
+        def _prep_cleanup() -> None:
+            if prep_job["tmpdir"] is not None and not prep_job["running"]:
+                prep_job["tmpdir"].cleanup()
+
+        session.on_ended(_prep_cleanup)
+
+        @output(id="dl_selected_ids")
+        @render.download_button(
+            filename=lambda: f"selected_processids_{export_io.timestamp()}.txt",
+            media_type="text/plain")
+        def _dl_selected_ids():
+            """Round 9, item 3: the representatives' processids, one per
+            line, to paste into a new dataset on BOLD."""
+            search = state.search
+            if search is None:
+                yield from _empty_download("run a search first")
+                return
+            ids = search.representative_processids()
+            if not ids:
+                yield from _empty_download("no specimens selected")
+                return
+            yield "".join(f"{p}\n" for p in ids)
 
         def _register_fasta_download(output_id: str, *, selected_only: bool):
             @output(id=output_id)
@@ -2823,8 +3488,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         @output(id="dl_bin_analysis")
         @render.download_button(
             filename=lambda: f"bin_analysis_{export_io.timestamp()}.xlsx",
-            media_type="application/vnd.openxmlformats-officedocument"
-                       ".spreadsheetml.sheet")
+            media_type=XLSX_MEDIA_TYPE)
         def _dl_bin_analysis():
             search = state.search
             if search is None:
@@ -2861,8 +3525,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             @output(id=output_id)
             @render.download_button(
                 filename=lambda: f"species_analysis_{export_io.timestamp()}.xlsx",
-                media_type="application/vnd.openxmlformats-officedocument"
-                           ".spreadsheetml.sheet")
+                media_type=XLSX_MEDIA_TYPE)
             def _handler():
                 yield from _species_analysis_download()
 
@@ -3210,7 +3873,18 @@ def run(snapshot: str | Path, *, host: str = "127.0.0.1", port: int = 8000,
     import shiny
 
     from ..desktop import WEBSOCKET_KEEPALIVE
+    from ..localguard import LocalGuard, is_loopback
 
-    shiny.run_app(
+    # Round 9, item 9b: behind the same guard as the desktop window, so
+    # this prints the one URL (with its one-time token) that gets in.
+    guarded = LocalGuard(
         create_app(snapshot, page_size=page_size, sessions_path=sessions_path),
-        host=host, port=port, **WEBSOCKET_KEEPALIVE)
+        check_host=is_loopback(host))
+    shown = "127.0.0.1" if host in ("0.0.0.0", "::") else host  # nosec B104 # comparing, not binding
+    if not is_loopback(host):
+        print(f"WARNING: serving on {host}, not this computer only: anyone on "
+              "the network can reach the port, over plain HTTP, and whoever "
+              "opens the URL below first gets the session.", flush=True)
+    print(f"Open BOLDcurator at {guarded.launch_url(f'http://{shown}:{port}')}",
+          flush=True)
+    shiny.run_app(guarded, host=host, port=port, **WEBSOCKET_KEEPALIVE)

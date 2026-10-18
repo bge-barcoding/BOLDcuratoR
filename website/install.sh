@@ -49,14 +49,21 @@ find_uv() {
 UV="$(find_uv || true)"
 if [ -z "$UV" ]; then
     say "==> Installing uv, the tool that installs and updates BOLDcurator"
+    # UV_NO_MODIFY_PATH: uv's installer would otherwise also edit ~/.zshrc,
+    # ~/.bashrc and the fish config, and stop with an error if one of them
+    # isn't writable (a ~/.zshrc owned by root, say -- round 9, item 8),
+    # after uv itself is already installed. This script finds uv where it
+    # lands and does the PATH step itself, at the end, as best effort.
     if command -v curl >/dev/null 2>&1; then
-        curl -LsSf https://astral.sh/uv/install.sh | sh
+        curl -LsSf https://astral.sh/uv/install.sh | UV_NO_MODIFY_PATH=1 sh \
+            || say "(uv's installer reported a problem; carrying on if uv is there)"
     elif command -v wget >/dev/null 2>&1; then
-        wget -qO- https://astral.sh/uv/install.sh | sh
+        wget -qO- https://astral.sh/uv/install.sh | UV_NO_MODIFY_PATH=1 sh \
+            || say "(uv's installer reported a problem; carrying on if uv is there)"
     else
         fail "neither curl nor wget is available to download uv"
     fi
-    UV="$(find_uv)" || fail "uv was installed but could not be found; open a new terminal and run this again"
+    UV="$(find_uv)" || fail "uv could not be installed (see the messages above)"
 fi
 
 say "==> Installing BOLDcurator ($SPEC, Python $PYTHON_VERSION)"
@@ -69,10 +76,22 @@ say "==> Adding the BOLDcurator (Python) shortcut"
     || fail "BOLDcurator is installed, but the shortcut could not be created"
 
 # Best effort: the app and its shortcut already work without it.
-"$UV" tool update-shell >/dev/null 2>&1 || true
+PATH_NOTE=""
+if ! "$UV" tool update-shell >/dev/null 2>&1; then
+    PATH_NOTE="yes"
+fi
 
 say ""
 say "BOLDcurator is installed."
+if [ -n "$PATH_NOTE" ]; then
+    # Typically a shell startup file this user can't write to (ls -l ~/.zshrc
+    # shows who owns it). The shortcut doesn't need PATH; the terminal
+    # command does.
+    say "(Your shell's startup file could not be updated, so new terminals"
+    say " won't find the 'boldcurator' command by name. The shortcut works."
+    say " To fix it, add this line to your shell's startup file:"
+    say "   export PATH=\"$BIN_DIR:\$PATH\")"
+fi
 case "$(uname -s)" in
     Darwin) say "Open \"BOLDcurator (Python)\" from your Applications folder or the Desktop." ;;
     *)      say "Open \"BOLDcurator (Python)\" from your app menu or the Desktop." ;;
