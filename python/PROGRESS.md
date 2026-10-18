@@ -10,6 +10,12 @@ performance investigation, the packaging saga) was trimmed from this file on
 2026-09-26 -- it is in git history (`git log -- python/PROGRESS.md`) if a
 similar bug resurfaces and you want to see how it was fixed last time.
 
+## Round 10 curator feedback (2026-10-18) -- in progress
+
+- [x] 1 Guide: use the window's width (it stopped at 900px) -- two columns (`.bc-guide-grid`, 3:1): the steps, and the grades and the BAGS paper in a box beside them; one column below 1100px. Found on the way: the list's padding cut "10." to "0.".
+- [x] 2 Default search: "Sialidae", not "Nymphalidae" (the Search tab's taxa box).
+- [ ] 3 Speed: the first table after a large search, and large Excel downloads, are slow, and the download toast disappears long before the save dialog. Options to discuss before changing anything.
+
 ## Round 9 curator feedback (2026-10-17) -- done
 
 All items closed; 9c deliberately not done (owner's call). Still to confirm
