@@ -97,3 +97,39 @@ def test_crafted_values_cannot_break_out_of_html_attributes():
     assert {"href", "title", "data-pid", "data-sort-col"} <= names
     # The BIN is percent-encoded in the link, and still lands on the portal.
     assert "query=x%27%20onmouseover%3D%27alert%281%29[bin]" in html
+
+
+def test_another_thread_gets_its_own_locked_down_cursor(fixture_snapshot):
+    """Round 10, item 3: the analysis and downloads run on background
+    threads. Each gets its own cursor -- registrations don't collide with
+    the main thread's -- and it is as locked down as the main connection."""
+    import threading
+
+    import pandas as pd
+
+    from boldcurator.data.snapshot import SnapshotStore
+
+    with SnapshotStore(fixture_snapshot) as store:
+        store.connection.register("_wanted_rows", pd.DataFrame({"rid": [1]}))
+        seen: dict = {}
+
+        def worker():
+            con = store.connection
+            seen["own"] = con is not store._con and con is store.connection
+            seen["count"] = con.execute("SELECT count(*) FROM specimen").fetchone()[0]
+            try:
+                con.execute("SELECT * FROM _wanted_rows")
+                seen["shared"] = True
+            except Exception:  # noqa: BLE001
+                seen["shared"] = False
+            try:
+                con.execute("SET enable_external_access = true")
+                seen["locked"] = False
+            except Exception:  # noqa: BLE001
+                seen["locked"] = True
+
+        t = threading.Thread(target=worker)
+        t.start()
+        t.join()
+        assert seen == {"own": True, "count": store.info().row_count,
+                        "shared": False, "locked": True}
