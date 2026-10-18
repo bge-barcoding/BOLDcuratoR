@@ -283,17 +283,27 @@ def analyse_plan(
     warnings: list[str] | None = None,
     limit: int | None = None,
     auto_select: bool = True,
+    progress=None,
 ) -> SearchResult:
     """Everything after planning: fetch, score, grade, analyse, auto-select.
 
     Split out of :func:`run_search` so a caller that already holds a plan --
     the GUI, which plans once and pages the specimen table off the same plan --
     can compute the whole-result summaries without re-resolving the search.
+    ``progress(text)``, when given, is told each stage as it starts (the
+    GUI runs this on a background thread and shows it -- round 10, item 3).
     """
+    def say(text: str) -> None:
+        if progress is not None:
+            progress(text)
+
     warnings = list(warnings or [])
+    say(f"Fetching {plan.expanded_records:,} records")
     frame = fetch_planned(store, plan, limit=limit)
+    say("Scoring each record")
     frame = process_specimen_data(frame)
     frame = score_and_rank(frame)
+    say("Grading species (BAGS)")
 
     # Only the BINs this result actually touches. Loading the whole
     # bin_species table cost seconds and gigabytes on EVERY search, however
@@ -325,6 +335,7 @@ def analyse_plan(
     # BIN somewhere among their (possibly several) BINs.
     shared = bags.discordant_bins(frame, bin_species)
 
+    say("Analysing BINs")
     analysis = bins.analyse_bins(frame)
     selections = selection.auto_select_best_specimens(frame) if auto_select else {}
 

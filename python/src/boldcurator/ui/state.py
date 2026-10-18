@@ -17,6 +17,7 @@ No Shiny here. This is the state a GUI drives, not the GUI.
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 
 from ..config.constants import DOWNLOAD_LIMITS
@@ -91,6 +92,11 @@ class SearchState:
     #: on purpose must stay empty.
     fill_selection_gaps: bool = True
     _analysis: SearchResult | None = field(default=None, repr=False)
+    #: Round 10, item 3: the analysis runs on a background thread as soon as
+    #: a search is made; anything else asking for it meanwhile waits for
+    #: that one rather than computing it a second time.
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False,
+                                  compare=False)
     _groups: dict[str, list[SpecimenGroup]] = field(default_factory=dict, repr=False)
 
     @property
@@ -105,7 +111,7 @@ class SearchState:
     def analysis_is_ready(self) -> bool:
         return self._analysis is not None
 
-    def analysis(self, store: SnapshotStore) -> SearchResult:
+    def analysis(self, store: SnapshotStore, *, progress=None) -> SearchResult:
         """The whole-result summaries. Computed once, on first use.
 
         Auto-selects a best specimen per (BIN x country) the first time this
@@ -134,26 +140,43 @@ class SearchState:
         what ``fill_selection_gaps`` is for: without it every BIN outside the
         first search got no representative.
         """
-        if self._analysis is None:
-            if not self.can_analyse:
-                raise ResultTooLargeToAnalyse(self.record_count)
-            # auto_select=False: analyse_plan's own auto-select can't see the
-            # session's Annotations object, so it is done just below instead,
-            # against the one store the rest of the app reads and writes.
-            self._analysis = analyse_plan(store, self.plan, auto_select=False,
-                                          taxonomy_groups=self.taxonomy_groups)
-            if self.annotations is not None:
-                own_processids = set(self._analysis.specimens.get("processid", []))
-                existing = {
-                    pid: value for pid, value in self.annotations.selected.items()
-                    if pid in own_processids
-                }
-                chosen = selection.auto_select_best_specimens(
-                    self._analysis.specimens, existing=existing,
-                    fill_gaps=self.fill_selection_gaps)
-                if chosen is not existing:
-                    self.annotations.selected.update(chosen)
+        with self._lock:
+            if self._analysis is None:
+                self._analysis = self._analyse(store, progress)
         return self._analysis
+
+    def _analyse(self, store: SnapshotStore, progress) -> SearchResult:
+        """The work behind :meth:`analysis`, published only once the
+        representatives are chosen -- ``analysis_is_ready`` means done.
+
+        Safe on a background thread while the curator works: it reads a copy
+        of the representative picks, and adds its own by swapping in a new
+        dict rather than changing the one other code may be iterating.
+        """
+        if not self.can_analyse:
+            raise ResultTooLargeToAnalyse(self.record_count)
+        # auto_select=False: analyse_plan's own auto-select can't see the
+        # session's Annotations object, so it is done just below instead,
+        # against the one store the rest of the app reads and writes.
+        result = analyse_plan(store, self.plan, auto_select=False,
+                              taxonomy_groups=self.taxonomy_groups,
+                              progress=progress)
+        if self.annotations is not None:
+            if progress is not None:
+                progress("Choosing representatives")
+            own_processids = set(result.specimens.get("processid", []))
+            existing = {
+                pid: value for pid, value in dict(self.annotations.selected).items()
+                if pid in own_processids
+            }
+            chosen = selection.auto_select_best_specimens(
+                result.specimens, existing=existing,
+                fill_gaps=self.fill_selection_gaps)
+            if chosen is not existing:
+                merged = dict(self.annotations.selected)   # one atomic copy
+                merged.update(chosen)
+                self.annotations.selected = merged
+        return result
 
     def checklist(self, store: SnapshotStore):
         result = self.analysis(store)

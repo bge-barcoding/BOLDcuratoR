@@ -910,3 +910,39 @@ def test_tree_data_cannot_close_its_script_element():
                      html, re.S).group(1)
     assert json.loads(data) == {"newick": f"({evil}:1);", "tips": tips}
     assert json.loads(_json_for_script(evil)) == evil
+
+
+def test_the_analysis_runs_once_however_many_threads_ask(store, monkeypatch):
+    """Round 10, item 3: the app starts the analysis on a background thread
+    as soon as a search is made; a screen asking at the same time must wait
+    for that run, not start a second (which would also auto-select twice)."""
+    import threading
+    import time
+
+    from boldcurator.ui import state as state_module
+    from boldcurator.ui.state import AppState
+
+    real = state_module.analyse_plan
+    calls = []
+
+    def slow(*args, **kwargs):
+        calls.append(1)
+        time.sleep(0.3)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(state_module, "analyse_plan", slow)
+    app_state = AppState(store)
+    app_state.run_search("Pieris")
+    search = app_state.search
+    stages: list[str] = []
+    results = []
+    worker = threading.Thread(
+        target=lambda: results.append(search.analysis(store, progress=stages.append)))
+    worker.start()
+    time.sleep(0.05)
+    assert not search.analysis_is_ready             # published only when done
+    results.append(search.analysis(store))
+    worker.join()
+    assert len(calls) == 1 and results[0] is results[1]
+    assert stages[0].startswith("Fetching") and stages[-1] == "Choosing representatives"
+    assert app_state.annotations.selected            # representatives chosen

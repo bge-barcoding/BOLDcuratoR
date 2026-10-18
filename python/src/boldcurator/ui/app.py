@@ -1346,6 +1346,67 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         def touch() -> None:
             revision.set(revision.get() + 1)
 
+        # -- the analysis, on a background thread (round 10, item 3) ---------
+        #
+        # A search's whole-result analysis (fetch, score, grade, BINs,
+        # representatives) took 5 s for 85,000 records, and running inside a
+        # render it froze the whole app meanwhile -- Shiny serves every
+        # render and click from one event loop. It now starts on its own
+        # thread as soon as there is a search (SearchState.analysis holds a
+        # lock, so anything else asking waits for this one); the summary
+        # screens show its progress, and the Specimens tab, which pages
+        # straight from the snapshot, works meanwhile. Same plain-dict +
+        # polled-tick pattern as the snapshot download and the tree.
+        analysis_job: dict = {"running": False, "message": "", "error": "",
+                              "search": None, "seen": True}
+        analysis_tick = reactive.Value(0)
+        analysis_seq = reactive.Value(0)
+
+        def _start_analysis() -> None:
+            search = state.search
+            if (search is None or not search.can_analyse
+                    or search.analysis_is_ready
+                    or (analysis_job["running"]
+                        and analysis_job["search"] is search)):
+                return
+            analysis_job.update(
+                running=True, error="", search=search, seen=False,
+                message=f"Analysing {search.record_count:,} records")
+
+            def run() -> None:
+                def progress(text: str) -> None:
+                    if analysis_job["search"] is search:
+                        analysis_job["message"] = text
+                try:
+                    search.analysis(store, progress=progress)
+                except Exception as exc:  # noqa: BLE001 -- shown on the screens
+                    if analysis_job["search"] is search:
+                        analysis_job["error"] = f"Could not analyse this result: {exc}"
+                finally:
+                    # Plain dict only, from this thread -- see _snap_poll.
+                    if analysis_job["search"] is search:
+                        analysis_job["running"] = False
+
+            threading.Thread(target=run, daemon=True).start()
+            analysis_seq.set(analysis_seq.get() + 1)
+
+        @reactive.effect
+        def _analysis_poll():
+            analysis_seq.get()
+            if analysis_job["running"]:
+                reactive.invalidate_later(0.4)
+            with reactive.isolate():
+                analysis_tick.set(analysis_tick.get() + 1)
+                if not analysis_job["running"] and not analysis_job["seen"]:
+                    # Done: every screen (and the counts on Search, which
+                    # the representatives just changed) shows the result.
+                    analysis_job["seen"] = True
+                    touch()
+
+        def _analysing(search) -> bool:
+            return (analysis_job["running"] and analysis_job["search"] is search
+                    and not search.analysis_is_ready)
+
         # -- snapshot file management (round 5, file handling 1-3) ---------
         #
         # A download or a copy lands as a *new* file, never overwriting the
@@ -1898,6 +1959,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             find_state.clear()
             if state.search is not None:
                 ui.update_navset("nav", selected="species")
+            _start_analysis()
             touch()
 
         # -- session save/resume (plan 3.8) ---------------------------------
@@ -1936,6 +1998,13 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             if state.search is None:
                 if not quiet_on_no_search:
                     session_msg.set("Run a search first.")
+                return
+            if _analysing(state.search):
+                # Saving needs the analysed result; waiting for it here
+                # would freeze the app until it's done.
+                if not quiet_on_no_search:
+                    session_msg.set("Still analysing this search -- save again "
+                                    "in a moment.")
                 return
             session_id = _slugify(name) or _slugify(default_name)
             try:
@@ -1988,6 +2057,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 value.set(0)
             ui.update_navset("nav", selected="species")
             session_msg.set(" ".join([text] + warnings))
+            _start_analysis()
             touch()
 
         resume_tries = {"n": 0}
@@ -2020,6 +2090,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     for grade, value in group_index.items():
                         value.set(note.get("groups", {}).get(grade, 0))
                     session_msg.set(" ".join([text] + warnings))
+                    _start_analysis()
                     touch()
                 if note.get("tab"):
                     ui.update_navset("nav", selected=note["tab"])
@@ -2136,6 +2207,22 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             search = current()
             if search is None:
                 return ui.div("Run a search first.", class_="text-muted")
+            if _analysing(search):
+                analysis_tick.get()
+                return ui.div(
+                    ui.div(
+                        ui.tags.span(class_="spinner-border spinner-border-sm",
+                                     role="status"),
+                        ui.tags.strong(f"{analysis_job['message']}..."),
+                        style="display:flex;align-items:center;gap:10px;"),
+                    ui.div("This screen fills in when it's done. The "
+                           "Specimens tab works meanwhile.",
+                           class_="small text-muted mt-1"),
+                    class_="alert alert-info py-2 px-3")
+            if analysis_job["search"] is search and analysis_job["error"] \
+                    and not search.analysis_is_ready:
+                return ui.div(analysis_job["error"],
+                              class_="alert alert-warning py-2 px-3")
             try:
                 was_ready = search.analysis_is_ready
                 result = render_body(search)
