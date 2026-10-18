@@ -1226,7 +1226,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     ui.column(5,
                         ui.input_text_area(
                             "taxa", "Taxa — one per line, synonyms after commas",
-                            value="Nymphalidae", rows=5, width="100%"),
+                            value="Sialidae", rows=5, width="100%"),
                         ui.input_text_area(
                             "countries", "Countries / oceans — one per line",
                             rows=3, width="100%"),
