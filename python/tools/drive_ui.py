@@ -550,15 +550,28 @@ def main(argv: list[str] | None = None) -> int:
               new_session != old_session and "Specimens" in active
               and page.locator("#specimens_body table").count() > 0,
               f"tab {active!r}")
-        href = page.get_attribute("#dl_all", "href") or ""
+        href = page.get_attribute("#dl_curation_report", "href") or ""
         download = page.request.get(f"{base}/{href.lstrip('/')}")
         check("a download after reconnecting is the file, not an error",
               download.ok and "json" not in download.headers.get("content-type", ""),
               f"{download.status} {download.headers.get('content-type')}")
-        # Round 9, items 3 and 4.
-        check("Download All is an Excel workbook",
-              download.body()[:2] == b"PK",
-              download.headers.get("content-disposition", ""))
+        # Round 9, item 4 and round 10, item 3: Download All is an Excel
+        # workbook, prepared in the background with a progress panel, and
+        # its save starts by itself once it's written.
+        with page.expect_download(timeout=120_000) as saved:
+            page.click("#prep_all")
+            page.wait_for_selector(".bc-prep", timeout=10_000)
+            panel = page.locator(".bc-prep").inner_text()
+        workbook = Path(saved.value.path()).read_bytes()
+        check("Download All is prepared with a progress panel, then saves itself",
+              # The fixture is small enough to be ready at once.
+              ("Preparing all_specimens_" in panel or "is ready" in panel)
+              and saved.value.suggested_filename.endswith(".xlsx")
+              and workbook[:2] == b"PK",
+              f"{saved.value.suggested_filename}, {len(workbook):,} bytes")
+        time.sleep(SETTLE)
+        check("the panel then says it's ready",
+              "is ready" in page.locator(".bc-prep").inner_text())
         href = page.get_attribute("#dl_selected_ids", "href") or ""
         ids = page.request.get(f"{base}/{href.lstrip('/')}")
         lines = ids.text().splitlines()

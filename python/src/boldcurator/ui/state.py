@@ -248,14 +248,22 @@ class SearchState:
     # not be able to click "Download Selected" into an empty file.
 
     def export_specimens(self, store: SnapshotStore, kind: str, path, *,
-                         excel: bool = False) -> "Path | None":
+                         excel: bool = False, annotations: Annotations | None = None,
+                         progress=None) -> "Path | None":
         """``excel`` writes a workbook instead of a TSV (round 9, item 4:
-        the Specimens tab's All / Selected / Annotated downloads)."""
+        the Specimens tab's All / Selected / Annotated downloads).
+
+        Round 10, item 3: the app prepares a workbook on a background
+        thread, so it passes ``annotations`` -- a copy taken when the button
+        was clicked, which the curator's next click can't change mid-write
+        -- and ``progress(rows_done, rows_total)``, for its progress line.
+        """
         from ..io import exports as export_io
 
         result = self.analysis(store)
         frame = result.specimens
-        ann = self.annotations if self.annotations is not None else Annotations()
+        ann = annotations if annotations is not None else (
+            self.annotations if self.annotations is not None else Annotations())
 
         if kind == "all":
             rows = export_io.merge_annotations(frame, ann)
@@ -273,7 +281,8 @@ class SearchState:
         if len(rows) == 0:
             return None
         if excel:
-            return export_io.write_xlsx(rows, path, snapshot_id=result.snapshot_id)
+            return export_io.write_xlsx(rows, path, snapshot_id=result.snapshot_id,
+                                        progress=progress)
         return export_io.write_tsv(rows, path, snapshot_id=result.snapshot_id)
 
     def representative_processids(self) -> list[str]:

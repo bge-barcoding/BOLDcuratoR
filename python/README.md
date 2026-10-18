@@ -64,7 +64,8 @@ identification, and Clear annotations to undo them), "Find records" on
 Specimens and every BAGS group (check all it found, then annotate them),
 "checked" records and a separate representative pick
 (auto-selected per BIN x country on a fresh search). Downloads: all /
-selected / annotated records (xlsx), the selected process IDs (one per line,
+selected / annotated records (xlsx, prepared in the background with a
+progress panel, then saved by themselves), the selected process IDs (one per line,
 for a BOLD dataset), the BOLD curation report (TSV), FASTA, CSV, xlsx
 species and BIN analyses, and the tree as Newick.
 
@@ -209,7 +210,7 @@ The server only lets in the client that opened its launch URL, which
 carries a one-time token (`localguard.py`), so `gui` prints it ("Open
 BOLDcurator at ...") and each `drive_ui.py` run needs a fresh server.
 
-`drive_ui.py` makes 56 checks across every tab and exits non-zero on a
+`drive_ui.py` makes 57 checks across every tab and exits non-zero on a
 failure. When adding one, match against the table, not the panel -- the flag
 `<select>` contains every flag name, so a panel-wide text match passes for an
 annotation that never rendered.
@@ -230,6 +231,7 @@ Measured on the real 7.95 GB snapshot:
 | Search, `Nymphalidae` (89,479 records) | 8.2 s | 2.1 s |
 | Fetch 183 sequences | 7.4 s, +6 GB RSS | **0.44 s**, +169 MB |
 | One page of the specimen table, any result size | -- | ~50 ms |
+| Download All as xlsx, 85,067 records (fake-package snapshot) | 50 s | 5.5 s |
 
 Three rules came out of it; keep them:
 
@@ -245,7 +247,10 @@ Three rules came out of it; keep them:
   15 ms.
 
 Performance is closed: reopen it only with a measurement showing a curator
-waiting.
+waiting. (Round 10 did: large searches and Excel downloads. Anything slow
+now runs on a background thread with visible progress -- Shiny serves every
+render, click and download from one event loop, so slow work there freezes
+the whole app.)
 
 ## Architecture
 

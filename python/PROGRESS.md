@@ -10,11 +10,11 @@ performance investigation, the packaging saga) was trimmed from this file on
 2026-09-26 -- it is in git history (`git log -- python/PROGRESS.md`) if a
 similar bug resurfaces and you want to see how it was fixed last time.
 
-## Round 10 curator feedback (2026-10-18) -- in progress
+## Round 10 curator feedback (2026-10-18) -- done
 
 - [x] 1 Guide: use the window's width (it stopped at 900px) -- two columns (`.bc-guide-grid`, 3:1): the steps, and the grades and the BAGS paper in a box beside them; one column below 1100px. Found on the way: the list's padding cut "10." to "0.".
 - [x] 2 Default search: "Sialidae", not "Nymphalidae" (the Search tab's taxa box).
-- [ ] 3 Speed: the first table after a large search, and large Excel downloads, are slow, and the download toast disappears long before the save dialog. Options to discuss before changing anything -- measured, options put to the owner, awaiting a choice. On a 200,000-record fake-package snapshot (`make_fake_package.py --rows 200000`; its Nymphalidae is 85,067 records, about the real family's size), this sandbox:
+- [x] 3 Speed: the first table after a large search, and large Excel downloads, are slow, and the download toast disappears long before the save dialog. Options to discuss before changing anything -- measured, options put to the owner, awaiting a choice. On a 200,000-record fake-package snapshot (`make_fake_package.py --rows 200000`; its Nymphalidae is 85,067 records, about the real family's size), this sandbox:
 
   | Step | Pieridae (28,329) | Nymphalidae (85,067) |
   |---|---|---|
@@ -28,6 +28,7 @@ similar bug resurfaces and you want to see how it was fixed last time.
   The owner chose A1 (faster writer) + A2 (prepare in the background, then save) + B1 (analyse in the background). A TSV-then-convert route was considered and dropped: the conversion *is* the Excel writing.
   - [x] A1 `write_xlsx` writes the spreadsheet XML itself, streamed into the zip 2,000 rows at a time, with inline strings (never formulas), a bold frozen header and the About sheet: Nymphalidae's 85,067 x 83 in **5.5 s** (was 50 s). Checked by reopening in openpyxl and converting with LibreOffice (`=1+1` stays text). It reports progress per chunk.
   - [x] B1 The analysis starts on a background thread as soon as there is a search (also after loading a session or reconnecting): `_start_analysis` in `ui/app.py`. `SearchState.analysis` holds a lock, so anything else asking waits for that run; the result is published only once representatives are chosen, from a copy of the picks, swapped in as a new dict. Every summary screen shows the stage ("Fetching 85,067 records...", scoring, BAGS, BINs, representatives) with a spinner, and the Specimens tab works meanwhile: on the 85,067-record search, the progress line at 0.1 s, a specimen page at 1.8 s with the analysis still running, the checklist at 8 s. Autosave skips while it runs (saving needs the result).
+  - [x] A2 Download All / Selected / Annotated are now buttons that prepare the workbook on a background thread (`_start_prep`), from a copy of the annotations taken at the click (`Annotations.snapshot`). A panel in the corner, on every tab, shows "Preparing all_specimens_....xlsx" with a bar and "40,000 of 85,067 rows". When it's written, the server asks the page (custom message `bc_click`) to click the hidden `dl_prepared` link, and the save starts by itself; the panel says it's ready, offers "Save it again", and goes after 20 s. With nothing to export it says why instead of saving an empty workbook (replacing round 9's one-cell workbook). The hidden link needs `suspend_when_hidden=False`: Shiny never gives a hidden download link its address. Measured, Nymphalidae, clicked the moment the search ran: waiting for the analysis 4 s, then writing, saved at **10.4 s** (was over 55 s, frozen), and the table paged in 0.6 s meanwhile. `drive_ui.py` checks the save starts by itself. The curation report (TSV), FASTA and the process-ID list are still direct downloads. **To confirm on a real machine:** the native window starts a download the page clicks for it (WebView2, WKWebView).
   - [x] Groundwork: `SnapshotStore.connection` gives each thread its own cursor (same read-only, locked-down database, its own registrations).
 
   Also found: Shiny runs a download's generator, and every render, on its one event loop (`shiny/session/_session.py`, `wrap_content_sync`), so while either runs the **whole app is frozen** -- every button, every tab. That, plus a 4-second toast, is why a curator is left wondering. The real 7.95 GB file will fetch more slowly than this one; `boldcurator benchmark --snapshot FILE --taxon Nymphalidae` gives the real numbers.
@@ -182,7 +183,7 @@ Nothing here blocks curators. Roughly in priority order:
 | Desktop window | Best effort: `auto` tries a native pywebview window, then a Chromium `--app` window, then a browser tab. A pywebview failure never crashes the app |
 | Signing | Not signed (project owner's call) |
 | Versions | From the release tag only; `pyproject.toml` keeps `0.0.0.dev0` and is never edited by hand |
-| Performance | Closed. Reopen only with a measurement showing a real user waiting |
+| Performance | Closed. Reopen only with a measurement showing a real user waiting (round 10 did). Slow work goes on a background thread with visible progress, never in a render or a download handler: Shiny runs those on its one event loop, so they freeze the whole app. A background thread uses `store.connection` (its own cursor) and reads a copy of the annotations. |
 
 ## Known divergences from the R app -- all deliberate, all tested
 

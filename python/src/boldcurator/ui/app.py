@@ -88,6 +88,9 @@ from .state import AppState, ResultTooLargeToAnalyse
 
 PAGE_SIZES = [25, 50, 100, 250, 500]
 
+#: How long the download panel stays up after a workbook is ready.
+PREP_PANEL_SECONDS = 20
+
 XLSX_MEDIA_TYPE = ("application/vnd.openxmlformats-officedocument"
                    ".spreadsheetml.sheet")
 
@@ -922,6 +925,18 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             .bc-grow-row > .shiny-input-container {
                 flex: 1 1 320px; min-width: 220px;
             }
+            /* Round 10, item 3: a background download's progress panel. */
+            .bc-prep {
+                position: fixed; bottom: 20px; right: 20px; z-index: 2001;
+                width: 360px; background: #fff; border: 1px solid #ced4da;
+                border-left: 4px solid #0d6efd; border-radius: 6px;
+                padding: 10px 14px; box-shadow: 0 2px 10px rgba(0,0,0,.2);
+                font-size: 14px;
+            }
+            .bc-prep-close {
+                float: right; margin-left: 8px; color: #6c757d;
+                text-decoration: none;
+            }
             /* Round 5, item 12: a download click's own visible
                acknowledgement -- see the click listener below. */
             .bc-toast {
@@ -934,6 +949,10 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         """),
         ui.tags.style(INLINE_INPUT_CSS),
         ui.tags.div(id="bc-toast", class_="bc-toast"),
+        # Round 10, item 3: a prepared Excel download's progress, on every
+        # tab, and the hidden link the page clicks to save it.
+        ui.output_ui("prep_status"),
+        ui.div(ui.download_button("dl_prepared", "Save"), style="display:none;"),
         ui.tags.div(
             ui.tags.span("Lost the connection to BOLDcurator -- reconnecting "
                          "and restoring your work..."),
@@ -954,6 +973,12 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         # re-attaching after every render and silently stop working after the
         # first. Delegating to `document` sidesteps that entirely.
         ui.tags.script(f"""
+            // Round 10, item 3: the server says a prepared download is ready
+            // by asking the page to click its hidden save link.
+            Shiny.addCustomMessageHandler('bc_click', function(msg) {{
+                var el = document.getElementById(msg.id);
+                if (el) el.click();
+            }});
             document.addEventListener('change', function(e) {{
                 if (!e.target) return;
                 if (e.target.classList.contains('{ROW_CHECK_CLASS}')) {{
@@ -1009,7 +1034,9 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 // visible, whichever window mode is running.)
                 var dl = e.target.closest &&
                     e.target.closest('a.shiny-download-link');
-                if (dl && !dl.classList.contains('disabled')) {{
+                // (Not for a prepared Excel download: its own panel says it.)
+                if (dl && !dl.classList.contains('disabled')
+                        && dl.id !== 'dl_prepared') {{
                     var toast = document.getElementById('bc-toast');
                     if (toast) {{
                         toast.textContent = 'Downloading -- check your '
@@ -2988,13 +3015,16 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                           "border:1px solid #dee2e6;border-radius:5px;",
                 ),
                 ui.div(
-                    ui.download_button("dl_all", "Download All (xlsx)",
-                                       class_="btn-sm"),
-                    ui.download_button("dl_selected", "Download Selected (xlsx)",
-                                       class_="btn-sm"),
-                    ui.download_button("dl_annotated",
-                                       "Download Annotated Records (xlsx)",
-                                       class_="btn-sm"),
+                    # Round 10, item 3: prepared in the background, saved by
+                    # itself when ready (prep_status, dl_prepared).
+                    ui.input_action_button("prep_all", "Download All (xlsx)",
+                                           class_="btn-sm"),
+                    ui.input_action_button("prep_selected",
+                                           "Download Selected (xlsx)",
+                                           class_="btn-sm"),
+                    ui.input_action_button("prep_annotated",
+                                           "Download Annotated Records (xlsx)",
+                                           class_="btn-sm"),
                     # Round 9, item 3: the same records as Download Selected,
                     # as a plain list for making a dataset on BOLD.
                     ui.download_button(
@@ -3224,43 +3254,172 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             "curation_report": "bold_curation_report",
         }
 
-        def _register_specimen_download(kind: str, output_id: str, *,
-                                        excel: bool):
-            """Round 9, item 4: All / Selected / Annotated are workbooks; the
-            curation report stays the TSV BOLD is sent."""
-            suffix = "xlsx" if excel else "tsv"
+        @output(id="dl_curation_report")
+        @render.download_button(
+            filename=lambda: (f"{_TSV_FILENAME_STEM['curation_report']}_"
+                              f"{export_io.timestamp()}.tsv"))
+        def _dl_curation_report():
+            """The TSV BOLD is sent -- small, so still a direct download."""
+            search = state.search
+            if search is None:
+                yield from _empty_download("run a search first")
+                return
+            tmpdir = tempfile.TemporaryDirectory()
+            path = Path(tmpdir.name) / "export.tsv"
+            written = search.export_specimens(store, "curation_report", path)
+            if written is None:
+                tmpdir.cleanup()
+                yield from _empty_download(_EMPTY_REASONS["curation_report"])
+                return
+            yield from _stream_file(written, tmpdir)
 
-            @output(id=output_id)
-            @render.download_button(
-                filename=lambda: (f"{_TSV_FILENAME_STEM[kind]}_"
-                                  f"{export_io.timestamp()}.{suffix}"),
-                media_type=XLSX_MEDIA_TYPE if excel else None)
-            def _handler():
-                search = state.search
-                if search is None:
-                    yield from _empty_download("run a search first")
-                    return
-                tmpdir = tempfile.TemporaryDirectory()
-                path = Path(tmpdir.name) / f"export.{suffix}"
-                written = search.export_specimens(store, kind, path, excel=excel)
-                if written is None and excel:
-                    # Still a workbook, so it opens: the reason in one cell.
-                    written = export_io.write_xlsx(
-                        pd.DataFrame({"message": [
-                            f"Nothing to export: {_EMPTY_REASONS[kind]}."]}),
-                        path, snapshot_id=info.snapshot_id)
-                if written is None:
-                    tmpdir.cleanup()
-                    yield from _empty_download(_EMPTY_REASONS[kind])
-                    return
-                yield from _stream_file(written, tmpdir)
+        # -- Excel downloads, prepared in the background (round 10, item 3) --
+        #
+        # All / Selected / Annotated (round 9, item 4) took 50 s as Excel for
+        # 85,000 records and, as a download handler, ran on Shiny's one event
+        # loop: the app froze and the 4-second "Downloading" toast was long
+        # gone before anything happened. Now a click starts the workbook on a
+        # thread, with the annotations copied as they were at the click; a
+        # panel on every tab says how far it has got; and when it's written
+        # the page clicks the hidden "dl_prepared" link, which saves it.
+        prep_job: dict = {"running": False, "kind": "", "filename": "",
+                          "done": 0, "total": 0, "stage": "", "error": "",
+                          "path": None, "tmpdir": None, "delivered": True,
+                          "finished_at": 0.0}
+        prep_tick = reactive.Value(0)
+        prep_seq = reactive.Value(0)
 
-        for _kind, _output_id, _excel in (
-            ("all", "dl_all", True), ("selected", "dl_selected", True),
-            ("annotated", "dl_annotated", True),
-            ("curation_report", "dl_curation_report", False),
-        ):
-            _register_specimen_download(_kind, _output_id, excel=_excel)
+        def _start_prep(kind: str) -> None:
+            search = state.search
+            if search is None:
+                _tell("Run a search first.")
+                return
+            if prep_job["running"]:
+                _tell(f"Still preparing {prep_job['filename']} -- it saves "
+                      "when it's done.")
+                return
+            if prep_job["tmpdir"] is not None:
+                prep_job["tmpdir"].cleanup()
+            tmpdir = tempfile.TemporaryDirectory()
+            filename = f"{_TSV_FILENAME_STEM[kind]}_{export_io.timestamp()}.xlsx"
+            prep_job.update(running=True, kind=kind, filename=filename, done=0,
+                            total=0, error="", path=None, tmpdir=tmpdir,
+                            delivered=False,
+                            stage="Waiting for the analysis"
+                            if not search.analysis_is_ready else "Collecting records")
+            annotations = state.annotations.snapshot()
+
+            def run() -> None:
+                def progress(done: int, total: int) -> None:
+                    prep_job.update(stage="Writing", done=done, total=total)
+                try:
+                    search.analysis(store)
+                    prep_job["stage"] = "Collecting records"
+                    written = search.export_specimens(
+                        store, kind, Path(tmpdir.name) / "export.xlsx",
+                        excel=True, annotations=annotations, progress=progress)
+                    if written is None:
+                        prep_job["error"] = f"Nothing to export: {_EMPTY_REASONS[kind]}."
+                    else:
+                        prep_job["path"] = written
+                except Exception as exc:  # noqa: BLE001 -- shown in the panel
+                    prep_job["error"] = f"Could not prepare {filename}: {exc}"
+                finally:
+                    # Plain dict only, from this thread -- see _snap_poll.
+                    prep_job["finished_at"] = time.monotonic()
+                    prep_job["running"] = False
+
+            threading.Thread(target=run, daemon=True).start()
+            prep_seq.set(prep_seq.get() + 1)
+
+        for _kind in ("all", "selected", "annotated"):
+            def _register_prep(kind: str = _kind):
+                @reactive.effect
+                @reactive.event(input[f"prep_{kind}"])
+                def _prep():
+                    _start_prep(kind)
+            _register_prep()
+
+        @reactive.effect
+        async def _prep_poll():
+            prep_seq.get()
+            if prep_job["running"]:
+                reactive.invalidate_later(0.3)
+            elif prep_job["finished_at"] and \
+                    time.monotonic() - prep_job["finished_at"] < PREP_PANEL_SECONDS:
+                reactive.invalidate_later(1)       # to hide the panel again
+            with reactive.isolate():
+                prep_tick.set(prep_tick.get() + 1)
+            if not prep_job["running"] and not prep_job["delivered"]:
+                prep_job["delivered"] = True
+                if prep_job["path"] is not None:
+                    await session.send_custom_message("bc_click",
+                                                      {"id": "dl_prepared"})
+
+        @reactive.effect
+        @reactive.event(input.prep_dismiss)
+        def _prep_dismiss():
+            prep_job["finished_at"] = 0.0
+            prep_tick.set(prep_tick.get() + 1)
+
+        @output
+        @render.ui
+        def prep_status():
+            prep_tick.get()
+            job = prep_job
+            close = ui.input_action_link("prep_dismiss", "\u2715",
+                                         class_="bc-prep-close",
+                                         title="Hide this")
+            if job["running"]:
+                total, done = job["total"], job["done"]
+                share = done / total if total else 0
+                detail = (f"{done:,} of {total:,} rows." if total
+                          else job["stage"] + "...")
+                return ui.div(
+                    ui.div(ui.tags.span(class_="spinner-border spinner-border-sm"),
+                           ui.tags.strong(f"Preparing {job['filename']}"),
+                           style="display:flex;gap:8px;align-items:center;"),
+                    ui.div(ui.div(style=f"width:{share:.0%};height:100%;"
+                                        "background:#0d6efd;"),
+                           style="height:6px;background:#dee2e6;"
+                                 "border-radius:3px;margin:6px 0 4px;"),
+                    ui.div(detail + " It saves by itself when it's ready; "
+                           "keep working meanwhile.", class_="small"),
+                    class_="bc-prep")
+            if not job["finished_at"] or \
+                    time.monotonic() - job["finished_at"] >= PREP_PANEL_SECONDS:
+                return ui.div()
+            if job["error"]:
+                return ui.div(close, job["error"], class_="bc-prep")
+            return ui.div(
+                close,
+                ui.tags.strong(f"{job['filename']} is ready"),
+                ui.div("Saving to your Downloads folder (or a save dialog). ",
+                       ui.tags.a("Save it again", href="#",
+                                 onclick="document.getElementById("
+                                         "'dl_prepared').click();return false;"),
+                       class_="small"),
+                class_="bc-prep")
+
+        # suspend_when_hidden=False: the link is hidden, and Shiny otherwise
+        # never gives a hidden download link its address.
+        @output(id="dl_prepared", suspend_when_hidden=False)
+        @render.download_button(filename=lambda: prep_job["filename"] or "export.xlsx",
+                                media_type=XLSX_MEDIA_TYPE)
+        def _dl_prepared():
+            path = prep_job["path"]
+            if prep_job["running"] or path is None or not Path(path).exists():
+                yield from _empty_download("nothing has been prepared yet")
+                return
+            with open(path, "rb") as fh:
+                while chunk := fh.read(1 << 20):
+                    yield chunk
+
+        def _prep_cleanup() -> None:
+            if prep_job["tmpdir"] is not None and not prep_job["running"]:
+                prep_job["tmpdir"].cleanup()
+
+        session.on_ended(_prep_cleanup)
 
         @output(id="dl_selected_ids")
         @render.download_button(

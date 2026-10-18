@@ -310,3 +310,15 @@ def test_xlsx_header_is_bold_and_frozen_and_progress_is_reported(tmp_path):
     assert sheet["E2"].value is None and sheet["E3"].value == 1.5    # inf: empty
     assert len(sheet["F2"].value) == 32_767 and sheet["F3"].value is None
     assert sheet.max_row == n + 1
+
+
+def test_an_annotations_snapshot_does_not_follow_later_changes(annotations):
+    """Round 10, item 3: a download prepared in the background writes the
+    annotations as they were when it was clicked."""
+    copy = annotations.snapshot()
+    annotations.set_flag("P1", "synonym")
+    annotations.set_selected("P9")
+    annotations.set_working("P3")
+    assert "P1" not in copy.flags and "P9" not in copy.selected
+    assert not copy.working
+    assert copy.to_dict()["curator_notes"] == {"P3": annotations.curator_notes["P3"]}
