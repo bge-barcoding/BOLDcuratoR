@@ -275,14 +275,20 @@ class SearchState:
                 export_io.annotated_rows(frame, ann), ann)
         elif kind == "curation_report":
             rows = export_io.curation_report(frame, ann)
+        elif kind == "taxon_updates":
+            rows = export_io.taxon_updates_report(frame, ann)
         else:
             raise ValueError(f"Unknown export {kind!r}")
 
         if len(rows) == 0:
             return None
         if excel:
+            # The taxon updates ride along with the annotated records, as
+            # their own sheet: the records show what each update reaches.
+            extra = ({"Taxon updates": export_io.taxon_updates_report(frame, ann)}
+                     if kind == "annotated" and ann.taxon_updates else None)
             return export_io.write_xlsx(rows, path, snapshot_id=result.snapshot_id,
-                                        progress=progress)
+                                        progress=progress, extra_sheets=extra)
         return export_io.write_tsv(rows, path, snapshot_id=result.snapshot_id)
 
     def representative_processids(self) -> list[str]:
@@ -535,6 +541,12 @@ class AppState:
                 f"{plan.expanded_records:,} records: the specimen table works, "
                 "but the species, BIN and BAGS screens need a narrower search.")
 
+        if saved.annotations.converted:
+            warnings.append(
+                f"{saved.annotations.converted:,} record(s) carried a flag this "
+                "version no longer offers and were converted: Data Issue is "
+                "now the Other issue tick-box, ID Uncertain is now ID "
+                "unfounded. Check that their notes still fit.")
         self.annotations = saved.annotations
         query = saved.query if isinstance(saved.query, dict) else {}
         label = saved.name or saved.session_id

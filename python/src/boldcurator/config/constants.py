@@ -235,7 +235,7 @@ VALID_RANKS = tuple(range(1, DEFAULT_RANK + 1))
 #: columns are absent.
 PREFERRED_COLUMN_ORDER: tuple[str, ...] = (
     "selected",
-    "flag",
+    "id_flag",
     "updated_id",
     "curator_notes",
     "rank",
@@ -256,37 +256,145 @@ PREFERRED_COLUMN_ORDER: tuple[str, ...] = (
 # Annotation vocabulary
 # --------------------------------------------------------------------------
 
-#: ``get_flag_options()`` (R/utils/annotation_utils.R:43).  Keys are stored,
-#: values displayed.  Round 8, item 4.3: ``id_uncertain`` replaced by
-#: ``contamination`` (Python app only; the R app keeps its own list).
-FLAG_OPTIONS: dict[str, str] = {
-    "": "None",
-    "misidentification": "Misidentification",
-    "synonym": "Synonym",
-    "contamination": "Contamination",
-    "data_issue": "Data Issue",
-    "other_issue": "Other Issue",
+#: The ID issue a curator can raise on a record -- one at most, because each
+#: gives exactly one new identification (BOLDcuration_flag_options.docx).
+#: ``level`` says what BOLD updates: a *record* flag changes one specimen
+#: record; a *taxon* flag changes the taxon record, so it reaches every record
+#: carrying the name (``io.annotations`` stores it once, as a taxon update).
+#: ``new_id`` is what the form calls the new identification for that flag.
+#: Replaces the single ``FLAG_OPTIONS`` list of earlier versions, which the
+#: R app still uses (``get_flag_options()``, R/utils/annotation_utils.R:43).
+ID_FLAGS: dict[str, dict[str, str]] = {
+    "misidentification": {
+        "label": "Misidentification",
+        "level": "record",
+        "new_id": "Correct identification",
+        "definition": "The voucher specimen is incorrectly identified.",
+        "comment": "Only when the current ID is wrong for the voucher "
+                   "specimen (not the sequence). Often based on other "
+                   "information (locality, taxonomic expertise) rather than "
+                   "the image or voucher itself.",
+    },
+    "id_unfounded": {
+        "label": "ID unfounded",
+        "level": "record",
+        "new_id": "Revised identification",
+        "definition": "The current ID cannot be validated or is otherwise "
+                      "unsupported.",
+        "comment": "e.g. genera or species groups in need of revision, "
+                   "species not recorded from the collection locality, IDs "
+                   "based on unreliable evidence. Strip the ID back to a "
+                   "rank that can be supported.",
+    },
+    "name_issue": {
+        "label": "Name issue",
+        "level": "taxon",
+        "new_id": "Correctly spelt or formed name",
+        "definition": "The current ID is not correctly formed or spelt.",
+        "comment": "Fixes the taxon record, so it applies to every record "
+                   "with this name -- except records with their own "
+                   "corrected ID, which keep it.",
+    },
+    "synonym": {
+        "label": "Synonym",
+        "level": "taxon",
+        "new_id": "Senior synonym",
+        "definition": "The current ID is a junior synonym of another name.",
+        "comment": "Only for true synonymy (not an interim name dropped for "
+                   "a valid one). Fixes the taxon record, so it applies to "
+                   "every record with this name -- except records with "
+                   "their own corrected ID, which keep it.",
+    },
 }
 
-#: Flags that can no longer be chosen but may still be on records in a saved
-#: session from before they were retired. Loading leaves them as they are
-#: (shown and exported unchanged) -- never silently rewritten to something
-#: the curator didn't pick.
-LEGACY_FLAGS: dict[str, str] = {
-    "id_uncertain": "ID Uncertain",
+#: The ID flags BOLD applies to the taxon record rather than one specimen.
+TAXON_FLAGS = frozenset(k for k, v in ID_FLAGS.items() if v["level"] == "taxon")
+
+#: Issues that can sit alongside any ID flag (and each other): yes/no.
+ISSUE_TICKS: dict[str, dict[str, str]] = {
+    "contamination": {
+        "label": "Contamination",
+        "definition": "The sequence is not endogenous to the voucher "
+                      "specimen.",
+        "comment": "Independent of misidentification: this is about the "
+                   "sequence and the voucher, misidentification about the "
+                   "ID and the voucher. Either or both may apply. If the "
+                   "voucher's ID is also wrong, choose misidentification "
+                   "too.",
+    },
+    "other_issue": {
+        "label": "Other issue",
+        "definition": "An issue with the specimen data (not ID related).",
+        "comment": "e.g. incorrect lat/long. Lower priority; needs manual "
+                   "inspection by the BOLD team. Describe it in the note.",
+    },
 }
 
-#: The toolbar choice that removes the flag from the checked records (round
-#: 9, item 5). Never stored: ``Annotations.set_flag`` is handed ``""``.
-FLAG_CLEAR = "__clear__"
+#: What each flag or issue must have before it is accepted. ``note`` is the
+#: curator note; ``new_id`` is the flag's new identification (``ID_FLAGS``'s
+#: ``new_id`` names it). The curator's full name is always required.
+REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
+    "misidentification": ("new_id", "rank", "method", "note"),
+    "id_unfounded": ("new_id", "rank", "method", "note"),
+    "name_issue": ("new_id", "rank"),
+    "synonym": ("new_id", "rank", "citation"),
+    "contamination": ("sequence_taxon",),
+    "other_issue": ("note",),
+}
 
-#: The toolbar dropdown: labels shown, keys stored. Blank first, and blank
-#: leaves each record's flag as it is (round 9, item 5: it used to clear it,
-#: so applying only a note wiped the flags); "Clear flag" last.
-FLAG_CHOICES: dict[str, str] = {
-    key: ("(no change)" if key == "" else label)
-    for key, label in FLAG_OPTIONS.items()
-} | {FLAG_CLEAR: "Clear flag"}
+#: The form's names for the fields in ``REQUIRED_FIELDS`` (``new_id`` is
+#: named per flag instead).
+FIELD_LABELS: dict[str, str] = {
+    "rank": "Rank",
+    "method": "Identification method",
+    "citation": "Citation",
+    "note": "Curator note",
+    "sequence_taxon": "Sequence taxon",
+}
+
+#: The rank a new identification is given, highest first.
+ID_RANKS: tuple[str, ...] = (
+    "kingdom", "phylum", "class", "order", "family", "subfamily", "tribe",
+    "genus", "species", "subspecies",
+)
+
+#: The iBOL accepted identification methods, with their definitions.
+ID_METHODS: dict[str, str] = {
+    "BIN based": "Relies on assignment of the sequence to a BIN, permitting "
+                 "comparison with other records putatively belonging to the "
+                 "same taxon. May be informed by images, localities, "
+                 "identifications, or other details associated with records "
+                 "in the BIN.",
+    "BOLD ID Engine": "Uses the BOLD Identification Engine to compare query "
+                      "sequences against BOLD's reference library.",
+    "Tree based": "Employs phylogenetic trees to infer relationships between "
+                  "query and reference sequences, identifying the query's "
+                  "taxonomy from tree structure.",
+    "Morphology": "Uses phenotypic characters to identify specimens. "
+                  "Morphological identification requires expertise in "
+                  "taxonomy.",
+    "Morphology and sequence based": "Relies on a combination of morphology "
+                                     "and sequence data.",
+    "Image based": "Relies on visual comparison of specimen images to those "
+                   "of known species, typically using image databases or "
+                   "machine learning models.",
+    "Image and sequence based": "Relies on a combination of images and "
+                                "sequence data.",
+    "Other sequence based approach": "Any other identification method or "
+                                     "analytical tool that relies on sequence "
+                                     "data to obtain an identification (e.g. "
+                                     "NCBI BLAST, SINTAX, RDP Classifier).",
+    "Other": "Any other identification method.",
+}
+
+#: Flags from earlier versions, and what a saved session's copy becomes on
+#: load: an ID flag, or one of ``ISSUE_TICKS``. ``contamination`` was itself
+#: a flag before it became a tick; it is not counted as a conversion.
+LEGACY_FLAG_MAP: dict[str, str] = {
+    "data_issue": "other_issue",
+    "id_uncertain": "id_unfounded",
+    "contamination": "contamination",
+}
 
 # --------------------------------------------------------------------------
 # Download limits

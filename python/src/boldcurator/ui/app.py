@@ -42,9 +42,12 @@ from ..config.constants import (
     DEFAULT_SNAPSHOT_DIR,
     DEFAULT_SNAPSHOT_ZENODO_DOI,
     DOWNLOAD_LIMITS,
-    FLAG_CHOICES,
-    FLAG_CLEAR,
+    ID_FLAGS,
+    ID_METHODS,
+    ID_RANKS,
+    ISSUE_TICKS,
     PHYLOGENY_LIMITS,
+    TAXON_FLAGS,
 )
 from ..core.grouping import (
     GRADE_DESCRIPTIONS,
@@ -61,7 +64,7 @@ from ..core.table import DEFAULT_PAGE_SIZE, search_frame
 from ..data.snapshot import SnapshotError, SnapshotStore
 from ..desktop import DEFAULT_CONFIG_PATH, load_snapshot_path, save_snapshot_path
 from ..io import exports as export_io
-from ..io.annotations import merge_annotations
+from ..io.annotations import AnnotationForm, guess_rank, merge_annotations
 from ..io.session import SessionStore
 from .setup import _pick_snapshot_file
 from .format import (
@@ -76,6 +79,7 @@ from .format import (
     GRADE_COLOURS,
     GROUP_COLUMNS,
     GROUP_LABELS,
+    HIDDEN_COLUMNS,
     INLINE_INPUT_CSS,
     UNNAMED_COLOUR,
     bold_bin_url,
@@ -279,7 +283,8 @@ def _all_columns_ordered(frame: pd.DataFrame) -> list[str]:
     specially excluded here.
     """
     preferred = [c for c in GROUP_COLUMNS if c in frame.columns]
-    rest = [c for c in frame.columns if c not in GROUP_COLUMNS]
+    rest = [c for c in frame.columns
+            if c not in GROUP_COLUMNS and c not in HIDDEN_COLUMNS]
     return preferred + rest
 
 #: Why each specimen-handling download can come back empty, keyed the same
@@ -289,6 +294,7 @@ _EMPTY_REASONS = {
     "selected": "no specimens selected",
     "annotated": "no flags, updated IDs or notes recorded",
     "curation_report": "no flags, updated IDs or notes recorded",
+    "taxon_updates": "no name issues or synonyms recorded",
 }
 
 
@@ -424,47 +430,180 @@ BOX_STYLE = ("padding:10px 14px;background:#f8f9fa;border:1px solid #dee2e6;"
 
 
 def _annotation_controls(prefix: str) -> list:
-    """Flag / note / corrected-ID, plus Apply. Repeated per screen, so shared.
+    """"Annotate checked…" and "Clear annotations". Repeated per screen, so
+    shared.
 
-    Explicit widths, because these sit in a flex row: a Shiny input is a block
-    element and will otherwise take the full width and stack, turning a
-    one-line toolbar into half a screen of form.
+    The annotation itself is a form in a dialog (``_annotation_modal``): an
+    ID issue, contamination, other issue, and the fields each needs, which
+    no longer fit one toolbar row.
 
-    Round 6, curation tools item 6: no per-field label stacked above its own
-    input any more -- that was three different heights (a one-word "Flag"
-    label next to a much longer "Corrected identification" one) is exactly
-    what made the toolbar look uneven, on top of taking a second line
-    vertically it didn't need. A compact inline "Flag" tag replaces its
-    label (a `<select>`'s own options don't show a placeholder the way a
-    text input's greyed-out text can); the two text fields use `placeholder`
-    instead of `label` -- same information, without a label row of its own.
-
-    "Apply to checked" acts on ``Annotations.working`` -- the disposable
-    bulk-edit selection, not the representative pick. See ``io.annotations``'s
-    module docstring.
+    Both act on ``Annotations.working`` -- the disposable bulk-edit
+    selection, not the representative pick. See ``io.annotations``'s module
+    docstring.
     """
     return [
-        ui.div(
-            ui.tags.span("Flag", class_="small text-muted"),
-            ui.input_select(f"{prefix}_flag", None,
-                            choices=FLAG_CHOICES, width="140px"),
-            style="display:flex;align-items:center;gap:6px;",
-        ),
-        ui.input_text(f"{prefix}_note", None, placeholder="Curator note",
-                     width="170px"),
-        # Round 8, item 4.2: "Correct ID", 1.5x the old 150px so a full
-        # binomial fits.
-        ui.input_text(f"{prefix}_updated_id", None,
-                     placeholder="Correct ID", width="225px"),
-        ui.input_action_button(f"{prefix}_apply", "Apply to checked",
-                               class_="btn-primary btn-sm"),
+        ui.input_action_button(f"{prefix}_apply", "Annotate checked…",
+                               class_="btn-primary btn-sm",
+                               title="Flag, correct or note the checked "
+                                     "records"),
         # Round 9, item 5: the undo -- asks first (``_confirm_clear``).
         ui.input_action_button(
             f"{prefix}_clear_ann", "Clear annotations",
             class_="btn-outline-danger btn-sm",
-            title="Remove the flag, note and Correct ID from the checked "
+            title="Remove the flags, corrected ID and note from the checked "
                   "records"),
     ]
+
+
+#: The form's "leave each record as it is" choice for the ID issue, offered
+#: only when the checked records' annotations differ. Never stored.
+KEEP = "__keep__"
+
+
+def _shown_if(condition: str, *children):
+    """A part of the form shown only while ``condition`` (JavaScript over
+    ``input``) holds: Shiny's own conditional panel, kept in the page, so
+    whatever was typed in it survives being hidden."""
+    return ui.panel_conditional(condition, *children)
+
+
+def _required(label: str) -> ui.Tag:
+    """A field label with the red asterisk that marks it required."""
+    return ui.span(label, ui.tags.span(" *", class_="text-danger"))
+
+
+def _form_labels(flag: str, other_issue: bool) -> tuple[ui.Tag, ui.Tag]:
+    """The new-ID and note labels for the chosen ID issue: what the new ID
+    is called for it, and whether the note is required."""
+    new_id = _required(ID_FLAGS[flag]["new_id"] if flag in ID_FLAGS
+                       else "New identification")
+    note_needed = other_issue or flag in ("misidentification", "id_unfounded")
+    return new_id, _required("Curator note") if note_needed \
+        else ui.span("Curator note")
+
+
+def _flag_is(*flags: str) -> str:
+    return " || ".join(f"input.ann_id_flag === '{f}'" for f in flags)
+
+
+def _annotation_modal(count: int, form, uniform: bool, curator: str) -> ui.Tag:
+    """The annotation form for ``count`` checked records, starting from
+    ``form`` (``AnnotationForm``). Shows only the fields the chosen ID issue
+    and tick-boxes need, each flag's definition beneath it, and marks the
+    required ones; ``_confirm_annotate`` refuses it until they're filled.
+
+    ``uniform`` is whether the records' annotations all agree. When they
+    don't, the form starts empty and leaves each record's own alone for
+    anything not filled in: the ID issue offers "keep", an unticked box or a
+    blank note changes nothing.
+    """
+    record_flags = [k for k, v in ID_FLAGS.items() if v["level"] == "record"]
+    choices = ({KEEP: "(keep each record's own)"} if not uniform else {}) \
+        | {"": "None"} | {k: v["label"] for k, v in ID_FLAGS.items()}
+    flag = form.id_flag if form.id_flag is not None else KEEP
+
+    def help_text(info: dict) -> ui.Tag:
+        return ui.div(ui.tags.strong(info["definition"]), " ", info["comment"],
+                      class_="small text-muted mb-2")
+
+    # Set here and again by ``_update_form_labels`` as the ID issue
+    # changes: a conditional panel inside a label doesn't hide.
+    new_id_label, note_label = _form_labels(flag, bool(form.other_issue))
+
+    mixed = ("" if uniform else
+             ui.div("These records have different annotations. Anything you "
+                    "leave blank or unticked stays as each record has it.",
+                    class_="alert alert-warning py-1 px-2 small"))
+    tick_suffix = "" if uniform else " (ticking sets it on every record)"
+    return ui.modal(
+        mixed,
+        ui.input_select("ann_id_flag", "ID issue", choices=choices,
+                        selected=flag, width="100%"),
+        *(_shown_if(_flag_is(k), help_text(v)) for k, v in ID_FLAGS.items()),
+        _shown_if(_flag_is(*ID_FLAGS),
+                  ui.input_text("ann_new_id", new_id_label, value=form.new_id,
+                                width="100%"),
+                  ui.input_select("ann_rank", _required("Rank"),
+                                  choices={"": "Choose…"}
+                                  | {r: r for r in ID_RANKS},
+                                  selected=form.rank, width="100%"),
+                  ui.div("Filled in from the name as a suggestion -- check it.",
+                         class_="small text-muted mb-2",
+                         style="margin-top:-10px;")),
+        _shown_if(_flag_is(*record_flags),
+                  ui.input_select("ann_method",
+                                  _required("Identification method"),
+                                  choices={"": "Choose…"}
+                                  | {m: m for m in ID_METHODS},
+                                  selected=form.method, width="100%"),
+                  ui.output_ui("ann_method_help")),
+        _shown_if(_flag_is("synonym"),
+                  ui.input_text("ann_citation", _required("Citation"),
+                                value=form.citation, width="100%",
+                                placeholder="Where the synonymy was "
+                                            "published")),
+        ui.output_ui("ann_impact"),
+        ui.tags.hr(class_="my-2"),
+        ui.input_checkbox("ann_contamination",
+                          ISSUE_TICKS["contamination"]["label"] + tick_suffix,
+                          value=bool(form.contamination)),
+        _shown_if("input.ann_contamination",
+                  help_text(ISSUE_TICKS["contamination"]),
+                  ui.input_text("ann_sequence_taxon",
+                                _required("Sequence taxon -- what the sequence "
+                                          "actually comes from"),
+                                value=form.sequence_taxon, width="100%")),
+        ui.input_checkbox("ann_other_issue",
+                          ISSUE_TICKS["other_issue"]["label"] + tick_suffix,
+                          value=bool(form.other_issue)),
+        _shown_if("input.ann_other_issue",
+                  help_text(ISSUE_TICKS["other_issue"])),
+        ui.tags.hr(class_="my-2"),
+        ui.input_text_area(
+            "ann_note", note_label, value=form.note or "", width="100%", rows=2,
+            placeholder="" if uniform else "Leave blank to keep each "
+                                           "record's own note"),
+        ui.input_text("ann_curator", _required("Curator (your full name)"),
+                      value=curator, width="100%"),
+        ui.output_ui("ann_errors"),
+        title=f"Annotate {count:,} checked record{'s' if count != 1 else ''}",
+        footer=ui.div(
+            ui.input_action_button("ann_cancel", "Cancel", class_="btn-sm"),
+            ui.input_action_button("ann_confirm", "Apply",
+                                   class_="btn-sm btn-primary"),
+        ),
+        size="l",
+        easy_close=False,
+    )
+
+
+def _taxon_updates_panel(updates: pd.DataFrame) -> ui.Tag:
+    """The taxon updates in force -- each a name issue or synonym, saved once
+    for a name and reaching every record with it -- and a way to remove
+    one."""
+    return ui.tags.details(
+        ui.tags.summary(f"Taxon updates ({len(updates):,})",
+                        class_="small fw-semibold"),
+        ui.div("Each name issue or synonym is saved once, for the name, and "
+               "applies to every record identified as it -- except records "
+               "with their own corrected ID, which keep it.",
+               class_="small text-muted my-1"),
+        ui.HTML(_table(updates, {
+            "old_name": "Name", "flag": "Update", "new_name": "Corrected to",
+            "rank": "Rank", "citation": "Citation", "note": "Note",
+            "curator": "Curator", "timestamp": "When",
+            "records_affected": "Records here"}, limit=len(updates))),
+        ui.div(
+            ui.input_select("taxon_update_pick", None,
+                            choices={n: n for n in updates["old_name"]},
+                            width="260px"),
+            ui.input_action_button("taxon_update_remove", "Remove taxon update",
+                                   class_="btn-outline-danger btn-sm"),
+            style="display:flex;align-items:center;gap:8px;margin-top:6px;",
+        ),
+        style="margin-bottom:10px;padding:6px 8px;border:1px solid #dee2e6;"
+              "border-radius:5px;",
+    )
 
 
 #: The BAGS paper (Fontes et al. 2021, Molecular Ecology Resources).
@@ -533,10 +672,13 @@ def _guide_panel() -> ui.Tag:
                      "a BIN. The check button above then checks just those."),
                 step("Annotate.",
                      "Tick Check on the records you mean (Check this group "
-                     "ticks them all), choose a flag, type a note or a "
-                     "Correct ID, and press Apply to checked. A blank flag "
-                     "leaves the flag as it is; Clear flag, or Clear "
-                     "annotations, undoes it."),
+                     "ticks them all) and press Annotate checked. Choose an "
+                     "ID issue -- the form says what each means and asks "
+                     "for what it needs -- and tick Contamination or Other "
+                     "issue if they apply. A name issue or synonym corrects "
+                     "the name itself, so it reaches every record with it, "
+                     "except records with their own corrected ID. Clear "
+                     "annotations undoes a record's own."),
                 step("Pick representatives.",
                      "Rep. marks the best record for each BIN in each "
                      "country, picked for you on a new search; tick or untick "
@@ -546,8 +688,8 @@ def _guide_panel() -> ui.Tag:
                      "The Specimens tab holds every record, and the downloads: "
                      "all, selected (the representatives) or annotated records "
                      "as Excel, the selected process IDs as a list to make a "
-                     "dataset on BOLD, the BOLD curation report to send to "
-                     "BOLD, and FASTA sequences."),
+                     "dataset on BOLD, the BOLD curation report and taxon "
+                     "updates to send to BOLD, and FASTA sequences."),
                 step("Save your work.",
                      "It saves itself every minute; on the Data tab you can "
                      "name a session, and load it again later."),
@@ -1113,7 +1255,8 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                      rel="noopener noreferrer", class_="small",
                      title=BOLD_ATTRIBUTION_TEXT),
             ui.div(
-                ui.input_text("user", None, placeholder="Your name (for annotations)",
+                ui.input_text("user", None,
+                              placeholder="Your full name (for annotations)",
                               width="240px"),
                 style="margin-left:auto;",
             ),
@@ -2218,7 +2361,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     value_box(f"{len(state.annotations.working):,}", "Checked",
                               "#f0ad4e"),
                     value_box(
-                        f"{len(state.annotations.annotated_processids()):,}",
+                        f"{search.table.annotated_count():,}",
                         "Annotated", "#6f42c1"),
                     style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;",
                 ),
@@ -2400,7 +2543,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     state.annotations)
                 found = find_state.get(grade)
                 rows = _sorted_by(_found_rows(grade, all_rows), group_sort)
-                # "Apply to checked" (and the count below) must act only on
+                # "Annotate checked" (and the count below) must act only on
                 # this group's own records -- Annotations.working is one
                 # global set, and checking rows via the per-row checkbox
                 # (rather than "Check this group", which replaces it) could
@@ -2536,7 +2679,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 group = _current_group(grade)
                 if group is not None:
                     # Replaces the checked set rather than adding to it.
-                    # "Apply to checked" acts on whatever is checked, so if
+                    # "Annotate checked" acts on whatever is checked, so if
                     # this accumulated, annotating the second problem would
                     # silently re-annotate the first -- which is the opposite
                     # of working through one problem at a time. This never
@@ -2846,8 +2989,16 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             ui.notification_show(text, duration=5)
             touch()
 
+        #: The records the open annotation form is for: processid -> current
+        #: identification, and whether their annotations all agree.
+        pending_annotate: reactive.Value = reactive.Value(None)
+        annotate_errors: reactive.Value = reactive.Value([])
+        #: The rank last suggested from the typed name, so a rank the curator
+        #: picked themselves is never replaced by the next guess.
+        rank_guess = {"last": ""}
+
         def _apply(prefix: str, scope: set[str] | None = None) -> None:
-            """Flag/note/update the *checked* records, never the
+            """Open the annotation form for the *checked* records, never the
             representative pick -- see ``io.annotations``'s module docstring.
 
             ``scope``, when given, restricts this to records that are both
@@ -2865,50 +3016,186 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             if not checked:
                 _tell("Nothing checked.")
                 return
-            user = (input.user() or "").strip()
-            flag = input[f"{prefix}_flag"]() or ""
-            note = (input[f"{prefix}_note"]() or "").strip()
-            updated = (input[f"{prefix}_updated_id"]() or "").strip()
-            if not (flag or note or updated):
-                _tell("Nothing to apply -- choose a flag, or type a note or "
-                      "Correct ID.")
+            if state.search is None:
+                _tell("Run a search first.")
                 return
-            for pid in checked:
-                # Round 9, item 5: a blank flag leaves the flag alone, so a
-                # note can be added without wiping it; "Clear flag" removes
-                # it.
-                if flag == FLAG_CLEAR:
-                    state.annotations.set_flag(pid, "", user=user)
-                elif flag:
-                    state.annotations.set_flag(pid, flag, user=user)
-                if note:
-                    state.annotations.set_note(pid, note, user=user)
-                if updated:
-                    state.annotations.set_updated_id(pid, updated, user=user)
-            status.set(f"Annotated {len(checked):,} records")
-            touch()
+            identifications = state.search.table.identifications(checked)
+            form, uniform = state.annotations.form_for(identifications)
+            pending_annotate.set({"records": identifications, "uniform": uniform})
+            annotate_errors.set([])
+            rank_guess["last"] = form.rank if form.rank == guess_rank(form.new_id) \
+                else ""
+            ui.modal_show(_annotation_modal(
+                len(checked), form, uniform,
+                (input.user() or "").strip() or state.user))
+
+        def _form_from_inputs(uniform: bool) -> AnnotationForm:
+            """The form as filled in. Over records that differ, what was left
+            blank or unticked keeps each record's own (``None``)."""
+            flag = input.ann_id_flag() or ""
+            note = input.ann_note() or ""
+            contamination = bool(input.ann_contamination())
+            other_issue = bool(input.ann_other_issue())
+            return AnnotationForm(
+                id_flag=None if flag == KEEP else flag,
+                new_id=(input.ann_new_id() or "").strip() if flag in ID_FLAGS else "",
+                rank=(input.ann_rank() or "") if flag in ID_FLAGS else "",
+                method=(input.ann_method() or "")
+                if flag in ID_FLAGS and flag not in TAXON_FLAGS else "",
+                citation=(input.ann_citation() or "").strip()
+                if flag == "synonym" else "",
+                contamination=contamination if uniform or contamination else None,
+                sequence_taxon=(input.ann_sequence_taxon() or "").strip(),
+                other_issue=other_issue if uniform or other_issue else None,
+                note=note.strip() if uniform or note.strip() else None,
+                curator=(input.ann_curator() or "").strip(),
+            )
+
+        @reactive.effect
+        @reactive.event(input.ann_id_flag, input.ann_other_issue,
+                        input.ann_contamination)
+        def _update_form_labels():
+            """Name the new ID for the chosen ID issue, mark the note
+            required when it is -- and drop the last Apply's complaints,
+            which were about a different form."""
+            if pending_annotate.get() is None:
+                return
+            new_id, note = _form_labels(input.ann_id_flag() or "",
+                                        bool(input.ann_other_issue()))
+            ui.update_text("ann_new_id", label=new_id)
+            ui.update_text_area("ann_note", label=note)
+            annotate_errors.set([])
+
+        @reactive.effect
+        @reactive.event(input.ann_new_id)
+        def _suggest_rank():
+            """Suggest the rank of the name being typed -- unless the curator
+            has picked one of their own, which stays."""
+            if pending_annotate.get() is None:
+                return
+            guess = guess_rank(input.ann_new_id() or "")
+            current = input.ann_rank() or ""
+            if guess and current in ("", rank_guess["last"]):
+                ui.update_select("ann_rank", selected=guess)
+                rank_guess["last"] = guess
+
+        @output(id="ann_method_help")
+        @render.ui
+        def _ann_method_help():
+            method = input.ann_method() or ""
+            if method not in ID_METHODS:
+                return ui.div()
+            return ui.div(ID_METHODS[method], class_="small text-muted mb-2",
+                          style="margin-top:-10px;")
+
+        @output(id="ann_impact")
+        @render.ui
+        def _ann_impact():
+            """What a name issue or synonym will reach -- they're saved for
+            the name, not the checked records -- or that one stays in
+            force."""
+            pending = pending_annotate.get()
+            flag = input.ann_id_flag() or ""
+            if pending is None or state.search is None:
+                return ui.div()
+            names = sorted({n for n in pending["records"].values()})
+            existing = [n for n in names if n in state.annotations.taxon_updates]
+            if flag in TAXON_FLAGS:
+                if len(names) != 1 or not names[0]:
+                    return ui.div(
+                        f"{ID_FLAGS[flag]['label']} corrects one name, but the "
+                        f"checked records have {len(names):,} different "
+                        "identifications. Check only records with the same "
+                        "name.", class_="alert alert-danger py-1 px-2 small")
+                name = names[0]
+                same = state.search.table.records_named(name)
+                own = sum(1 for p in same if p in state.annotations.updated_ids)
+                return ui.div(
+                    f"Saved once for the name '{name}': it applies to the "
+                    f"{len(same):,} record(s) identified as it in this result "
+                    "(and any later search)"
+                    + (f"; {own:,} of them keep their own corrected ID."
+                       if own else "."),
+                    class_="alert alert-info py-1 px-2 small")
+            if existing:
+                rule = state.annotations.taxon_updates[existing[0]]
+                return ui.div(
+                    f"The {ID_FLAGS[rule['flag']]['label'].lower()} for "
+                    f"'{existing[0]}' (→ {rule.get('new_name', '')}) still "
+                    "applies to these records unless they have their own "
+                    "corrected ID. Remove it under Taxon updates on the "
+                    "Specimens tab.", class_="small text-muted mb-2")
+            return ui.div()
+
+        @output(id="ann_errors")
+        @render.ui
+        def _ann_errors():
+            errors = annotate_errors.get()
+            if not errors:
+                return ui.div()
+            return ui.div(ui.tags.ul(*(ui.tags.li(e) for e in errors),
+                                     class_="mb-0"),
+                          class_="alert alert-danger py-1 px-2 small mb-0")
+
+        @reactive.effect
+        @reactive.event(input.ann_cancel)
+        def _cancel_annotate():
+            pending_annotate.set(None)
+            ui.modal_remove()
+
+        @reactive.effect
+        @reactive.event(input.ann_confirm)
+        def _confirm_annotate():
+            pending = pending_annotate.get()
+            if pending is None:
+                ui.modal_remove()
+                return
+            form = _form_from_inputs(pending["uniform"])
+            records = pending["records"]
+            errors = state.annotations.validate(form, records)
+            if errors:
+                annotate_errors.set(errors)
+                return
+            state.annotations.apply(form, records)
+            pending_annotate.set(None)
+            ui.modal_remove()
+            # The name just given is the curator's: the next form, and the
+            # representative picks, start from it.
+            if (input.user() or "").strip() != form.curator:
+                ui.update_text("user", value=form.curator)
+            state.user = form.curator
+            if form.id_flag in TAXON_FLAGS:
+                name = next(iter(records.values()))
+                _tell(f"Saved the {ID_FLAGS[form.id_flag]['label'].lower()} "
+                      f"'{name}' → '{form.new_id}' for every record with that "
+                      f"name, and annotated {len(records):,} checked records.")
+            else:
+                _tell(f"Annotated {len(records):,} records")
 
         #: ``(how many, the processids)`` a "Clear annotations" click is
         #: waiting to have confirmed.
         pending_clear: reactive.Value = reactive.Value(None)
 
         def _confirm_clear(scope: set[str] | None = None) -> None:
-            """Round 9, item 5: "Clear annotations" removes the flag, note
-            and Correct ID from the checked records (in ``scope``, as
-            ``_apply``), after a confirmation -- there's no undoing it."""
+            """Round 9, item 5: "Clear annotations" removes the flags, note
+            and corrected ID from the checked records (in ``scope``, as
+            ``_apply``), after a confirmation -- there's no undoing it. A
+            taxon update belongs to a name, not the records, so stays."""
             working = state.annotations.working
             checked = sorted(working if scope is None else working & scope)
             annotated = state.annotations.annotated_processids()
             targets = [p for p in checked if p in annotated]
             if not targets:
                 _tell("Nothing to clear -- none of the checked records has a "
-                      "flag, note or Correct ID." if checked
+                      "flag, note or corrected ID of its own." if checked
                       else "Nothing checked.")
                 return
             pending_clear.set(targets)
             ui.modal_show(ui.modal(
-                f"Remove the flag, note and Correct ID from {len(targets):,} "
-                "checked record(s)? This cannot be undone.",
+                f"Remove the flags, corrected ID and note from {len(targets):,} "
+                "checked record(s)? This cannot be undone. Taxon updates "
+                "(name issues and synonyms) stay: remove those under Taxon "
+                "updates on the Specimens tab.",
                 title="Clear annotations",
                 footer=ui.div(
                     ui.input_action_button("cancel_clear_ann", "Cancel",
@@ -2932,10 +3219,44 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             pending_clear.set(None)
             ui.modal_remove()
             for pid in targets:
-                state.annotations.set_flag(pid, "")
-                state.annotations.set_note(pid, "")
-                state.annotations.set_updated_id(pid, "")
+                state.annotations.clear_record(pid)
             _tell(f"Cleared the annotations on {len(targets):,} records.")
+
+        @reactive.effect
+        @reactive.event(input.taxon_update_remove)
+        def _confirm_remove_taxon_update():
+            name = input.taxon_update_pick() or ""
+            rule = state.annotations.taxon_updates.get(name)
+            if rule is None:
+                return
+            ui.modal_show(ui.modal(
+                f"Remove the {ID_FLAGS[rule['flag']]['label'].lower()} "
+                f"'{name}' → '{rule.get('new_name', '')}'? Records identified "
+                f"as '{name}' go back to their current ID (or their own "
+                "corrected ID). This cannot be undone.",
+                title="Remove taxon update",
+                footer=ui.div(
+                    ui.input_action_button("cancel_remove_taxon", "Cancel",
+                                           class_="btn-sm"),
+                    ui.input_action_button("confirm_remove_taxon", "Remove",
+                                           class_="btn-sm btn-danger"),
+                ),
+                easy_close=True,
+            ))
+
+        @reactive.effect
+        @reactive.event(input.cancel_remove_taxon)
+        def _cancel_remove_taxon():
+            ui.modal_remove()
+
+        @reactive.effect
+        @reactive.event(input.confirm_remove_taxon)
+        def _remove_taxon_update():
+            ui.modal_remove()
+            name = input.taxon_update_pick() or ""
+            if name in state.annotations.taxon_updates:
+                state.annotations.remove_taxon_update(name)
+                _tell(f"Removed the taxon update for '{name}'.")
 
         # -- the paged specimen table --------------------------------------
 
@@ -3014,6 +3335,9 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                           "margin-bottom:10px;padding:8px;background:#f8f9fa;"
                           "border:1px solid #dee2e6;border-radius:5px;",
                 ),
+                _taxon_updates_panel(state.annotations.taxon_frame(
+                    table.identifications_by_rowid().tolist()))
+                if state.annotations.taxon_updates else ui.div(),
                 ui.div(
                     # Round 10, item 3: prepared in the background, saved by
                     # itself when ready (prep_status, dl_prepared).
@@ -3035,6 +3359,12 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     ui.download_button("dl_curation_report",
                                        "Download BOLD Curation Report",
                                        class_="btn-sm"),
+                    ui.download_button("dl_taxon_updates",
+                                       "Download Taxon Updates",
+                                       class_="btn-sm",
+                                       title="One row per name issue or "
+                                             "synonym: what BOLD fixes once, "
+                                             "on the taxon record."),
                     ui.download_button("dl_fasta", "Download FASTA", class_="btn-sm"),
                     ui.download_button("dl_selected_fasta", "Download Selected FASTA",
                                        class_="btn-sm"),
@@ -3252,6 +3582,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             "all": "all_specimens", "selected": "selected_specimens",
             "annotated": "annotated_specimens",
             "curation_report": "bold_curation_report",
+            "taxon_updates": "bold_taxon_updates",
         }
 
         @output(id="dl_curation_report")
@@ -3270,6 +3601,26 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             if written is None:
                 tmpdir.cleanup()
                 yield from _empty_download(_EMPTY_REASONS["curation_report"])
+                return
+            yield from _stream_file(written, tmpdir)
+
+        @output(id="dl_taxon_updates")
+        @render.download_button(
+            filename=lambda: (f"{_TSV_FILENAME_STEM['taxon_updates']}_"
+                              f"{export_io.timestamp()}.tsv"))
+        def _dl_taxon_updates():
+            """The name issues and synonyms, one row each -- small, so a
+            direct download like the curation report."""
+            search = state.search
+            if search is None:
+                yield from _empty_download("run a search first")
+                return
+            tmpdir = tempfile.TemporaryDirectory()
+            path = Path(tmpdir.name) / "export.tsv"
+            written = search.export_specimens(store, "taxon_updates", path)
+            if written is None:
+                tmpdir.cleanup()
+                yield from _empty_download(_EMPTY_REASONS["taxon_updates"])
                 return
             yield from _stream_file(written, tmpdir)
 
@@ -3594,7 +3945,7 @@ SCROLL_CLASS = "bc-scroll"
 #: -- the annotation columns a curator's eye and mouse live in while everything
 #: else scrolls out from under them.
 STICKY_COLUMN_WIDTHS: dict[str, int] = {
-    "selected": 44, "checked": 44, "flag": 90, "updated_id": 140,
+    "selected": 44, "checked": 44, "id_flag": 120, "updated_id": 170,
     "curator_notes": 160,
 }
 
@@ -3789,7 +4140,7 @@ def _gap_html(frame: pd.DataFrame, *,
 #:
 #: ``ROW_CHECK_CLASS`` toggles ``Annotations.working`` -- a disposable,
 #: session-scratch selection that exists only to gather targets for the
-#: "Apply to checked" toolbar. The bulk buttons (check page / group / all,
+#: "Annotate checked" form. The bulk buttons (check page / group / all,
 #: Clear) act on this one, never on the representative pick -- see
 #: ``io.annotations``'s module docstring for why conflating the two was a bug.
 ROW_REP_CLASS = "bc-row-rep"
@@ -3849,12 +4200,23 @@ def _group_html(frame: pd.DataFrame, columns: list[str] | None = None,
             chosen = not _is_missing(value) and bool(value)
             if has_pid:
                 return _checkbox_cell(row["processid"], chosen, ROW_CHECK_CLASS,
-                                      title="Checked for bulk flag/note/update")
+                                      title="Checked for annotating in bulk")
             return f"<td>{'✔' if chosen else ''}</td>"
         if column == "bags_grade" and not _is_missing(value) and value:
             return _chip(value, GRADE_COLOURS.get(str(value), "#adb5bd"))
-        if column == "flag" and not _is_missing(value) and value:
-            return _chip(value, "#6f42c1")
+        if column == "id_flag" and not _is_missing(value) and value:
+            return _chip(ID_FLAGS[value]["label"] if value in ID_FLAGS
+                         else str(value), "#6f42c1")
+        if column in ISSUE_TICKS:
+            ticked = not _is_missing(value) and bool(value)
+            return _chip(ISSUE_TICKS[column]["label"], "#d63384") if ticked \
+                else "<td></td>"
+        if column == "updated_id" and not _is_missing(value) and value:
+            source = row.get("update_source", "") if hasattr(row, "get") else ""
+            if isinstance(source, str) and "taxon" in source:
+                return (f"<td>{_escape(value)} <span class='badge bg-secondary' "
+                        f"title='{_escape_attr(source)}'>taxon</span></td>")
+            return None
         if column == "processid" and not _is_missing(value) and value:
             return _link_cell(value, bold_record_url(str(value)))
         if column == "bin_uri" and not _is_missing(value) and value:

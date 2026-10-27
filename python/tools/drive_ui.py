@@ -78,8 +78,8 @@ def main(argv: list[str] | None = None) -> int:
         def table_text(selector: str) -> str:
             """Only the table(s), not the surrounding panel.
 
-            The toolbar holds a flag <select> whose options include every flag
-            name, so matching against the whole panel's text reports a
+            The annotation form holds a <select> whose options include every
+            flag name, so matching against the whole panel's text reports a
             success for an annotation that never rendered. The Species screen
             can hold two tables (gap analysis, then the checklist) when taxa
             were typed, so this joins every table's text rather than assuming
@@ -189,52 +189,111 @@ def main(argv: list[str] | None = None) -> int:
             page.screenshot(path=str(args.out / f"03-bags-{grade}.png"),
                             full_page=True)
 
+        def annotate(prefix: str, *, flag: str | None = None, **fields) -> str:
+            """Open the annotation form, fill it in, press Apply. Returns
+            the form's error text ("" once it closed)."""
+            page.click(f"#{prefix}_apply")
+            page.wait_for_selector("#ann_confirm", state="visible", timeout=10_000)
+            time.sleep(SETTLE / 2)
+            if flag is not None:
+                page.select_option("#ann_id_flag", flag)
+                time.sleep(SETTLE / 4)
+            for name, value in fields.items():
+                target = f"#ann_{name}"
+                if isinstance(value, bool):
+                    page.set_checked(target, value)
+                elif page.locator(f"select{target}").count():
+                    page.select_option(target, value)
+                else:
+                    page.fill(target, value)
+                time.sleep(SETTLE / 4)
+            page.click("#ann_confirm")
+            time.sleep(SETTLE * 1.5)
+            if page.locator("#ann_confirm").is_visible():
+                return page.locator("#ann_errors").inner_text() or "(still open)"
+            return ""
+
         # -- annotate one group, and prove it stays in that group
         show("BAGS C") if page.locator("#group_C").count() else show("BAGS E")
         grade = "C" if page.locator("#group_C").count() else "E"
         first = page.locator(f"#grade_{grade}_body strong").first.inner_text()
         page.click(f"#selall_{grade}")
         time.sleep(SETTLE)
-        page.select_option(f"#g{grade}_flag", "synonym")
-        page.fill(f"#g{grade}_note", "driven by drive_ui")
-        page.click(f"#g{grade}_apply")
+        # A misidentification needs a method: refused, with why, until given.
+        error = annotate(f"g{grade}", flag="misidentification",
+                         new_id="Danaus drivenus", note="driven by drive_ui",
+                         curator="Drive Tester")
+        check("an incomplete form is refused and says what is missing",
+              "Identification method is required" in error, error)
+        page.select_option("#ann_method", "Morphology")
+        check("the rank is suggested from the name",
+              page.input_value("#ann_rank") == "species",
+              page.input_value("#ann_rank"))
+        page.click("#ann_confirm")
         time.sleep(SETTLE * 1.5)
         annotated = table_text(f"#grade_{grade}_body")
-        check("the flag lands in the group's table", "synonym" in annotated)
+        check("the flag lands in the group's table",
+              "Misidentification" in annotated and "Danaus drivenus" in annotated)
         check("the note lands in the group's table", "driven by drive_ui" in annotated)
         page.screenshot(path=str(args.out / "04-annotated.png"), full_page=True)
 
-        # Round 9, item 5: a note alone leaves the flag; "Clear flag" removes
-        # just the flag; "Clear annotations" (confirmed) removes the rest.
-        page.fill(f"#g{grade}_note", "second note")
+        # The form reopens on what the records have; contamination adds to
+        # the misidentification rather than replacing it.
         page.click(f"#g{grade}_apply")
-        time.sleep(SETTLE * 1.5)
-        annotated = table_text(f"#grade_{grade}_body")
-        check("applying only a note keeps the flag",
-              "synonym" in annotated and "second note" in annotated)
-        page.select_option(f"#g{grade}_flag", "__clear__")
+        page.wait_for_selector("#ann_confirm", state="visible", timeout=10_000)
         time.sleep(SETTLE / 2)
-        page.click(f"#g{grade}_apply")
-        time.sleep(SETTLE * 1.5)
+        check("the form reopens on the records' own annotation, and the curator",
+              page.input_value("#ann_id_flag") == "misidentification"
+              and page.input_value("#ann_new_id") == "Danaus drivenus"
+              and page.input_value("#ann_curator") == "Drive Tester",
+              page.input_value("#ann_curator"))
+        check("the header remembers the curator's name",
+              page.input_value("#user") == "Drive Tester", page.input_value("#user"))
+        page.click("#ann_cancel")
+        time.sleep(SETTLE)
+        error = annotate(f"g{grade}", contamination=True,
+                         sequence_taxon="Homo sapiens")
         annotated = table_text(f"#grade_{grade}_body")
-        check('"Clear flag" removes the flag and keeps the note',
-              "synonym" not in annotated and "second note" in annotated)
+        check("contamination combines with the misidentification",
+              not error and "Contamination" in annotated
+              and "Misidentification" in annotated and "Homo sapiens" in annotated,
+              error)
         page.click(f"#g{grade}_clear_ann")
         time.sleep(SETTLE)
         page.click("#confirm_clear_ann")
         time.sleep(SETTLE * 1.5)
-        check('"Clear annotations" removes the note too, once confirmed',
-              "second note" not in table_text(f"#grade_{grade}_body"))
+        annotated = table_text(f"#grade_{grade}_body")
+        check('"Clear annotations" removes them, once confirmed',
+              "driven by drive_ui" not in annotated
+              and "Misidentification" not in annotated)
+
+        # A synonym on one checked record is saved for its name, so it
+        # reaches every record with that name -- here and on other tabs.
+        page.click(f"#clear_{grade}")
+        time.sleep(SETTLE)
+        page.locator(f"#grade_{grade}_body .bc-row-check").first.click()
+        time.sleep(SETTLE)
+        idents = column_values(f"#grade_{grade}_body", "ID")
+        error = annotate(f"g{grade}", flag="synonym", new_id="Danaus seniorus",
+                         rank="species", citation="Driver 2026")
+        updated = column_values(f"#grade_{grade}_body", "Updated ID")
+        same = [u for i, u in zip(idents, updated) if i == idents[0]]
+        check("a synonym reaches every record with the name, marked as a taxon update",
+              not error and len(same) >= 1
+              and all(u.startswith("Danaus seniorus") and "taxon" in u
+                      for u in same), f"{error} {same[:3]}")
+        page.screenshot(path=str(args.out / "04b-synonym.png"), full_page=True)
 
         if page.locator(f"#group_{grade} option").count() > 1:
             page.click(f"#next_{grade}")
             time.sleep(SETTLE * 1.5)
             other = table_text(f"#grade_{grade}_body")
             check("the next group is untouched",
-                  "synonym" not in other and "driven by drive_ui" not in other)
+                  "Misidentification" not in other
+                  and "driven by drive_ui" not in other)
 
             # -- a per-row check left in one group must not leak into
-            # "Apply to checked" in another. Only "Check this group" (just
+            # "Annotate checked" in another. Only "Check this group" (just
             # used above) replaces the whole checked set; the per-row
             # checkbox adds to it, so start clean in both groups first.
             page.click(f"#clear_{grade}")            # currently group 2
@@ -249,15 +308,15 @@ def main(argv: list[str] | None = None) -> int:
             time.sleep(SETTLE)
             page.locator(f"#grade_{grade}_body .bc-row-check").first.click()
             time.sleep(SETTLE)
-            page.select_option(f"#g{grade}_flag", "data_issue")
-            page.click(f"#g{grade}_apply")
-            time.sleep(SETTLE * 1.5)
-            check("apply to checked reaches the current group's own check",
-                  "data_issue" in table_text(f"#grade_{grade}_body"))
+            error = annotate(f"g{grade}", other_issue=True,
+                             note="lat/long swapped")
+            check("annotating reaches the current group's own check",
+                  not error and "Other issue" in table_text(f"#grade_{grade}_body"),
+                  error)
             page.click(f"#prev_{grade}")
             time.sleep(SETTLE * 1.5)
             check("a check left in a different group is not swept into that apply",
-                  "data_issue" not in table_text(f"#grade_{grade}_body"))
+                  "lat/long swapped" not in table_text(f"#grade_{grade}_body"))
 
         # Round 9, item 2: Find records in a group -- the table shows only
         # the matches and "Check the N found" checks exactly those.
@@ -284,6 +343,24 @@ def main(argv: list[str] | None = None) -> int:
 
         # -- the paged specimen table
         show("Specimens", settle=SETTLE * 1.5)
+        # The synonym made on a BAGS screen is listed here, downloads as its
+        # own report, and can be removed (after a confirmation).
+        check("the Specimens tab lists the taxon update",
+              "Taxon updates (1)" in page.locator("#specimens_body").inner_text())
+        href = page.get_attribute("#dl_taxon_updates", "href") or ""
+        report = page.request.get(f"{base}/{href.lstrip('/')}")
+        check("the taxon updates report downloads with the synonym",
+              report.ok and "Danaus seniorus" in report.text()
+              and "Driver 2026" in report.text())
+        page.locator("#specimens_body summary").first.click()
+        time.sleep(SETTLE / 2)
+        page.click("#taxon_update_remove")
+        time.sleep(SETTLE)
+        page.click("#confirm_remove_taxon")
+        time.sleep(SETTLE * 1.5)
+        check("a taxon update can be removed",
+              "Taxon updates (" not in page.locator("#specimens_body").inner_text()
+              and "Danaus seniorus" not in table_text("#specimens_body"))
         pages_before = page.locator("#specimens_body").inner_text()
         page.select_option("#find_col_sp", "country.ocean")
         time.sleep(SETTLE / 2)
@@ -324,10 +401,11 @@ def main(argv: list[str] | None = None) -> int:
         time.sleep(SETTLE)
         check("paging moves to different rows",
               tbody_text("#specimens_body")[:200] != before)
-        # The five annotation columns are sortable on the specimen table too,
+        # The annotation columns are sortable on the specimen table too,
         # not only a stored/physical one -- SpecimenTable.sort_by fetches
         # nothing from the database for these, it reads Annotations directly.
-        for label in ("Rep.", "Check", "Flag", "Updated ID", "Notes"):
+        for label in ("Rep.", "Check", "ID issue", "Updated ID", "Notes",
+                      "Contamination", "Curator"):
             check(f'the "{label}" column header is sortable',
                   page.locator("#specimens_body th.bc-sort-th",
                               has_text=label).count() >= 1)

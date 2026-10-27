@@ -40,13 +40,15 @@ def test_selection_alone_does_not_count_as_annotated(annotations):
 
 
 def test_annotation_columns_lead_the_export(annotations):
+    from boldcurator.io.annotations import ANNOTATION_COLUMNS
+
     merged = merge_annotations(_frame(), annotations)
-    assert list(merged.columns[:6]) == list(
-        ["selected", "flag", "updated_id", "curator_notes", "flag_user",
-         "flag_timestamp"]
-    )
+    assert list(merged.columns[:len(ANNOTATION_COLUMNS)]) == list(ANNOTATION_COLUMNS)
     assert list(merged["selected"]) == [True, False, False]
-    assert list(merged["flag"]) == ["", "misidentification", ""]
+    assert list(merged["id_flag"]) == ["", "misidentification", ""]
+    assert merged.loc[merged["processid"] == "P2", "curator"].iloc[0] == "curator"
+    # The snapshot's own identification_method is kept, not replaced.
+    assert "identification_method" not in merged.columns
     assert merged.loc[merged["processid"] == "P3", "curator_notes"].iloc[0] == \
         "check the voucher"
 
@@ -128,7 +130,8 @@ def test_export_all_writes_everything_and_says_what_it_skipped(store, tmp_path):
     result = run_search(store, taxa_text="Danaus plexippus")
     a = Annotations()
     first = str(result.specimens["processid"].iloc[0])
-    a.set_flag(first, "contamination", user="tester")
+    a.set_flag(first, contamination=True, sequence_taxon="Homo sapiens",
+               user="tester")
 
     out = exports.export_all(result, tmp_path, annotations=a, store=store)
     assert {"all", "annotated", "curation_report", "search_results",
@@ -217,8 +220,11 @@ def test_search_state_exports_species_analysis_end_to_end(store, tmp_path):
 
 def test_unknown_flag_is_refused():
     a = Annotations()
-    with pytest.raises(ValueError, match="Unknown flag"):
+    with pytest.raises(ValueError, match="Unknown record flag"):
         a.set_flag("P1", "not_a_real_flag")
+    # Name issue and synonym belong to the name, not one record.
+    with pytest.raises(ValueError, match="taxon updates"):
+        a.set_flag("P1", "synonym")
 
 
 def test_auto_selections_reach_the_selected_export(store, tmp_path):
@@ -316,9 +322,86 @@ def test_an_annotations_snapshot_does_not_follow_later_changes(annotations):
     """Round 10, item 3: a download prepared in the background writes the
     annotations as they were when it was clicked."""
     copy = annotations.snapshot()
-    annotations.set_flag("P1", "synonym")
+    annotations.set_flag("P1", "id_unfounded")
+    annotations.set_taxon_update("Aus bis", "synonym", "Aus bus")
     annotations.set_selected("P9")
     annotations.set_working("P3")
     assert "P1" not in copy.flags and "P9" not in copy.selected
+    assert not copy.taxon_updates
     assert not copy.working
     assert copy.to_dict()["curator_notes"] == {"P3": annotations.curator_notes["P3"]}
+
+
+def _taxon_annotations() -> Annotations:
+    a = Annotations()
+    a.set_taxon_update("Danaus plexippus", "synonym", "Danaus archippus",
+                       rank="species", citation="Smith 2019", user="Ann Curator")
+    return a
+
+
+def test_records_a_taxon_update_reaches_are_in_the_curation_report():
+    """Agreed: one row per affected record, its updated ID and where it came
+    from -- and a taxon updates table beside it."""
+    a = _taxon_annotations()
+    a.set_flag("P2", "misidentification", user="Ann Curator")
+    a.set_updated_id("P2", "Danaus plexippus", rank="species",
+                     method="Morphology", user="Ann Curator")
+    report = exports.curation_report(_frame(), a)
+    rows = report.set_index("processid")
+    assert set(rows.index) == {"P1", "P2"}
+    assert rows.loc["P1", "updated_id"] == "Danaus archippus"
+    assert rows.loc["P1", "update_source"] == "taxon (synonym)"
+    assert rows.loc["P1", "updated_id_method"] == ""
+    # P2's own misidentification is to the junior name, so the synonym
+    # follows it -- and keeps the record's own method.
+    assert rows.loc["P2", "updated_id"] == "Danaus archippus"
+    assert rows.loc["P2", "update_source"] == "record → taxon (synonym)"
+    assert rows.loc["P2", "id_flag"] == "misidentification"
+    assert rows.loc["P2", "updated_id_method"] == "Morphology"
+
+    taxa = exports.taxon_updates_report(_frame(), a)
+    assert taxa.to_dict("records") == [{
+        "old_name": "Danaus plexippus", "flag": "synonym",
+        "new_name": "Danaus archippus", "rank": "species",
+        "citation": "Smith 2019", "note": "", "curator": "Ann Curator",
+        "timestamp": a.taxon_updates["Danaus plexippus"]["timestamp"],
+        "records_affected": 1}]
+
+
+def test_contamination_alone_reports_the_voucher_id_unchanged():
+    """The doc: the voucher's correct ID goes in the updated identification
+    field -- with no misidentification, that is its current ID."""
+    a = Annotations()
+    a.set_flag("P1", contamination=True, sequence_taxon="Homo sapiens")
+    report = exports.curation_report(_frame(), a).set_index("processid")
+    assert report.loc["P1", "updated_id"] == "Danaus plexippus"
+    assert report.loc["P1", "sequence_taxon"] == "Homo sapiens"
+    assert bool(report.loc["P1", "contamination"]) is True
+
+
+def test_export_all_writes_the_taxon_updates(store, tmp_path):
+    from boldcurator.core.pipeline import run_search
+
+    result = run_search(store, taxa_text="Danaus plexippus")
+    out = exports.export_all(result, tmp_path, annotations=_taxon_annotations(),
+                             store=store)
+    assert "taxon_updates" in out.written and "annotated" in out.written
+    text = Path(out.written["taxon_updates"]).read_text(encoding="utf-8")
+    assert "Danaus archippus" in text
+    assert "taxon_updates" in exports.export_all(
+        result, tmp_path / "none", store=store).skipped
+
+
+def test_the_annotated_workbook_carries_a_taxon_updates_sheet(store, tmp_path):
+    from boldcurator.ui.state import AppState
+
+    state = AppState(store, page_size=25)
+    state.run_search("Danaus plexippus")
+    state.annotations.set_taxon_update("Danaus plexippus", "name_issue",
+                                       "Danaus plexipus", rank="species")
+    written = state.search.export_specimens(store, "annotated",
+                                            tmp_path / "a.xlsx", excel=True)
+    sheets = pd.read_excel(written, sheet_name=None)
+    assert list(sheets) == ["Records", "Taxon updates", "About"]
+    assert sheets["Taxon updates"]["new_name"].tolist() == ["Danaus plexipus"]
+    assert (sheets["Records"]["updated_id"] == "Danaus plexipus").all()

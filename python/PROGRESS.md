@@ -10,6 +10,39 @@ performance investigation, the packaging saga) was trimmed from this file on
 2026-09-26 -- it is in git history (`git log -- python/PROGRESS.md`) if a
 similar bug resurfaces and you want to see how it was fixed last time.
 
+## Flag scheme (2026-10-27) -- done
+
+From BOLDcuration_flag_options.docx and five requirements; the choices below
+were put to the owner and agreed. See `io/annotations.py`'s module docstring
+and `config/constants.py` (`ID_FLAGS`, `ISSUE_TICKS`, `REQUIRED_FIELDS`,
+`ID_METHODS`).
+
+- [x] One ID issue per record (misidentification, id_unfounded, name_issue,
+  synonym), plus contamination and other issue as independent tick-boxes
+  (requirement 2).
+- [x] The annotation fields moved from the toolbar into a form ("Annotate
+  checked…"): definitions shown, only the relevant fields, required ones
+  enforced (`Annotations.validate`). Over records whose annotations differ,
+  anything left blank keeps each record's own.
+- [x] Rank required for every new ID, suggested from the name (`guess_rank`)
+  (requirement 1). Citation required for a synonym (requirement 3).
+  Identification method -- the iBOL list -- required for a record-level new
+  ID, not for a name issue or synonym; the curator's full name always
+  (requirement 4). Note required for misidentification, id_unfounded and
+  other issue. Contamination records the sequence's taxon in its own field.
+- [x] Name issue and synonym are stored once per name (`taxon_updates`) and
+  resolved when read (`Annotations.resolve`), never copied onto records: a
+  record's own corrected ID wins, whichever came first, and is itself
+  followed through any taxon update for its name (requirement 5).
+- [x] Exports: the curation report has the new columns and includes records
+  a taxon update reaches; a taxon updates TSV, and a sheet in the annotated
+  workbook. The new ID's method is `updated_id_method`, apart from the
+  snapshot's `identification_method`.
+- [x] Old sessions convert on load (`LEGACY_FLAG_MAP`): data_issue → other
+  issue, id_uncertain → id_unfounded, and say so once. A record-level synonym
+  flag from before stays as it was. Session schema version 2.
+- The R app keeps its own flag list.
+
 ## Round 10 curator feedback (2026-10-18) -- done
 
 - [x] 1 Guide: use the window's width (it stopped at 900px) -- two columns (`.bc-guide-grid`, 3:1): the steps, and the grades and the BAGS paper in a box beside them; one column below 1100px. Found on the way: the list's padding cut "10." to "0.".
@@ -174,7 +207,7 @@ Nothing here blocks curators. Roughly in priority order:
 | Dataset/project codes | Implemented properly via `specimen_recordset` |
 | BAGS grade E | Evaluated against the whole snapshot, not just downloaded records |
 | BAGS C+E membership | A C+E group shows the species' own records in every BIN, **plus the other species in its shared BINs**, plus higher-rank riders (round 8, item 8.1, reversing the earlier "own records only" choice): the problem is the BIN, so the whole BIN is shown. |
-| Flag dropdown | Blank means "no change"; "Clear flag" and "Clear annotations" undo (round 9, item 5). A blank flag used to clear, which silently wiped flags when only a note was applied. |
+| Flag scheme | One ID issue per record plus contamination and other issue as ticks, entered through a form that enforces each flag's fields; name issue and synonym are taxon updates stored once per name, and a record's own corrected ID always wins over them (2026-10-27, agreed with the owner). In a form over records that differ, blank means "keep each record's own" -- a blank used to clear, which silently wiped flags when only a note was applied (round 9, item 5). |
 | Local server access | Only the window that opened the one-time launch URL, plus a loopback `Host` check (`localguard.py`, round 9, item 9b). Don't add an unguarded route or serve the app without `LocalGuard`. |
 | Record search | One "Find records" row (column or any, contains, case-insensitive) per screen, not a filter per column (round 9, item 2). |
 | Connection loss | The loopback server never pings its window (`desktop.WEBSOCKET_KEEPALIVE`). If the socket drops anyway, the page reloads itself and the server restores the session (round 8, item 1.1). Don't reintroduce uvicorn's default pings. |

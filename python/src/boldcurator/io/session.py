@@ -25,7 +25,9 @@ from pathlib import Path
 
 from .annotations import Annotations
 
-SCHEMA_VERSION = 1
+#: 2: annotations carry taxon updates and the reworked flags
+#: (``io.annotations``); version 1 sessions convert on load.
+SCHEMA_VERSION = 2
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (

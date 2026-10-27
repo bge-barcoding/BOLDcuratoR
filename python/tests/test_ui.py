@@ -130,15 +130,17 @@ def test_all_columns_ordered_drops_nothing_and_leads_with_the_curated_ones(store
     from boldcurator.core.table import SpecimenTable
     from boldcurator.data.queries import SearchQuery, plan_search, resolve_taxa
     from boldcurator.ui.app import _all_columns_ordered
-    from boldcurator.ui.format import GROUP_COLUMNS
+    from boldcurator.ui.format import GROUP_COLUMNS, HIDDEN_COLUMNS
 
     plan = plan_search(store, SearchQuery(
         taxa=resolve_taxa(store, ["Nymphalidae"]).resolved, expand_bins=True))
     rows = SpecimenTable(store, plan, page_size=5).page(0).rows
     ordered = _all_columns_ordered(rows)
 
-    assert set(ordered) == set(rows.columns), "a column was dropped or invented"
-    assert len(ordered) == len(rows.columns), "no duplicates either"
+    # Only the annotation timestamp is left to the download.
+    assert set(ordered) == set(rows.columns) - HIDDEN_COLUMNS, \
+        "a column was dropped or invented"
+    assert len(ordered) == len(set(ordered)), "no duplicates either"
     curated_present = [c for c in GROUP_COLUMNS if c in rows.columns]
     assert ordered[:len(curated_present)] == curated_present
     # A real BOLD column that is deliberately not curated, to prove "the rest"
@@ -284,7 +286,7 @@ def test_processid_bin_and_species_link_out_to_the_bold_portal():
 
 
 def test_sticky_columns_freeze_to_the_left_edge_in_column_order():
-    """selected/checked/flag/updated_id/curator_notes stay put while the rest
+    """selected/checked/id_flag/updated_id/curator_notes stay put while the rest
 
     of a wide table scrolls sideways underneath them.
     """
@@ -293,7 +295,7 @@ def test_sticky_columns_freeze_to_the_left_edge_in_column_order():
     from boldcurator.ui.app import STICKY_COLUMN_WIDTHS, _group_html
 
     frame = pd.DataFrame({
-        "selected": [True], "checked": [False], "flag": ["misidentification"],
+        "selected": [True], "checked": [False], "id_flag": ["misidentification"],
         "updated_id": ["Danaus plexippus"], "curator_notes": ["checked"],
         "processid": ["P1"], "species": ["Danaus plexippus"],
     })
@@ -301,7 +303,7 @@ def test_sticky_columns_freeze_to_the_left_edge_in_column_order():
     header = html.split("<tbody>")[0]
 
     running = 0
-    for column in ("selected", "checked", "flag", "updated_id", "curator_notes"):
+    for column in ("selected", "checked", "id_flag", "updated_id", "curator_notes"):
         width = STICKY_COLUMN_WIDTHS[column]
         assert f"left:{running}px" in html, f"{column} should sit at {running}px"
         running += width
@@ -723,16 +725,83 @@ def test_the_data_tab_has_no_download_from_url_or_attribution_footer(fixture_sna
     assert html.count("Full licence text") == 0
 
 
-def test_the_annotation_toolbar_says_correct_id_and_offers_contamination():
-    """Round 8, items 4.2 and 4.3."""
+def test_the_annotation_toolbar_opens_the_form_and_offers_clear():
+    """The fields moved into a form (``_annotation_modal``); the toolbar
+    keeps the button that opens it and Clear annotations (round 9, item 5)."""
     from htmltools import TagList
 
     from boldcurator.ui.app import _annotation_controls
 
     html = str(TagList(*_annotation_controls("sp")))
-    assert 'placeholder="Correct ID"' in html and "width:225px" in html
-    assert '<option value="contamination">Contamination</option>' in html
-    assert "id_uncertain" not in html
+    assert 'id="sp_apply"' in html and "Annotate checked" in html
+    assert 'id="sp_clear_ann"' in html
+    assert "<select" not in html
+
+
+def _modal_html(form=None, uniform=True, curator="Ann Curator") -> str:
+    from boldcurator.io.annotations import AnnotationForm
+    from boldcurator.ui.app import _annotation_modal
+
+    return str(_annotation_modal(3, form or AnnotationForm(id_flag=""), uniform,
+                                 curator))
+
+
+def test_the_annotation_form_offers_one_id_issue_and_two_ticks():
+    """Agreed: an ID issue dropdown (one new ID each), contamination and
+    other issue as tick-boxes that combine with it."""
+    from boldcurator.config.constants import ID_FLAGS, ID_METHODS, ID_RANKS
+
+    html = _modal_html()
+    for key, info in ID_FLAGS.items():
+        assert f'<option value="{key}">{info["label"]}</option>' in html
+        assert info["definition"] in html          # what each flag means
+    assert 'id="ann_contamination"' in html and 'id="ann_other_issue"' in html
+    assert all(f'<option value="{r}">' in html for r in ID_RANKS)
+    assert all(f'<option value="{m}">' in html for m in ID_METHODS)
+    assert "Annotate 3 checked records" in html
+    assert 'value="Ann Curator"' in html
+    for retired in ("id_uncertain", "data_issue"):
+        assert retired not in html
+
+
+def test_the_form_shows_each_field_only_for_the_flags_that_need_it():
+    from html import unescape
+
+    html = unescape(_modal_html())
+    # The citation only for a synonym; the method only for a record-level
+    # new ID -- not for name issue or synonym.
+    citation = html.split('id="ann_citation"')[0].rsplit("data-display-if", 1)[1]
+    assert "'synonym'" in citation and "'misidentification'" not in citation
+    method = html.split('id="ann_method"')[0].rsplit("data-display-if", 1)[1]
+    assert "'misidentification'" in method and "'id_unfounded'" in method
+    assert "'synonym'" not in method and "'name_issue'" not in method
+    taxon = html.split('id="ann_sequence_taxon"')[0].rsplit("data-display-if", 1)[1]
+    assert "input.ann_contamination" in taxon
+
+
+def test_a_form_over_records_that_differ_keeps_each_records_own():
+    from boldcurator.io.annotations import AnnotationForm
+
+    html = _modal_html(AnnotationForm(), uniform=False)
+    assert "(keep each record&#39;s own)" in html or "(keep each record's own)" in html
+    assert "different annotations" in html
+    assert "different annotations" not in _modal_html()
+
+
+def test_the_id_issue_and_ticks_render_as_chips():
+    import pandas as pd
+
+    from boldcurator.ui.app import _group_html
+
+    html = _group_html(pd.DataFrame({
+        "id_flag": ["id_unfounded"], "contamination": [True],
+        "other_issue": [False], "updated_id": ["Danaus"],
+        "update_source": ["taxon (name_issue)"], "processid": ["P1"]}),
+        ["id_flag", "contamination", "other_issue", "updated_id",
+         "update_source", "processid"])
+    assert "ID unfounded" in html and "Contamination" in html
+    assert "Other issue</span>" not in html
+    assert ">taxon</span>" in html
 
 
 def test_a_broader_second_search_gets_representatives_for_its_new_bins(store):
@@ -860,22 +929,6 @@ def test_selected_processids_are_this_result_s_representatives(store, tmp_path):
     pid = list(rows[0]).index("processid")
     assert sorted(r[pid] for r in rows[1:]) == sorted(ids)
 
-
-
-def test_the_flag_dropdown_keeps_by_default_and_offers_clear():
-    """Round 9, item 5: blank leaves the flag alone (applying a note used
-    to wipe it) and "Clear flag" is the undo; Clear annotations is beside
-    Apply."""
-    from htmltools import TagList
-
-    from boldcurator.config.constants import FLAG_CHOICES, FLAG_CLEAR, FLAG_OPTIONS
-    from boldcurator.ui.app import _annotation_controls
-
-    assert list(FLAG_CHOICES)[0] == "" and FLAG_CHOICES[""] == "(no change)"
-    assert list(FLAG_CHOICES)[-1] == FLAG_CLEAR
-    assert FLAG_CLEAR not in FLAG_OPTIONS    # never stored
-    html = str(TagList(*_annotation_controls("sp")))
-    assert "Clear flag" in html and 'id="sp_clear_ann"' in html
 
 
 def test_the_guide_is_the_first_tab_and_links_the_bags_paper(fixture_snapshot):

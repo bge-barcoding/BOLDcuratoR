@@ -79,7 +79,9 @@ UNNAMED_COLOUR = "#5a6f8a"
 #: ``selected`` and ``checked`` are two different checkboxes -- see
 #: ``io.annotations``'s module docstring -- so both are always shown together.
 GROUP_COLUMNS = [
-    "selected", "checked", "flag", "updated_id", "curator_notes",
+    "selected", "checked", "id_flag", "updated_id", "curator_notes",
+    "contamination", "other_issue", "update_source", "updated_id_rank",
+    "updated_id_method", "sequence_taxon", "citation", "curator",
     "rank", "quality_score", "processid", "bin_uri",
     "species", "name_status", "identification_rank", "bags_grade",
     "identification", "identified_by", "country.ocean",
@@ -91,14 +93,22 @@ GROUP_COLUMNS = [
 #: ``GROUP_COLUMNS`` documents -- one is the persistent representative pick,
 #: the other a disposable bulk-edit selection.
 GROUP_LABELS = {
-    "selected": "Rep.", "checked": "Check", "flag": "Flag",
-    "updated_id": "Updated ID", "curator_notes": "Notes", "rank": "Rank",
+    "selected": "Rep.", "checked": "Check", "id_flag": "ID issue",
+    "updated_id": "Updated ID", "curator_notes": "Notes",
+    "contamination": "Contamination", "other_issue": "Other issue",
+    "update_source": "Update from", "updated_id_rank": "Updated ID rank",
+    "updated_id_method": "Updated ID method", "sequence_taxon": "Sequence taxon",
+    "citation": "Citation", "curator": "Curator", "rank": "Rank",
     "quality_score": "Score", "processid": "Process ID", "bin_uri": "BIN",
     "species": "Species", "name_status": "Name status",
     "identification_rank": "ID rank", "bags_grade": "BAGS", "identification": "ID",
     "identified_by": "Identified by", "country.ocean": "Country/Ocean",
     "inst": "Institution",
 }
+
+#: Annotation columns exported but not shown: when, and by whom, is in the
+#: download; on screen it would be one more column to scroll past.
+HIDDEN_COLUMNS = frozenset({"annotation_timestamp"})
 
 #: ``mean_quality_score`` is a real column of ``build_species_checklist``'s
 #: output but has no entry here -- round 3, item 4 dropped it from the

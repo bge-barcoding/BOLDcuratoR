@@ -29,7 +29,7 @@ import pandas as pd
 
 from ..data.queries import ROW_ID_COLUMN, SearchPlan, fetch_rows, match_rows
 from ..data.snapshot import SnapshotStore
-from ..io.annotations import Annotations, merge_annotations
+from ..io.annotations import AnnotationForm, Annotations, merge_annotations
 from .pipeline import process_specimen_data
 from .ranking import score_and_rank
 
@@ -47,11 +47,16 @@ DERIVED_COLUMNS = frozenset({
 #: sparse dict already held in memory -- unlike ``DERIVED_COLUMNS``, this is
 #: cheap regardless of result size.
 ANNOTATION_SORT_COLUMNS = frozenset({
-    "selected", "checked", "flag", "updated_id", "curator_notes",
+    "selected", "checked", "id_flag", "contamination", "other_issue",
+    "updated_id", "updated_id_rank", "updated_id_method", "update_source",
+    "sequence_taxon", "citation", "curator_notes", "curator",
 })
 
 #: The annotation columns the search box can look in -- the text ones.
-ANNOTATION_SEARCH_COLUMNS = ("flag", "updated_id", "curator_notes")
+ANNOTATION_SEARCH_COLUMNS = ("id_flag", "updated_id", "updated_id_rank",
+                             "updated_id_method", "update_source",
+                             "sequence_taxon", "citation", "curator_notes",
+                             "curator")
 
 DEFAULT_PAGE_SIZE = 100
 
@@ -117,6 +122,9 @@ class SpecimenTable:
         #: processid per rowid, filled in only if something needs the whole
         #: result's identity -- "select every matching record", for instance.
         self._processids: pd.Series | None = None
+        #: identification per rowid, likewise -- for taxon updates, which
+        #: reach records by name.
+        self._identifications: pd.Series | None = None
 
     # -- shape -------------------------------------------------------------
 
@@ -136,7 +144,7 @@ class SpecimenTable:
     @property
     def searchable_columns(self) -> list[str]:
         """What the search box's column list offers: every stored column and
-        the three annotation text columns -- not the per-page computed ones,
+        the annotation text columns -- not the per-page computed ones,
         for the same reason they can't be sorted."""
         return [c for c in self.store.app_columns if c not in DERIVED_COLUMNS] \
             + list(ANNOTATION_SEARCH_COLUMNS)
@@ -169,10 +177,8 @@ class SpecimenTable:
         return self.total_rows
 
     def _annotation_matches(self, text: str, columns: list[str]) -> list:
-        """Rowids whose annotation (flag, Correct ID, note) contains ``text``."""
-        self.all_processids()
-        ids = self._processids
-        frame = self.annotations.to_frame([str(p) for p in ids])
+        """Rowids whose annotation (flag, updated ID, note...) contains ``text``."""
+        ids, frame = self._annotation_frame()
         needle = text.lower()
         hit = np.zeros(len(frame), dtype=bool)
         for column in columns:
@@ -229,15 +235,14 @@ class SpecimenTable:
         columns ``merge_annotations`` renders, so a curator sorting by "Flag"
         gets the same values they see in the table.
         """
-        self.all_processids()  # ensures self._processids is populated
-        ids_by_rowid = self._processids
-        processids = [str(p) for p in ids_by_rowid]
+        ids_by_rowid, frame = self._annotation_frame()
+        processids = frame["processid"].tolist()
         if column == "selected":
             key = pd.Series([p in self.annotations.selected for p in processids])
         elif column == "checked":
             key = pd.Series([p in self.annotations.working for p in processids])
         else:
-            key = self.annotations.to_frame(processids)[column]
+            key = frame[column]
         order = pd.DataFrame({"key": key.to_numpy(), "rid": ids_by_rowid.index.to_numpy()})
         order = order.sort_values(
             "key", ascending=not descending, kind="stable", na_position="last"
@@ -245,6 +250,55 @@ class SpecimenTable:
         self._sorted = order["rid"].to_numpy()
         self.sort_column, self.sort_descending = column, bool(descending)
         self._apply_search()
+
+    def _annotation_frame(self) -> tuple[pd.Series, pd.DataFrame]:
+        """Every record's annotation columns, with the processid-per-rowid
+        series they line up with. Identifications are fetched only when a
+        taxon update needs them to reach records."""
+        self.all_processids()  # ensures self._processids is populated
+        ids = self._processids
+        idents = (self.identifications_by_rowid().reindex(ids.index).tolist()
+                  if self.annotations.taxon_updates else None)
+        return ids, self.annotations.to_frame([str(p) for p in ids], idents)
+
+    def identifications_by_rowid(self) -> pd.Series:
+        """The current identification of every record in the result, by
+        rowid. One narrow column, cached like ``all_processids``."""
+        if self._identifications is None:
+            frame = fetch_rows(self.store, self.plan.row_ids,
+                               columns=["processid", "identification"],
+                               with_row_id=True).set_index(ROW_ID_COLUMN)
+            if self._processids is None:
+                self._processids = frame["processid"]
+            self._identifications = frame["identification"].map(
+                lambda v: "" if _missing(v) else str(v))
+        return self._identifications
+
+    def identifications(self, processids) -> dict[str, str]:
+        """processid -> current identification, for the given records (in
+        the result) in the order given."""
+        by_rowid = self.identifications_by_rowid()
+        self.all_processids()
+        lookup = dict(zip((str(p) for p in self._processids),
+                          by_rowid.reindex(self._processids.index)))
+        return {str(p): lookup.get(str(p), "") or "" for p in processids}
+
+    def records_named(self, name: str) -> list[str]:
+        """The processids of every record in the result currently identified
+        as ``name`` -- what a taxon update for it reaches."""
+        self.all_processids()
+        idents = self.identifications_by_rowid().reindex(self._processids.index)
+        return [str(p) for p, n in zip(self._processids, idents) if n == name]
+
+    def annotated_count(self) -> int:
+        """Records with annotations of their own, plus this result's records
+        a taxon update reaches by name."""
+        if not self.annotations.taxon_updates:
+            return len(self.annotations.annotated_processids())
+        self.all_processids()
+        idents = self.identifications_by_rowid().reindex(self._processids.index)
+        return len(self.annotations.annotated_processids(
+            dict(zip((str(p) for p in self._processids), idents))))
 
     # -- paging ------------------------------------------------------------
 
@@ -315,8 +369,8 @@ class SpecimenTable:
 
     # -- the working selection -----------------------------------------------
     #
-    # Disposable: exists only to gather targets for apply_flag/apply_note/
-    # apply_updated_id. "Check page/all", "Clear checked" and the per-row
+    # Disposable: exists only to gather targets for annotate /
+    # clear_annotations. "Check page/all", "Clear checked" and the per-row
     # ROW_CHECK_CLASS checkbox all act here, never on the representative pick.
 
     @property
@@ -347,28 +401,28 @@ class SpecimenTable:
     # Acts on the working selection (self.annotations.working) by default, or
     # on an explicit processid list -- never on the representative pick.
 
-    def apply_flag(self, flag: str, processids=None) -> int:
-        """Flag the checked records (or a given set).  Returns how many changed.
+    def annotate(self, form: AnnotationForm, processids=None) -> int:
+        """Apply the annotation form to the checked records (or a given set).
 
-        An empty flag clears, which is what the R dropdown's "None" does.
+        Returns how many records it reached. Raises ``ValueError`` with the
+        form's problems, in plain English, when it can't be applied -- the
+        same check the app's form makes. A name issue or synonym is stored
+        once, against the records' shared name (see ``io.annotations``).
         """
-        targets = self._targets(processids)
-        for processid in targets:
-            self.annotations.set_flag(processid, flag, user=self.user)
+        if not form.curator:
+            form.curator = self.user
+        targets = self.identifications(self._targets(processids))
+        errors = self.annotations.validate(form, targets)
+        if errors:
+            raise ValueError(" ".join(errors))
+        self.annotations.apply(form, targets)
         return len(targets)
 
-    def apply_note(self, note: str, processids=None) -> int:
-        """Set a curator note on the checked records.  Empty text clears it."""
+    def clear_annotations(self, processids=None) -> int:
+        """Remove the checked records' own flags, corrected IDs and notes."""
         targets = self._targets(processids)
         for processid in targets:
-            self.annotations.set_note(processid, note, user=self.user)
-        return len(targets)
-
-    def apply_updated_id(self, text: str, processids=None) -> int:
-        """Set a corrected identification on the checked records."""
-        targets = self._targets(processids)
-        for processid in targets:
-            self.annotations.set_updated_id(processid, text, user=self.user)
+            self.annotations.clear_record(processid)
         return len(targets)
 
     def _targets(self, processids) -> list[str]:

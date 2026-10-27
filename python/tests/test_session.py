@@ -24,9 +24,14 @@ def test_session_stores_the_query_not_the_frame(tmp_path, result):
 def test_round_trip_preserves_annotations(tmp_path, result):
     a = Annotations()
     first = str(result.specimens["processid"].iloc[0])
-    a.set_flag(first, "synonym", user="curator")
+    a.set_flag(first, "misidentification", contamination=True,
+               sequence_taxon="Homo sapiens", user="curator")
+    a.set_updated_id(first, "Danaus erippus", rank="species",
+                     method="Morphology", user="curator")
     a.set_note(first, "note text", user="curator")
     a.set_selected(first, user="curator")
+    a.set_taxon_update("Danaus plexippus", "synonym", "Danaus archippus",
+                       rank="species", citation="Smith 2019", user="curator")
 
     path = tmp_path / "sessions.sqlite"
     with SessionStore(path) as sessions:
@@ -38,31 +43,59 @@ def test_round_trip_preserves_annotations(tmp_path, result):
     assert loaded is not None
     assert loaded.snapshot_id == result.snapshot_id
     assert loaded.record_count == len(result.specimens)
-    assert loaded.annotations.flags[first]["flag"] == "synonym"
+    assert loaded.annotations.flags[first]["flag"] == "misidentification"
+    assert loaded.annotations.flags[first]["contamination"] is True
+    assert loaded.annotations.flags[first]["sequence_taxon"] == "Homo sapiens"
+    assert loaded.annotations.updated_ids[first]["method"] == "Morphology"
     assert loaded.annotations.curator_notes[first]["text"] == "note text"
     assert first in loaded.annotations.selected
+    assert loaded.annotations.taxon_updates == a.taxon_updates
+    assert loaded.annotations.converted == 0
 
 
-def test_a_retired_flag_in_an_old_session_survives_loading(tmp_path, result):
-    """Round 8, item 4.3 retired ``id_uncertain`` from the dropdown. A session
-    saved before that still loads with it, unchanged -- but it can't be set
-    on a record again."""
-    from boldcurator.config.constants import FLAG_OPTIONS, LEGACY_FLAGS
+def test_retired_flags_in_an_old_session_are_converted_on_load(tmp_path, result):
+    """Agreed: Data Issue becomes the Other issue tick, ID Uncertain becomes
+    ID unfounded, and Contamination (a flag before it was a tick) the
+    Contamination tick -- counted, so the app can say so, except the last,
+    whose meaning didn't change. Notes, IDs and who flagged it stay."""
+    from boldcurator.config.constants import ID_FLAGS, LEGACY_FLAG_MAP
 
-    assert "id_uncertain" not in FLAG_OPTIONS and "id_uncertain" in LEGACY_FLAGS
-    assert "contamination" in FLAG_OPTIONS
-    first = str(result.specimens["processid"].iloc[0])
+    assert not set(LEGACY_FLAG_MAP) & set(ID_FLAGS) - {"contamination"}
+    pids = [str(p) for p in result.specimens["processid"].iloc[:4]]
     a = Annotations()
-    a.flags[first] = {"flag": "id_uncertain", "timestamp": "2026-09-01T00:00:00",
-                      "user": "curator", "species": ""}
+    stamp = {"timestamp": "2026-09-01T00:00:00", "user": "curator", "species": ""}
+    a.flags[pids[0]] = {"flag": "id_uncertain", **stamp}
+    a.flags[pids[1]] = {"flag": "data_issue", **stamp}
+    a.flags[pids[2]] = {"flag": "contamination", **stamp}
+    a.flags[pids[3]] = "misidentification"      # the oldest shape: a bare string
+    a.updated_ids[pids[3]] = {"text": "Danaus erippus", "timestamp": "", "user": ""}
     path = tmp_path / "sessions.sqlite"
     with SessionStore(path) as sessions:
         sessions.save("old", result=result, annotations=a, user_email="a@example.org")
     with SessionStore(path) as sessions:
-        loaded = sessions.load("old")
-    assert loaded.annotations.flags[first]["flag"] == "id_uncertain"
-    with pytest.raises(ValueError):
-        loaded.annotations.set_flag(first, "id_uncertain")
+        loaded = sessions.load("old").annotations
+    assert loaded.converted == 2
+    assert loaded.flags[pids[0]]["flag"] == "id_unfounded"
+    assert loaded.flags[pids[0]]["user"] == "curator"
+    assert loaded.flags[pids[1]]["flag"] == "" and loaded.flags[pids[1]]["other_issue"]
+    assert loaded.flags[pids[2]]["flag"] == "" and loaded.flags[pids[2]]["contamination"]
+    assert loaded.flags[pids[3]]["flag"] == "misidentification"
+    assert loaded.resolve(pids[3], "Danaus plexippus").updated_id == "Danaus erippus"
+
+
+def test_resuming_an_old_session_says_what_was_converted(tmp_path, store):
+    from boldcurator.ui.state import AppState
+
+    state = AppState(store, page_size=25)
+    state.run_search("Danaus plexippus")
+    first = state.search.table.all_processids()[0]
+    state.annotations.flags[first] = {"flag": "data_issue"}
+    path = tmp_path / "sessions.sqlite"
+    with SessionStore(path) as sessions:
+        state.save_session(sessions, "old")
+        _, warnings = state.resume_session(sessions.load("old"))
+    assert any("converted" in w and "Other issue" in w for w in warnings)
+    assert state.annotations.flags[first]["other_issue"] is True
 
 
 def test_saving_twice_updates_in_place_and_keeps_created_at(tmp_path, result):
@@ -130,11 +163,11 @@ def test_annotations_are_plain_json_not_language_specific_blobs(tmp_path, result
 
     path = tmp_path / "s.sqlite"
     a = Annotations()
-    a.set_flag("P1", "data_issue")
+    a.set_flag("P1", "id_unfounded")
     with SessionStore(path) as sessions:
         sessions.save("s1", result=result, annotations=a)
 
     con = sqlite3.connect(path)
     raw = con.execute("SELECT annotations_json FROM sessions").fetchone()[0]
     con.close()
-    assert json.loads(raw)["flags"]["P1"]["flag"] == "data_issue"
+    assert json.loads(raw)["flags"]["P1"]["flag"] == "id_unfounded"

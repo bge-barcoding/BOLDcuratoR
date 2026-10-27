@@ -59,15 +59,45 @@ record identified only to the BIN's own genus changes nothing.
 | **Phylogeny** | Neighbour-joining tree (K2P, reference-anchored alignment) of one representative per selected BIN x country, with monophyly badges for grade-C species; warns above 500 tips, refuses above 1,000 |
 | **Specimens** | Every record, server-side paged and sortable; Find records narrows it to one column's (or any column's) text |
 
-Across the tables: per-record annotations (flag, curator note, corrected
-identification, and Clear annotations to undo them), "Find records" on
-Specimens and every BAGS group (check all it found, then annotate them),
-"checked" records and a separate representative pick
-(auto-selected per BIN x country on a fresh search). Downloads: all /
-selected / annotated records (xlsx, prepared in the background with a
-progress panel, then saved by themselves), the selected process IDs (one per line,
-for a BOLD dataset), the BOLD curation report (TSV), FASTA, CSV, xlsx
-species and BIN analyses, and the tree as Newick.
+Across the tables: annotations (below), "Find records" on Specimens and
+every BAGS group (check all it found, then annotate them), "checked"
+records and a separate representative pick (auto-selected per BIN x country
+on a fresh search). Downloads: all / selected / annotated records (xlsx,
+prepared in the background with a progress panel, then saved by themselves;
+the annotated workbook carries the taxon updates as a second sheet), the
+selected process IDs (one per line, for a BOLD dataset), the BOLD curation
+report and the taxon updates (TSV), FASTA, CSV, xlsx species and BIN
+analyses, and the tree as Newick.
+
+### Annotations
+
+Check records, then **Annotate checked…** opens a form that shows each
+flag's definition, asks only for what the chosen flag needs, and won't apply
+until the required fields are filled in. A record has at most one **ID
+issue**, because each gives one new identification, plus two yes/no issues
+that combine with it and with each other:
+
+| | Level | Required |
+|---|---|---|
+| Misidentification -- the voucher is incorrectly identified | record | correct ID, rank, identification method, note |
+| ID unfounded -- the ID can't be validated; strip it back to a supported rank | record | revised ID, rank, identification method, note |
+| Name issue -- the name is misspelt or malformed | taxon | corrected name, rank |
+| Synonym -- the name is a junior synonym | taxon | senior synonym, rank, citation |
+| Contamination (tick) -- the sequence isn't from the voucher | record | the taxon the sequence comes from |
+| Other issue (tick) -- a data problem that isn't the ID, e.g. lat/long | record | note |
+
+The curator's full name is always required. The rank is suggested from the
+name; the identification method is one of the iBOL accepted terms.
+
+**Taxon updates.** Name issue and synonym fix the taxon record in BOLD, so
+they are saved once, for the name, and reach every record identified as it
+(listed, downloadable and removable under *Taxon updates* on the Specimens
+tab). A record's own corrected ID always wins over a taxon update, whichever
+came first; if that corrected ID is itself a name with a taxon update, the
+update is followed too, and *Update from* shows both steps
+("record → taxon (synonym)"). Sessions saved by earlier versions convert on
+load: Data Issue becomes the Other issue tick, ID Uncertain becomes ID
+unfounded.
 
 The window is a native pywebview window where that works, else a Chromium
 `--app` window, else a browser tab (`--window auto|native|browser-app|tab`).
@@ -210,10 +240,10 @@ The server only lets in the client that opened its launch URL, which
 carries a one-time token (`localguard.py`), so `gui` prints it ("Open
 BOLDcurator at ...") and each `drive_ui.py` run needs a fresh server.
 
-`drive_ui.py` makes 57 checks across every tab and exits non-zero on a
-failure. When adding one, match against the table, not the panel -- the flag
-`<select>` contains every flag name, so a panel-wide text match passes for an
-annotation that never rendered.
+`drive_ui.py` makes 66 checks across every tab and exits non-zero on a
+failure. When adding one, match against the table, not the panel -- the
+annotation form's `<select>` contains every flag name, so a panel-wide text
+match passes for an annotation that never rendered.
 
 **Benchmarking** needs no real snapshot: `tools/make_benchmark_snapshot.py`
 builds a 20 M-row synthetic stand-in with the real shape in about six
