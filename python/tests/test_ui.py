@@ -143,6 +143,9 @@ def test_all_columns_ordered_drops_nothing_and_leads_with_the_curated_ones(store
     assert len(ordered) == len(set(ordered)), "no duplicates either"
     curated_present = [c for c in GROUP_COLUMNS if c in rows.columns]
     assert ordered[:len(curated_present)] == curated_present
+    # Round 11, item 5: how each update was made goes after the BOLD columns.
+    from boldcurator.ui.format import TRAILING_COLUMNS
+    assert ordered[-len(TRAILING_COLUMNS):] == TRAILING_COLUMNS
     # A real BOLD column that is deliberately not curated, to prove "the rest"
     # isn't empty -- this port's schema always carries it.
     assert "sampleid" in ordered[len(curated_present):]
@@ -784,8 +787,8 @@ def test_a_form_over_records_that_differ_keeps_each_records_own():
 
     html = _modal_html(AnnotationForm(), uniform=False)
     assert "(keep each record&#39;s own)" in html or "(keep each record's own)" in html
-    assert "different annotations" in html
-    assert "different annotations" not in _modal_html()
+    assert "These records differ" in html
+    assert "These records differ" not in _modal_html()
 
 
 def test_the_id_issue_and_ticks_render_as_chips():
@@ -799,8 +802,10 @@ def test_the_id_issue_and_ticks_render_as_chips():
         "update_source": ["taxon (name_issue)"], "processid": ["P1"]}),
         ["id_flag", "contamination", "other_issue", "updated_id",
          "update_source", "processid"])
-    assert "ID unfounded" in html and "Contamination" in html
-    assert "Other issue</span>" not in html
+    # Round 11, item 4: short chips keep the frozen columns narrow; the
+    # full name is on hover.
+    assert ">Unfounded</span>" in html and "title='ID unfounded'" in html
+    assert ">Contam.</span>" in html and "Other</span>" not in html
     assert ">taxon</span>" in html
 
 
@@ -999,3 +1004,25 @@ def test_the_analysis_runs_once_however_many_threads_ask(store, monkeypatch):
     assert len(calls) == 1 and results[0] is results[1]
     assert stages[0].startswith("Fetching") and stages[-1] == "Choosing representatives"
     assert app_state.annotations.selected            # representatives chosen
+
+
+def test_the_form_puts_fields_side_by_side_and_names_the_formed_name():
+    """Round 11, items 2 and 3: "Correctly formed name"; rows of fields, not
+    one long column, so the form needn't scroll."""
+    from html import unescape
+
+    from boldcurator.io.annotations import AnnotationForm
+
+    html = unescape(_modal_html(AnnotationForm(id_flag="name_issue")))
+    assert "Correctly formed name" in html and "spelt or" not in html
+    assert html.count('class="bc-ann-row"') == 3
+    assert "modal-xl" in html and "<hr" not in html
+
+
+def test_the_specimens_toolbar_has_no_check_page_button():
+    """Round 11, item 6."""
+    import inspect
+
+    from boldcurator.ui import app
+
+    assert '"select_page"' not in inspect.getsource(app)

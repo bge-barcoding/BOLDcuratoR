@@ -80,8 +80,7 @@ UNNAMED_COLOUR = "#5a6f8a"
 #: ``io.annotations``'s module docstring -- so both are always shown together.
 GROUP_COLUMNS = [
     "selected", "checked", "id_flag", "updated_id", "curator_notes",
-    "contamination", "other_issue", "update_source", "updated_id_rank",
-    "updated_id_method", "sequence_taxon", "citation", "curator",
+    "contamination", "other_issue",
     "rank", "quality_score", "processid", "bin_uri",
     "species", "name_status", "identification_rank", "bags_grade",
     "identification", "identified_by", "country.ocean",
@@ -95,7 +94,7 @@ GROUP_COLUMNS = [
 GROUP_LABELS = {
     "selected": "Rep.", "checked": "Check", "id_flag": "ID issue",
     "updated_id": "Updated ID", "curator_notes": "Notes",
-    "contamination": "Contamination", "other_issue": "Other issue",
+    "contamination": "Contam.", "other_issue": "Other issue",
     "update_source": "Update from", "updated_id_rank": "Updated ID rank",
     "updated_id_method": "Updated ID method", "sequence_taxon": "Sequence taxon",
     "citation": "Citation", "curator": "Curator", "rank": "Rank",
@@ -105,6 +104,14 @@ GROUP_LABELS = {
     "identified_by": "Identified by", "country.ocean": "Country/Ocean",
     "inst": "Institution",
 }
+
+#: The annotation detail columns, shown after every BOLD column: the ID
+#: issue, updated ID and note up front say what was done; these say how,
+#: and would otherwise push the data off the screen.
+TRAILING_COLUMNS = [
+    "update_source", "updated_id_rank", "updated_id_method", "sequence_taxon",
+    "citation", "curator",
+]
 
 #: Annotation columns exported but not shown: when, and by whom, is in the
 #: download; on screen it would be one more column to scroll past.

@@ -261,12 +261,14 @@ PREFERRED_COLUMN_ORDER: tuple[str, ...] = (
 #: ``level`` says what BOLD updates: a *record* flag changes one specimen
 #: record; a *taxon* flag changes the taxon record, so it reaches every record
 #: carrying the name (``io.annotations`` stores it once, as a taxon update).
-#: ``new_id`` is what the form calls the new identification for that flag.
+#: ``new_id`` is what the form calls the new identification for that flag;
+#: ``short`` is the table's chip, narrow enough for its frozen column.
 #: Replaces the single ``FLAG_OPTIONS`` list of earlier versions, which the
 #: R app still uses (``get_flag_options()``, R/utils/annotation_utils.R:43).
 ID_FLAGS: dict[str, dict[str, str]] = {
     "misidentification": {
         "label": "Misidentification",
+        "short": "Misident.",
         "level": "record",
         "new_id": "Correct identification",
         "definition": "The voucher specimen is incorrectly identified.",
@@ -277,6 +279,7 @@ ID_FLAGS: dict[str, dict[str, str]] = {
     },
     "id_unfounded": {
         "label": "ID unfounded",
+        "short": "Unfounded",
         "level": "record",
         "new_id": "Revised identification",
         "definition": "The current ID cannot be validated or is otherwise "
@@ -288,8 +291,9 @@ ID_FLAGS: dict[str, dict[str, str]] = {
     },
     "name_issue": {
         "label": "Name issue",
+        "short": "Name issue",
         "level": "taxon",
-        "new_id": "Correctly spelt or formed name",
+        "new_id": "Correctly formed name",
         "definition": "The current ID is not correctly formed or spelt.",
         "comment": "Fixes the taxon record, so it applies to every record "
                    "with this name -- except records with their own "
@@ -297,6 +301,7 @@ ID_FLAGS: dict[str, dict[str, str]] = {
     },
     "synonym": {
         "label": "Synonym",
+        "short": "Synonym",
         "level": "taxon",
         "new_id": "Senior synonym",
         "definition": "The current ID is a junior synonym of another name.",
@@ -314,6 +319,7 @@ TAXON_FLAGS = frozenset(k for k, v in ID_FLAGS.items() if v["level"] == "taxon")
 ISSUE_TICKS: dict[str, dict[str, str]] = {
     "contamination": {
         "label": "Contamination",
+        "short": "Contam.",
         "definition": "The sequence is not endogenous to the voucher "
                       "specimen.",
         "comment": "Independent of misidentification: this is about the "
@@ -324,6 +330,7 @@ ISSUE_TICKS: dict[str, dict[str, str]] = {
     },
     "other_issue": {
         "label": "Other issue",
+        "short": "Other",
         "definition": "An issue with the specimen data (not ID related).",
         "comment": "e.g. incorrect lat/long. Lower priority; needs manual "
                    "inspection by the BOLD team. Describe it in the note.",

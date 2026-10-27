@@ -226,6 +226,18 @@ def main(argv: list[str] | None = None) -> int:
         check("an incomplete form is refused and says what is missing",
               "Identification method is required" in error, error)
         page.select_option("#ann_method", "Morphology")
+        page.set_checked("#ann_contamination", True)
+        page.set_checked("#ann_other_issue", True)
+        time.sleep(SETTLE / 2)
+        box = page.locator("#shiny-modal .modal-dialog").bounding_box()
+        check("the form fits the window without scrolling, every part shown",
+              box is not None and box["y"] + box["height"]
+              <= page.viewport_size["height"],
+              f"{box and round(box['y'] + box['height'])} of "
+              f"{page.viewport_size['height']}px")
+        page.set_checked("#ann_contamination", False)
+        page.set_checked("#ann_other_issue", False)
+        time.sleep(SETTLE / 2)
         check("the rank is suggested from the name",
               page.input_value("#ann_rank") == "species",
               page.input_value("#ann_rank"))
@@ -233,7 +245,7 @@ def main(argv: list[str] | None = None) -> int:
         time.sleep(SETTLE * 1.5)
         annotated = table_text(f"#grade_{grade}_body")
         check("the flag lands in the group's table",
-              "Misidentification" in annotated and "Danaus drivenus" in annotated)
+              "Misident." in annotated and "Danaus drivenus" in annotated)
         check("the note lands in the group's table", "driven by drive_ui" in annotated)
         page.screenshot(path=str(args.out / "04-annotated.png"), full_page=True)
 
@@ -255,8 +267,8 @@ def main(argv: list[str] | None = None) -> int:
                          sequence_taxon="Homo sapiens")
         annotated = table_text(f"#grade_{grade}_body")
         check("contamination combines with the misidentification",
-              not error and "Contamination" in annotated
-              and "Misidentification" in annotated and "Homo sapiens" in annotated,
+              not error and "Contam." in annotated
+              and "Misident." in annotated and "Homo sapiens" in annotated,
               error)
         page.click(f"#g{grade}_clear_ann")
         time.sleep(SETTLE)
@@ -265,7 +277,7 @@ def main(argv: list[str] | None = None) -> int:
         annotated = table_text(f"#grade_{grade}_body")
         check('"Clear annotations" removes them, once confirmed',
               "driven by drive_ui" not in annotated
-              and "Misidentification" not in annotated)
+              and "Misident." not in annotated)
 
         # A synonym on one checked record is saved for its name, so it
         # reaches every record with that name -- here and on other tabs.
@@ -280,7 +292,7 @@ def main(argv: list[str] | None = None) -> int:
         same = [u for i, u in zip(idents, updated) if i == idents[0]]
         check("a synonym reaches every record with the name, marked as a taxon update",
               not error and len(same) >= 1
-              and all(u.startswith("Danaus seniorus") and "taxon" in u
+              and all("Danaus seniorus" in u and "taxon" in u
                       for u in same), f"{error} {same[:3]}")
         page.screenshot(path=str(args.out / "04b-synonym.png"), full_page=True)
 
@@ -289,7 +301,7 @@ def main(argv: list[str] | None = None) -> int:
             time.sleep(SETTLE * 1.5)
             other = table_text(f"#grade_{grade}_body")
             check("the next group is untouched",
-                  "Misidentification" not in other
+                  "Misident." not in other
                   and "driven by drive_ui" not in other)
 
             # -- a per-row check left in one group must not leak into
@@ -311,7 +323,8 @@ def main(argv: list[str] | None = None) -> int:
             error = annotate(f"g{grade}", other_issue=True,
                              note="lat/long swapped")
             check("annotating reaches the current group's own check",
-                  not error and "Other issue" in table_text(f"#grade_{grade}_body"),
+                  not error and "Other" in column_values(f"#grade_{grade}_body",
+                                                         "Other issue"),
                   error)
             page.click(f"#prev_{grade}")
             time.sleep(SETTLE * 1.5)
@@ -405,7 +418,7 @@ def main(argv: list[str] | None = None) -> int:
         # not only a stored/physical one -- SpecimenTable.sort_by fetches
         # nothing from the database for these, it reads Annotations directly.
         for label in ("Rep.", "Check", "ID issue", "Updated ID", "Notes",
-                      "Contamination", "Curator"):
+                      "Contam.", "Curator"):
             check(f'the "{label}" column header is sortable',
                   page.locator("#specimens_body th.bc-sort-th",
                               has_text=label).count() >= 1)

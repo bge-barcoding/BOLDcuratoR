@@ -81,6 +81,7 @@ from .format import (
     GROUP_LABELS,
     HIDDEN_COLUMNS,
     INLINE_INPUT_CSS,
+    TRAILING_COLUMNS,
     UNNAMED_COLOUR,
     bold_bin_url,
     bold_record_url,
@@ -283,9 +284,11 @@ def _all_columns_ordered(frame: pd.DataFrame) -> list[str]:
     specially excluded here.
     """
     preferred = [c for c in GROUP_COLUMNS if c in frame.columns]
+    trailing = [c for c in TRAILING_COLUMNS if c in frame.columns]
     rest = [c for c in frame.columns
-            if c not in GROUP_COLUMNS and c not in HIDDEN_COLUMNS]
-    return preferred + rest
+            if c not in GROUP_COLUMNS and c not in TRAILING_COLUMNS
+            and c not in HIDDEN_COLUMNS]
+    return preferred + rest + trailing
 
 #: Why each specimen-handling download can come back empty, keyed the same
 #: way ``SearchState.export_specimens`` is.
@@ -460,11 +463,44 @@ def _annotation_controls(prefix: str) -> list:
 KEEP = "__keep__"
 
 
-def _shown_if(condition: str, *children):
+def _shown_if(condition: str, *children, flex: str | None = None):
     """A part of the form shown only while ``condition`` (JavaScript over
     ``input``) holds: Shiny's own conditional panel, kept in the page, so
-    whatever was typed in it survives being hidden."""
+    whatever was typed in it survives being hidden. ``flex`` sizes it in a
+    ``_form_row``, where the parts still shown widen into the space -- on a
+    wrapper inside the panel, because Shiny shows a panel as
+    ``display: contents``, which makes its child the row's item."""
+    if flex:
+        children = (_part(*children, flex=flex),)
     return ui.panel_conditional(condition, *children)
+
+
+def _form_row(*children) -> ui.Tag:
+    """Form fields side by side (each child sized by its own ``flex``)."""
+    return ui.div(*children, class_="bc-ann-row")
+
+
+def _part(*children, flex: str = "1 1 0") -> ui.Tag:
+    """An always-shown part of a ``_form_row``."""
+    return ui.div(*children, style=f"flex:{flex};min-width:0;")
+
+
+#: Round 11, item 3: the form fits a 1400x900 window without scrolling --
+#: tight spacing, fields side by side, definitions in small print.
+ANNOTATION_FORM_CSS = """
+.modal-body.bc-ann { padding: 10px 16px; }
+#shiny-modal:has(.bc-ann) .modal-dialog { margin-top: 16px; margin-bottom: 16px; }
+#shiny-modal:has(.bc-ann) .modal-header,
+#shiny-modal:has(.bc-ann) .modal-footer { padding: 8px 16px; }
+#shiny-modal:has(.bc-ann) .modal-title { font-size: 1.15rem; }
+.bc-ann .form-group, .bc-ann .shiny-input-container { margin-bottom: 6px; }
+.bc-ann .control-label, .bc-ann label { margin-bottom: 2px; }
+.bc-ann .bc-ann-row { display: flex; gap: 12px; align-items: flex-start; }
+.bc-ann .bc-ann-help { font-size: 12px; color: #6c757d; margin: -2px 0 6px;
+    line-height: 1.3; }
+.bc-ann .checkbox, .bc-ann .form-check { margin-bottom: 2px; }
+.bc-ann textarea { resize: vertical; }
+"""
 
 
 def _required(label: str) -> ui.Tag:
@@ -504,67 +540,85 @@ def _annotation_modal(count: int, form, uniform: bool, curator: str) -> ui.Tag:
 
     def help_text(info: dict) -> ui.Tag:
         return ui.div(ui.tags.strong(info["definition"]), " ", info["comment"],
-                      class_="small text-muted mb-2")
+                      class_="bc-ann-help")
 
     # Set here and again by ``_update_form_labels`` as the ID issue
     # changes: a conditional panel inside a label doesn't hide.
     new_id_label, note_label = _form_labels(flag, bool(form.other_issue))
 
     mixed = ("" if uniform else
-             ui.div("These records have different annotations. Anything you "
-                    "leave blank or unticked stays as each record has it.",
-                    class_="alert alert-warning py-1 px-2 small"))
-    tick_suffix = "" if uniform else " (ticking sets it on every record)"
+             ui.div("These records differ: anything left blank or unticked "
+                    "stays as each record has it.",
+                    class_="alert alert-warning py-1 px-2 mb-2 small"))
+    tick_suffix = "" if uniform else " (sets it on every record)"
     return ui.modal(
+        ui.tags.style(ANNOTATION_FORM_CSS),
         mixed,
         ui.input_select("ann_id_flag", "ID issue", choices=choices,
                         selected=flag, width="100%"),
         *(_shown_if(_flag_is(k), help_text(v)) for k, v in ID_FLAGS.items()),
-        _shown_if(_flag_is(*ID_FLAGS),
-                  ui.input_text("ann_new_id", new_id_label, value=form.new_id,
-                                width="100%"),
-                  ui.input_select("ann_rank", _required("Rank"),
-                                  choices={"": "Choose…"}
-                                  | {r: r for r in ID_RANKS},
-                                  selected=form.rank, width="100%"),
-                  ui.div("Filled in from the name as a suggestion -- check it.",
-                         class_="small text-muted mb-2",
-                         style="margin-top:-10px;")),
-        _shown_if(_flag_is(*record_flags),
-                  ui.input_select("ann_method",
-                                  _required("Identification method"),
-                                  choices={"": "Choose…"}
-                                  | {m: m for m in ID_METHODS},
-                                  selected=form.method, width="100%"),
-                  ui.output_ui("ann_method_help")),
-        _shown_if(_flag_is("synonym"),
-                  ui.input_text("ann_citation", _required("Citation"),
-                                value=form.citation, width="100%",
-                                placeholder="Where the synonymy was "
-                                            "published")),
+        _shown_if(
+            _flag_is(*ID_FLAGS),
+            _form_row(
+                _part(ui.input_text("ann_new_id", new_id_label,
+                                    value=form.new_id, width="100%"),
+                      flex="2 1 0"),
+                _part(ui.input_select(
+                    "ann_rank",
+                    ui.span("Rank", ui.tags.span(" *", class_="text-danger"),
+                            ui.tags.span(" (suggested)", class_="text-muted small")),
+                    choices={"": "Choose…"} | {r: r for r in ID_RANKS},
+                    selected=form.rank, width="100%"), flex="1 1 0"),
+                _shown_if(_flag_is(*record_flags),
+                          ui.input_select("ann_method",
+                                          _required("Identification method"),
+                                          choices={"": "Choose…"}
+                                          | {m: m for m in ID_METHODS},
+                                          selected=form.method, width="100%"),
+                          flex="1.6 1 0"),
+                _shown_if(_flag_is("synonym"),
+                          ui.input_text("ann_citation", _required("Citation"),
+                                        value=form.citation, width="100%",
+                                        placeholder="Where the synonymy was "
+                                                    "published"),
+                          flex="1.6 1 0"),
+            ),
+        ),
+        _shown_if(_flag_is(*record_flags), ui.output_ui("ann_method_help")),
         ui.output_ui("ann_impact"),
-        ui.tags.hr(class_="my-2"),
-        ui.input_checkbox("ann_contamination",
-                          ISSUE_TICKS["contamination"]["label"] + tick_suffix,
-                          value=bool(form.contamination)),
-        _shown_if("input.ann_contamination",
-                  help_text(ISSUE_TICKS["contamination"]),
-                  ui.input_text("ann_sequence_taxon",
-                                _required("Sequence taxon -- what the sequence "
-                                          "actually comes from"),
-                                value=form.sequence_taxon, width="100%")),
-        ui.input_checkbox("ann_other_issue",
-                          ISSUE_TICKS["other_issue"]["label"] + tick_suffix,
-                          value=bool(form.other_issue)),
-        _shown_if("input.ann_other_issue",
-                  help_text(ISSUE_TICKS["other_issue"])),
-        ui.tags.hr(class_="my-2"),
-        ui.input_text_area(
-            "ann_note", note_label, value=form.note or "", width="100%", rows=2,
-            placeholder="" if uniform else "Leave blank to keep each "
-                                           "record's own note"),
-        ui.input_text("ann_curator", _required("Curator (your full name)"),
-                      value=curator, width="100%"),
+        _form_row(
+            _part(
+                ui.input_checkbox("ann_contamination",
+                                  ISSUE_TICKS["contamination"]["label"]
+                                  + tick_suffix,
+                                  value=bool(form.contamination)),
+                _shown_if("input.ann_contamination",
+                          help_text(ISSUE_TICKS["contamination"]),
+                          ui.input_text("ann_sequence_taxon",
+                                        _required("Sequence taxon -- what the "
+                                                  "sequence actually comes from"),
+                                        value=form.sequence_taxon,
+                                        width="100%")),
+            ),
+            _part(
+                ui.input_checkbox("ann_other_issue",
+                                  ISSUE_TICKS["other_issue"]["label"]
+                                  + tick_suffix,
+                                  value=bool(form.other_issue)),
+                _shown_if("input.ann_other_issue",
+                          help_text(ISSUE_TICKS["other_issue"])),
+            ),
+        ),
+        _form_row(
+            _part(ui.input_text_area(
+                "ann_note", note_label, value=form.note or "", width="100%",
+                rows=2, placeholder="" if uniform else "Leave blank to keep "
+                                                       "each record's own note"),
+                flex="2 1 0"),
+            _part(ui.input_text("ann_curator",
+                                _required("Curator (your full name)"),
+                                value=curator, width="100%"), flex="1 1 0"),
+        ),
         ui.output_ui("ann_errors"),
         title=f"Annotate {count:,} checked record{'s' if count != 1 else ''}",
         footer=ui.div(
@@ -572,8 +626,9 @@ def _annotation_modal(count: int, form, uniform: bool, curator: str) -> ui.Tag:
             ui.input_action_button("ann_confirm", "Apply",
                                    class_="btn-sm btn-primary"),
         ),
-        size="l",
+        size="xl",
         easy_close=False,
+        class_="bc-ann",
     )
 
 
@@ -1043,7 +1098,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                away via each cell's own `title` attribute (_table's default
                cell renderer). */
             .bc-scroll td {
-                max-width: 280px; overflow: hidden; text-overflow: ellipsis;
+                max-width: 200px; overflow: hidden; text-overflow: ellipsis;
             }
             /* Round 9, item 6: the Data tab in one column -- snapshot,
                then session, then the app -- now that the snapshot panel is
@@ -2669,7 +2724,12 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             @reactive.event(input[f"group_{grade}"])
             def _pick():
                 chosen = input[f"group_{grade}"]()
-                if chosen is not None and str(chosen).isdigit():
+                # Only a real change of group re-renders: Previous/Next
+                # already moved it and set this dropdown to match, and
+                # rendering the screen a second time for that reset any
+                # "Find records" column picked in between.
+                if (chosen is not None and str(chosen).isdigit()
+                        and int(chosen) != group_index[grade].get()):
                     group_index[grade].set(int(chosen))
                     touch()
 
@@ -3085,8 +3145,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             method = input.ann_method() or ""
             if method not in ID_METHODS:
                 return ui.div()
-            return ui.div(ID_METHODS[method], class_="small text-muted mb-2",
-                          style="margin-top:-10px;")
+            return ui.div(ID_METHODS[method], class_="bc-ann-help")
 
         @output(id="ann_impact")
         @render.ui
@@ -3320,8 +3379,6 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 # Round 6, curation tools item 6: one flat row -- see the
                 # matching change in _grade_body for why.
                 ui.div(
-                    ui.input_action_button("select_page", "Check page",
-                                           class_="btn-sm"),
                     ui.input_action_button(
                         "select_all",
                         f"Check all {table.total_rows:,} found" if found
@@ -3454,16 +3511,6 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             search = state.search
             if search is not None:
                 offset.set((search.table.page_count - 1) * search.table.page_size)
-                touch()
-
-        @reactive.effect
-        @reactive.event(input.select_page)
-        def _check_page():
-            """"Check page": the working selection, not the representative
-            pick -- see io.annotations's module docstring.
-            """
-            if state.search is not None:
-                state.search.table.check_page(offset.get())
                 touch()
 
         @reactive.effect
@@ -3945,8 +3992,8 @@ SCROLL_CLASS = "bc-scroll"
 #: -- the annotation columns a curator's eye and mouse live in while everything
 #: else scrolls out from under them.
 STICKY_COLUMN_WIDTHS: dict[str, int] = {
-    "selected": 44, "checked": 44, "id_flag": 120, "updated_id": 170,
-    "curator_notes": 160,
+    "selected": 40, "checked": 46, "id_flag": 95, "updated_id": 140,
+    "curator_notes": 90,
 }
 
 
@@ -4074,9 +4121,11 @@ def _table(frame: pd.DataFrame, labels: dict[str, str] | None = None,
     )
 
 
-def _chip(value: str, colour: str) -> str:
-    return (f"<td><span style='background:{colour};color:#fff;padding:1px 9px;"
-            f"border-radius:10px;font-weight:600;'>{_escape(value)}</span></td>")
+def _chip(value: str, colour: str, *, title: str = "") -> str:
+    attr = f" title='{_escape_attr(title)}'" if title else ""
+    return (f"<td{attr}><span style='background:{colour};color:#fff;"
+            "padding:1px 7px;border-radius:10px;font-weight:600;'>"
+            f"{_escape(value)}</span></td>")
 
 
 def _link_cell(value: object, url: str) -> str:
@@ -4204,18 +4253,23 @@ def _group_html(frame: pd.DataFrame, columns: list[str] | None = None,
             return f"<td>{'✔' if chosen else ''}</td>"
         if column == "bags_grade" and not _is_missing(value) and value:
             return _chip(value, GRADE_COLOURS.get(str(value), "#adb5bd"))
+        # Round 11, item 4: short chips, so the frozen columns stay narrow;
+        # the full name is a hover away.
         if column == "id_flag" and not _is_missing(value) and value:
-            return _chip(ID_FLAGS[value]["label"] if value in ID_FLAGS
-                         else str(value), "#6f42c1")
+            info = ID_FLAGS.get(str(value), {})
+            return _chip(info.get("short", str(value)), "#6f42c1",
+                         title=info.get("label", str(value)))
         if column in ISSUE_TICKS:
             ticked = not _is_missing(value) and bool(value)
-            return _chip(ISSUE_TICKS[column]["label"], "#d63384") if ticked \
-                else "<td></td>"
+            info = ISSUE_TICKS[column]
+            return _chip(info["short"], "#d63384", title=info["label"]) \
+                if ticked else "<td></td>"
         if column == "updated_id" and not _is_missing(value) and value:
             source = row.get("update_source", "") if hasattr(row, "get") else ""
             if isinstance(source, str) and "taxon" in source:
-                return (f"<td>{_escape(value)} <span class='badge bg-secondary' "
-                        f"title='{_escape_attr(source)}'>taxon</span></td>")
+                return (f"<td title='{_escape_attr(f'{value} ({source})')}'>"
+                        f"<span class='badge bg-secondary'>taxon</span> "
+                        f"{_escape(value)}</td>")
             return None
         if column == "processid" and not _is_missing(value) and value:
             return _link_cell(value, bold_record_url(str(value)))

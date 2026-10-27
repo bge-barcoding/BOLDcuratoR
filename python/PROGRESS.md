@@ -42,6 +42,13 @@ and `config/constants.py` (`ID_FLAGS`, `ISSUE_TICKS`, `REQUIRED_FIELDS`,
   issue, id_uncertain → id_unfounded, and say so once. A record-level synonym
   flag from before stays as it was. Session schema version 2.
 - The R app keeps its own flag list.
+- [x] Follow-up (round 11, same day):
+  1. narrower frozen columns (411 px, was 538; short chips such as "Misident.", full name on hover) and a 200 px cap on other cells, so BOLD columns show without scrolling at 1400 px;
+  2. "Correctly formed name";
+  3. the form lays fields out side by side and fits a 1400x900 window in its fullest state (`ANNOTATION_FORM_CSS`; a Shiny conditional panel is `display: contents`, so `_shown_if` sizes a wrapper inside it);
+  4. "Contam." and a narrow Notes column;
+  5. how-it-was-done columns (`TRAILING_COLUMNS`) after the BOLD ones;
+  6. no "Check page" button.
 
 ## Round 10 curator feedback (2026-10-18) -- done
 
