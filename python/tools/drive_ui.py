@@ -107,6 +107,15 @@ def main(argv: list[str] | None = None) -> int:
                     .map(tr => tr.children[i].innerText.trim());
             }""", [selector, label])
 
+        def group_count(grade: str) -> int:
+            """How many groups a screen has, from its "i of N" (the group
+            list is a selectize, which keeps only the chosen option)."""
+            pos = page.locator(f"#grade_{grade}_body .bc-group-pos")
+            if not pos.count():
+                return 0
+            match = re.search(r"of ([\d,]+)", pos.first.inner_text())
+            return int(match.group(1).replace(",", "")) if match else 0
+
         def show(name: str, settle: float = 3.0) -> None:
             # has-text, not text-is: the priority grades carry a bullet in
             # their label, so an exact match finds nothing.
@@ -169,7 +178,7 @@ def main(argv: list[str] | None = None) -> int:
         # -- the grade screens, and the group navigator
         for grade in ("E", "C", "A"):
             show(f"BAGS {grade}")
-            groups = page.locator(f"#group_{grade} option").count()
+            groups = group_count(grade)
             body = page.locator(f"#grade_{grade}_body").inner_text()
             if "No species graded" in body:
                 check(f"grade {grade} reports an empty grade cleanly", True,
@@ -296,7 +305,7 @@ def main(argv: list[str] | None = None) -> int:
                       for u in same), f"{error} {same[:3]}")
         page.screenshot(path=str(args.out / "04b-synonym.png"), full_page=True)
 
-        if page.locator(f"#group_{grade} option").count() > 1:
+        if group_count(grade) > 1:
             page.click(f"#next_{grade}")
             time.sleep(SETTLE * 1.5)
             other = table_text(f"#grade_{grade}_body")
@@ -342,6 +351,12 @@ def main(argv: list[str] | None = None) -> int:
         check("Find records narrows a group to the matches",
               bool(who) and all("smith" in w.lower() for w in who),
               f"{len(who)} rows")
+        banner = page.locator(f"#grade_{grade}_body .bc-filter-banner")
+        check("a filtered table says so above it, and is outlined",
+              banner.count() == 1 and "Filtered" in banner.inner_text()
+              and f"showing {len(who)} of" in banner.inner_text()
+              and page.locator(f"#grade_{grade}_body .bc-scroll.bc-filtered").count()
+              == 1, banner.inner_text() if banner.count() else "no banner")
         page.click(f"#selall_{grade}")
         time.sleep(SETTLE)
         here = page.locator(f"#grade_{grade}_body").inner_text()
@@ -351,8 +366,54 @@ def main(argv: list[str] | None = None) -> int:
               re.search(r"\d+ checked here", here) else "")
         page.click(f"#find_clear_{grade}")
         time.sleep(SETTLE)
+        check("Clear filter takes the banner away",
+              page.locator(f"#grade_{grade}_body .bc-filter-banner").count() == 0)
         page.click(f"#clear_{grade}")
         time.sleep(SETTLE)
+
+        # Round 12, item 4: groups marked reviewed, and annotated ones, show
+        # in the group list; Next unreviewed skips the reviewed ones.
+        body = page.locator(f"#grade_{grade}_body").inner_text()
+        page.click(f"#review_{grade}")
+        time.sleep(SETTLE)
+        body = page.locator(f"#grade_{grade}_body").inner_text()
+        options = page.evaluate(
+            f"Object.values(document.querySelector('#group_{grade}').selectize"
+            ".options).map(o => o.label)")
+        check("Mark reviewed marks the group and counts it",
+              "1 reviewed" in body and "Reviewed ✓ (undo)" in body
+              and any(o.startswith("✓") for o in options), str(options[:2]))
+        check("groups holding annotated records carry ✎",
+              any("✎" in o for o in options), str(options[:3]))
+        if group_count(grade) > 1:
+            before = page.locator(f"#grade_{grade}_body .bc-group-pos").inner_text()
+            page.click(f"#next_unrev_{grade}")
+            time.sleep(SETTLE)
+            after = page.locator(f"#grade_{grade}_body .bc-group-pos").inner_text()
+            check("Next unreviewed moves to an unreviewed group",
+                  before != after and "Mark reviewed ✓" in
+                  page.locator(f"#grade_{grade}_body").inner_text(),
+                  f"{before} -> {after}")
+            page.click(f"#prev_{grade}")
+            time.sleep(SETTLE)
+
+        # Round 12, item 3: grade with the curated IDs -- the synonym made
+        # above renames a species, so the checklist gains the curated grade
+        # beside the original and a row for the new name.
+        show("Species", settle=SETTLE)
+        page.check("#grades_from_species input[value='curated']")
+        time.sleep(SETTLE * 2)
+        species_text = page.locator("#species_body").inner_text()
+        check("grading with curated IDs adds the curated grade and the new name",
+              "BAGS (curated IDs)" in species_text
+              and "Danaus seniorus" in species_text
+              and "re-identified" in species_text)
+        page.screenshot(path=str(args.out / "02b-species-curated.png"),
+                        full_page=True)
+        page.check("#grades_from_species input[value='original']")
+        time.sleep(SETTLE * 1.5)
+        check("and back to the original grades",
+              "BAGS (curated IDs)" not in page.locator("#species_body").inner_text())
 
         # -- the paged specimen table
         show("Specimens", settle=SETTLE * 1.5)

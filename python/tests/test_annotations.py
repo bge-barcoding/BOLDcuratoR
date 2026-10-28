@@ -212,3 +212,42 @@ def test_a_form_that_changes_nothing_is_refused():
     errors = Annotations().validate(AnnotationForm(curator=CURATOR), {"P1": "x"})
     assert errors == ["Nothing to apply -- choose an ID issue, tick an issue or "
                       "write a note."]
+
+
+def test_every_change_bumps_the_revision():
+    """Regraded views are cached per revision, so anything that can change a
+    grade or a group's marks must bump it."""
+    a = Annotations()
+    steps = [
+        lambda: a.apply(_complete("misidentification"), {"P1": "Aus bis"}),
+        lambda: a.set_note("P2", "x"),
+        lambda: a.set_taxon_update("Cus dus", "synonym", "Cus eus"),
+        lambda: a.remove_taxon_update("Cus dus"),
+        lambda: a.clear_record("P1"),
+        lambda: a.set_reviewed("Aus bis"),
+    ]
+    for step in steps:
+        before = a.revision
+        step()
+        assert a.revision > before
+
+
+def test_reviewed_marks_are_saved_and_copied():
+    from boldcurator.io.annotations import group_unit
+
+    a = Annotations()
+    a.set_reviewed(group_unit("CE|Aus bis"), user=CURATOR, screen="CE")
+    a.set_reviewed(group_unit("E|BOLD:AAA1000"), user=CURATOR, screen="E")
+    assert set(a.reviewed) == {"Aus bis", "BOLD:AAA1000"}
+    assert a.reviewed["Aus bis"]["user"] == CURATOR
+    assert Annotations.from_dict(a.to_dict()).reviewed == a.reviewed
+    copy = a.snapshot()
+    a.set_reviewed("Aus bis", False)
+    assert "Aus bis" in copy.reviewed and "Aus bis" not in a.reviewed
+
+
+def test_a_group_unit_survives_a_change_of_screen():
+    from boldcurator.io.annotations import group_unit
+
+    assert group_unit("CE|Aus bus") == group_unit("B|Aus bus") == "Aus bus"
+    assert group_unit("C|Aus bus|BOLD:AAA1") == "Aus bus|BOLD:AAA1"

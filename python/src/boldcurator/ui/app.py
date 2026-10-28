@@ -59,12 +59,23 @@ from ..core.grouping import (
     PRIORITY_GRADES,
     SPECIES_GRADES,
 )
+from ..core.curation import (
+    CURATED,
+    GRADE_VIEWS,
+    ORIGINAL,
+    VIEW_GRADE_COLUMNS,
+)
 from ..core.species import SPECIES_LEVEL_STATUSES
 from ..core.table import DEFAULT_PAGE_SIZE, search_frame
 from ..data.snapshot import SnapshotError, SnapshotStore
 from ..desktop import DEFAULT_CONFIG_PATH, load_snapshot_path, save_snapshot_path
 from ..io import exports as export_io
-from ..io.annotations import AnnotationForm, guess_rank, merge_annotations
+from ..io.annotations import (
+    AnnotationForm,
+    group_unit,
+    guess_rank,
+    merge_annotations,
+)
 from ..io.session import SessionStore
 from .setup import _pick_snapshot_file
 from .format import (
@@ -717,9 +728,14 @@ def _guide_panel() -> ui.Tag:
                      "They carry a coloured dot and \"work here first\": that is where "
                      "the name and the barcode disagree. Each screen shows one "
                      "problem at a time (a species, or a BIN); move with "
-                     "Previous and Next. BAGS C+E gathers species that are "
-                     "both split across BINs and share one, and Unnamed BINs "
-                     "the BINs no grade covers."),
+                     "Previous and Next, or type in the list to find one. "
+                     "Mark reviewed when you're done with it -- ✓ in the "
+                     "list, and Next unreviewed skips it; ✎ marks one with "
+                     "annotations. Grades from: With curated IDs regrades "
+                     "with your corrections, Excluding altered records "
+                     "without the records you changed. BAGS C+E gathers "
+                     "species that are both split across BINs and share "
+                     "one, and Unnamed BINs the BINs no grade covers."),
                 step("Find records.",
                      "On Specimens and every BAGS screen, Find records shows "
                      "only the records with some text in a column you choose, "
@@ -788,7 +804,7 @@ def _search_controls(key: str, columns: list[str], *,
     column, text = current if current else (None, "")
     choices = {"": "Any column"} | {
         c: GROUP_LABELS.get(c, c) for c in columns if c not in _UNSEARCHABLE}
-    parts = [
+    return ui.div(
         ui.tags.span("Find records", class_="small text-muted"),
         ui.input_select(f"find_col_{key}", None, choices=choices,
                         selected=column or "", width="190px"),
@@ -796,19 +812,75 @@ def _search_controls(key: str, columns: list[str], *,
                       placeholder="e.g. Canada, a name, BOLD:AAA1234",
                       width="260px"),
         ui.input_action_button(f"find_go_{key}", "Search", class_="btn-sm"),
-    ]
-    if current:
-        where = GROUP_LABELS.get(column, column) if column else "any column"
-        parts += [
-            ui.input_action_button(f"find_clear_{key}", "Clear search",
-                                   class_="btn-sm"),
-            ui.tags.span(
-                f"{matches:,} of {total:,} records with \u201c{text}\u201d "
-                f"in {where}", class_="small",
-                style="font-weight:600;color:#0d6efd;"),
-        ]
-    return ui.div(*parts, style="display:flex;align-items:center;gap:8px;"
-                                "flex-wrap:wrap;margin-bottom:6px;")
+        style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;"
+              "margin-bottom:6px;")
+
+
+def _filter_banner(key: str, current: tuple[str | None, str] | None, *,
+                   matches: int, total: int):
+    """Round 12, item 2: while "Find records" narrows a table, an amber bar
+    right above it says so -- with how many of how many, and the way back --
+    so nobody takes the filtered table for the whole of it. The table itself
+    gets an amber outline too (``_table(..., filtered=True)``)."""
+    if not current:
+        return ui.div()
+    column, text = current
+    where = GROUP_LABELS.get(column, column) if column else "any column"
+    return ui.div(
+        ui.tags.span("⚠ Filtered", style="font-weight:700;"),
+        ui.tags.span(f"showing {matches:,} of {total:,} records with "
+                     f"\u201c{text}\u201d in {where}"),
+        ui.input_action_button(f"find_clear_{key}", "Clear filter",
+                               class_="btn-sm btn-dark"),
+        class_="bc-filter-banner",
+    )
+
+
+#: Round 12, item 3: the BAGS screens' "Grades from" switch, one per screen
+#: (``grades_from_{screen}``), all showing and setting the search's one view.
+def _grade_view_switch(screen: str, view: str, curation: dict) -> ui.Tag:
+    note = ""
+    if view != ORIGINAL:
+        bits = []
+        if curation.get("changed"):
+            bits.append(f"{curation['changed']:,} record(s) re-identified")
+        if curation.get("left_out"):
+            bits.append(f"{curation['left_out']:,} left out"
+                        + (" (contaminated)" if view == CURATED else
+                           " (corrected or flagged)"))
+        summary = ", ".join(bits) if bits else "no curation affects grading yet"
+        note = ui.tags.span(
+            summary[0].upper() + summary[1:]
+            + ". Grades, groups and the checklist follow this view; the BIN "
+              "dashboard and the Specimens table keep the original grades.",
+            class_="small")
+    return ui.div(
+        ui.input_radio_buttons(f"grades_from_{screen}", "Grades from",
+                               choices=GRADE_VIEWS, selected=view, inline=True),
+        note,
+        class_="bc-grade-view" + (" bc-grade-view-on" if view != ORIGINAL else ""),
+    )
+
+
+#: Results up to this size regrade in the render (well under a second);
+#: larger ones on a background thread with a progress panel.
+INLINE_REGRADE_RECORDS = 20_000
+
+#: The longest group caption a dropdown option shows; the full caption is in
+#: bold under the navigator.
+OPTION_CAPTION_CHARS = 110
+
+
+def _group_option(group, *, reviewed: bool, annotated: bool,
+                  was: str = "") -> str:
+    """One group's dropdown entry: ✓ reviewed, ✎ annotated, the caption
+    (cut short), its record count, and the original grade if the view
+    changed it."""
+    caption = group.caption
+    if len(caption) > OPTION_CAPTION_CHARS:
+        caption = caption[:OPTION_CAPTION_CHARS - 1].rstrip() + "…"
+    marks = ("✓ " if reviewed else "") + ("✎ " if annotated else "")
+    return f"{marks}{caption}  ({group.specimen_count}){was}"
 
 
 def _grade_panel(grade: str) -> ui.Tag:
@@ -1097,6 +1169,23 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                ordinary scrolling columns. The full value is still one hover
                away via each cell's own `title` attribute (_table's default
                cell renderer). */
+            /* Round 12, item 2: a table narrowed by Find records. */
+            .bc-filter-banner {
+                display: flex; align-items: center; gap: 10px;
+                flex-wrap: wrap; background: #ffc107; color: #212529;
+                padding: 6px 12px; border-radius: 5px; margin-bottom: 6px;
+            }
+            .bc-scroll.bc-filtered { outline: 3px solid #ffc107;
+                outline-offset: -3px; }
+            /* Round 12, item 3: the "Grades from" switch. */
+            .bc-grade-view { display: flex; align-items: center; gap: 12px;
+                flex-wrap: wrap; margin-bottom: 6px; }
+            .bc-grade-view .shiny-input-container { margin-bottom: 0;
+                width: auto; display: flex; align-items: center; gap: 10px; }
+            .bc-grade-view .control-label { margin-bottom: 0;
+                font-weight: 600; }
+            .bc-grade-view-on { background: #e7f1ff; border: 1px solid #9ec5fe;
+                border-radius: 5px; padding: 4px 10px; }
             .bc-scroll td {
                 max-width: 200px; overflow: hidden; text-overflow: ellipsis;
             }
@@ -1563,6 +1652,13 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         #: None, text)`` (round 9, item 2); kept while moving between groups,
         #: dropped by a new search. The Specimens tab's lives on its table.
         find_state: dict[str, tuple[str | None, str]] = {}
+        #: The species/BIN (``group_unit``) each group screen last showed,
+        #: and, after a switch of grades view, the one to find again.
+        shown_unit: dict[str, str] = {}
+        restore_unit: dict[str, str] = {}
+        #: Each group screen's groups as last shown: what its buttons act
+        #: on, without regrading (on this thread) after every annotation.
+        shown_groups: dict[str, tuple] = {}
         checklist_sort = reactive.Value(("", False))
         gap_sort = reactive.Value(("", False))
         bins_sort = reactive.Value(("", False))
@@ -1618,11 +1714,12 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         @reactive.effect
         def _analysis_poll():
             analysis_seq.get()
-            if analysis_job["running"]:
+            busy = analysis_job["running"] or regrade_job["running"]
+            if busy:
                 reactive.invalidate_later(0.4)
             with reactive.isolate():
                 analysis_tick.set(analysis_tick.get() + 1)
-                if not analysis_job["running"] and not analysis_job["seen"]:
+                if not busy and not analysis_job["seen"]:
                     # Done: every screen (and the counts on Search, which
                     # the representatives just changed) shows the result.
                     analysis_job["seen"] = True
@@ -1631,6 +1728,37 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         def _analysing(search) -> bool:
             return (analysis_job["running"] and analysis_job["search"] is search
                     and not search.analysis_is_ready)
+
+        #: Round 12, item 3: a regrade in another grades view. Small results
+        #: regrade in the render (under a second); a large one -- 2 s for
+        #: 85,000 records with a widespread synonym -- on its own thread,
+        #: with the analysis's progress panel, like the analysis itself.
+        regrade_job: dict = {"running": False, "search": None, "view": "",
+                             "error": ""}
+
+        def _regrading(search) -> bool:
+            """Start (or report) a background regrade if the search's view
+            needs one; True while it runs."""
+            if search.view_is_ready() or search.record_count <= INLINE_REGRADE_RECORDS:
+                return False
+            if regrade_job["running"]:
+                return True
+            regrade_job.update(running=True, search=search,
+                               view=search.grade_view, error="")
+            analysis_job.update(seen=False)
+
+            def run() -> None:
+                try:
+                    search.view(store, regrade_job["view"])
+                except Exception as exc:  # noqa: BLE001 -- shown on the screens
+                    regrade_job["error"] = f"Could not regrade: {exc}"
+                finally:
+                    regrade_job["running"] = False
+
+            threading.Thread(target=run, daemon=True).start()
+            with reactive.isolate():
+                analysis_seq.set(analysis_seq.get() + 1)
+            return True
 
         # -- snapshot file management (round 5, file handling 1-3) ---------
         #
@@ -2428,7 +2556,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
 
         # -- the guard every summary screen shares -------------------------
 
-        def _needs_analysis(render_body):
+        def _needs_analysis(render_body, *, graded: bool = False):
             search = current()
             if search is None:
                 return ui.div("Run a search first.", class_="text-muted")
@@ -2447,6 +2575,21 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             if analysis_job["search"] is search and analysis_job["error"] \
                     and not search.analysis_is_ready:
                 return ui.div(analysis_job["error"],
+                              class_="alert alert-warning py-2 px-3")
+            if graded and search.analysis_is_ready and _regrading(search):
+                analysis_tick.get()
+                return ui.div(
+                    ui.div(
+                        ui.tags.span(class_="spinner-border spinner-border-sm",
+                                     role="status"),
+                        ui.tags.strong(
+                            f"Regrading {GRADE_VIEWS[search.grade_view].lower()}"
+                            "..."),
+                        style="display:flex;align-items:center;gap:10px;"),
+                    class_="alert alert-info py-2 px-3")
+            if graded and regrade_job["search"] is search \
+                    and regrade_job["error"] and not search.view_is_ready():
+                return ui.div(regrade_job["error"],
                               class_="alert alert-warning py-2 px-3")
             try:
                 was_ready = search.analysis_is_ready
@@ -2528,11 +2671,25 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                                                  errors="ignore"),
                     checklist_sort)
                 counts = search.grade_counts(store)
+                # Round 12, item 3: in another grades view, each count reads
+                # "original → view".
+                before = (search.grade_counts(store, ORIGINAL)
+                          if search.grade_view != ORIGINAL else counts)
+                split_before = len(search.groups(store, SPLIT_SHARED, ORIGINAL))
+                split_now = len(search.groups(store, SPLIT_SHARED))
+
+                def count(was: int, now: int) -> str:
+                    return f"{now:,}" if was == now or search.grade_view == ORIGINAL \
+                        else f"{was:,} → {now:,}"
+
                 return ui.div(
+                    _grade_view_switch("species", search.grade_view,
+                                       search.view(store).curation),
                     ui.div(
-                        *[value_box(f"{counts.get(g, 0):,}", f"Grade {g}",
-                                    GRADE_COLOURS[g], compact=True) for g in GRADES],
-                        value_box(f"{len(search.groups(store, SPLIT_SHARED)):,}",
+                        *[value_box(count(before.get(g, 0), counts.get(g, 0)),
+                                    f"Grade {g}", GRADE_COLOURS[g], compact=True)
+                          for g in GRADES],
+                        value_box(count(split_before, split_now),
                                   "C+E (of grade E)", GRADE_COLOURS["E"],
                                   compact=True),
                         *[value_box(f"{n:,}", f"Unnamed BINs, {label}", colour,
@@ -2548,7 +2705,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     ui.HTML(_checklist_html(checklist, sort_state=checklist_sort.get())),
                     class_="bc-tab-body",
                 )
-            return _needs_analysis(body)
+            return _needs_analysis(body, graded=True)
 
         # -- BIN dashboard --------------------------------------------------
 
@@ -2579,20 +2736,79 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
 
         # -- the BAGS grade screens ----------------------------------------
 
+        def _set_grade_view(view) -> None:
+            """Round 12, item 3: grade by another view -- every BAGS screen,
+            the Species tab and the downloads follow; each group screen
+            stays on its species or BIN if it is still there."""
+            search = state.search
+            if search is None or not view or view == search.grade_view:
+                return
+            restore_unit.update(shown_unit)
+            search.grade_view = view
+            touch()
+
+        @reactive.effect
+        @reactive.event(input.grades_from_species)
+        def _switch_view_species():
+            _set_grade_view(input.grades_from_species())
+
+        def _group_marks(search, groups) -> tuple[set[str], set[int]]:
+            """The groups' review marks: which units are reviewed, and which
+            groups (by position) hold an annotated record -- its own
+            annotation, or a taxon update reaching its name."""
+            frame = search.analysis(store).specimens
+            idents = dict(zip(frame["processid"].astype(str),
+                              frame.get("identification",
+                                        pd.Series(dtype=object)).fillna("")))
+            annotated = state.annotations.annotated_processids(idents)
+            touched = {i for i, g in enumerate(groups)
+                       if annotated & set(g.specimens["processid"].astype(str))}
+            return set(state.annotations.reviewed), touched
+
+        def _was(search, grade: str, group, original: dict) -> str:
+            """" · was X" when the view gives a species-keyed group a grade
+            other than its original one (``original``: species -> grade)."""
+            if search.grade_view == ORIGINAL or grade == UNNAMED or grade == "E":
+                return ""
+            name = group_unit(group.key).split("|")[0]
+            now = "E" if grade == SPLIT_SHARED else grade
+            before = original.get(name)
+            if before is None:
+                return "  · new name"
+            return f"  · was {before}" if before != now else ""
+
         def _grade_body(grade: str):
             def body(search):
                 groups = search.groups(store, grade)
+                switch = _grade_view_switch(
+                    grade, search.grade_view, search.view(store).curation)
                 if not groups:
-                    return ui.div(
+                    return ui.div(switch, ui.div(
                         "No BINs without a species-level name in this result."
                         if grade == UNNAMED else
                         "No species both split across BINs and in a shared "
                         "BIN in this result."
                         if grade == SPLIT_SHARED else
                         f"No species graded {grade} in this result.",
-                        class_="text-muted")
+                        class_="text-muted"))
                 index = min(group_index[grade].get(), len(groups) - 1)
+                # After a switch of grades view, stay on the same species or
+                # BIN if it is still on this screen.
+                unit = restore_unit.pop(grade, None)
+                if unit is not None:
+                    units = [group_unit(g.key) for g in groups]
+                    index = units.index(unit) if unit in units else 0
+                    with reactive.isolate():
+                        group_index[grade].set(index)
                 group = groups[index]
+                shown_unit[grade] = group_unit(group.key)
+                shown_groups[grade] = (search, groups)
+                reviewed, touched = _group_marks(search, groups)
+                graded = search.analysis(store).bags_grades
+                original = (dict(zip(graded["species"], graded["bags_grade"]))
+                            if len(graded) else {})
+                done = sum(1 for g in groups if group_unit(g.key) in reviewed)
+                is_reviewed = group_unit(group.key) in reviewed
                 all_rows = _with_checked(
                     merge_annotations(group.specimens, state.annotations),
                     state.annotations)
@@ -2612,42 +2828,72 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 unit = ("species" if grade in SPECIES_GRADES or grade == SPLIT_SHARED
                         else "BIN")
                 plural_unit = "species" if unit == "species" else "BINs"
+                review = state.annotations.reviewed.get(group_unit(group.key), {})
+                annotated_here = len(group_pids & state.annotations
+                                     .annotated_processids(dict(zip(
+                                         group.specimens["processid"].astype(str),
+                                         group.specimens.get(
+                                             "identification",
+                                             pd.Series(dtype=object)).fillna("")))))
                 # The navigator (which problem) sits in one compact row above
                 # the table, not in a sidebar column beside it -- the table is
                 # the thing a curator actually works in, and a fixed-width
                 # sidebar was taking a third of the tab for it permanently,
-                # whatever the screen width. A dropdown loses nothing a tall
-                # listbox had: every problem is still one click away.
+                # whatever the screen width. A searchable list loses nothing
+                # a tall listbox had: every problem is still one click away.
                 return ui.div(
+                    switch,
                     ui.div(
                         ui.tags.span(f"{len(groups):,} "
                                      f"{unit if len(groups) == 1 else plural_unit} "
-                                     "to work through", class_="small text-muted"),
-                        # Round 7, BAGS A/B/D item 1: a fixed 420px cut off a
-                        # long caption ("Species: X (>10 specimens, single
-                        # BIN)  (404)") -- flexible instead of another fixed
-                        # guess, so it actually uses the room a wide window
-                        # has rather than truncating regardless of it.
+                                     f"to work through · {done:,} reviewed",
+                                     class_="small text-muted"),
+                        # Round 12, item 1: a selectize list, drawn in the
+                        # page, not the window's native popup -- which left
+                        # most of C+E's long entries blank -- and searchable
+                        # by typing a name or BIN.
                         ui.div(
-                            ui.input_select(
+                            ui.input_selectize(
                                 f"group_{grade}", None,
-                                choices={str(i): f"{g.caption}  ({g.specimen_count})"
-                                         for i, g in enumerate(groups)},
+                                choices={str(i): _group_option(
+                                    g, reviewed=group_unit(g.key) in reviewed,
+                                    annotated=i in touched,
+                                    was=_was(search, grade, g, original))
+                                    for i, g in enumerate(groups)},
                                 selected=str(index), width="100%"),
                             style="flex:1 1 auto;min-width:280px;max-width:1000px;",
                         ),
                         ui.input_action_button(f"prev_{grade}", "‹ Previous",
                                                class_="btn-sm"),
                         ui.tags.span(f"{index + 1} of {len(groups):,}",
-                                     class_="small text-muted"),
+                                     class_="small text-muted bc-group-pos"),
                         ui.input_action_button(f"next_{grade}", "Next ›",
                                                class_="btn-sm"),
+                        ui.input_action_button(f"next_unrev_{grade}",
+                                               "Next unreviewed ›",
+                                               class_="btn-sm"),
+                        ui.input_action_button(
+                            f"review_{grade}",
+                            "Reviewed ✓ (undo)" if is_reviewed else "Mark reviewed ✓",
+                            class_="btn-sm " + ("btn-success" if is_reviewed
+                                                else "btn-outline-success"),
+                            title="Record that you have finished with this "
+                                  f"{unit}, whether or not it needed changes"),
                         style="display:flex;align-items:center;gap:10px;"
                               "flex-wrap:wrap;margin-bottom:8px;",
                     ),
                     ui.div(ui.tags.strong(group.caption),
                            ui.tags.span(f"  ·  {group.specimen_count} specimens",
                                         class_="text-muted small"),
+                           ui.tags.span(f"  ·  ✎ {annotated_here:,} annotated",
+                                        class_="small", style="color:#6f42c1;")
+                           if annotated_here else "",
+                           ui.tags.span(
+                               f"  ·  ✓ reviewed"
+                               + (f" by {review['user']}" if review.get("user")
+                                  else ""),
+                               class_="small text-success fw-semibold")
+                           if is_reviewed else "",
                            class_="mb-1"),
                     ui.div(group.note, class_="alert alert-info py-1 px-2 small")
                     if group.note else ui.div(),
@@ -2682,6 +2928,8 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                               "background:#f8f9fa;border:1px solid #dee2e6;"
                               "border-radius:5px;",
                     ),
+                    _filter_banner(grade, found, matches=len(rows),
+                                   total=len(all_rows)),
                     # Round 5, item 9: every column, like the Specimens tab --
                     # a curated subset (the old default) hid raw BOLD columns
                     # a curator might need mid-problem. `_table`'s own
@@ -2689,10 +2937,11 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     # makes that many columns usable.
                     ui.HTML(_group_html(rows, _all_columns_ordered(rows),
                                         sort_input="group_sort_click",
-                                        sort_state=group_sort.get())),
+                                        sort_state=group_sort.get(),
+                                        filtered=bool(found))),
                     class_="bc-tab-body",
                 )
-            return _needs_analysis(body)
+            return _needs_analysis(body, graded=True)
 
         def _register_grade(grade: str):
             @output(id=f"grade_{grade}_body")
@@ -2704,8 +2953,8 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             @reactive.event(input[f"prev_{grade}"])
             def _prev():
                 group_index[grade].set(max(0, group_index[grade].get() - 1))
-                ui.update_select(f"group_{grade}",
-                                 selected=str(group_index[grade].get()))
+                ui.update_selectize(f"group_{grade}",
+                                    selected=str(group_index[grade].get()))
                 touch()
 
             @reactive.effect
@@ -2714,11 +2963,50 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 search = state.search
                 if search is None:
                     return
-                last = len(search.groups(store, grade)) - 1
+                last = len(_groups_shown(grade)) - 1
                 group_index[grade].set(min(last, group_index[grade].get() + 1))
-                ui.update_select(f"group_{grade}",
-                                 selected=str(group_index[grade].get()))
+                ui.update_selectize(f"group_{grade}",
+                                    selected=str(group_index[grade].get()))
                 touch()
+
+            @reactive.effect
+            @reactive.event(input[f"next_unrev_{grade}"])
+            def _next_unreviewed():
+                """Round 12, item 4: on to the next group nobody has marked
+                reviewed, wrapping round to the start."""
+                search = state.search
+                if search is None:
+                    return
+                groups = _groups_shown(grade)
+                here = group_index[grade].get()
+                reviewed = state.annotations.reviewed
+                for step in range(1, len(groups) + 1):
+                    candidate = (here + step) % len(groups)
+                    if group_unit(groups[candidate].key) not in reviewed:
+                        group_index[grade].set(candidate)
+                        ui.update_selectize(f"group_{grade}",
+                                            selected=str(candidate))
+                        touch()
+                        return
+                _tell("Every group on this screen is marked reviewed.")
+
+            @reactive.effect
+            @reactive.event(input[f"review_{grade}"])
+            def _toggle_reviewed():
+                group = _current_group(grade)
+                if group is None:
+                    return
+                unit = group_unit(group.key)
+                done = unit not in state.annotations.reviewed
+                state.annotations.set_reviewed(
+                    unit, done, user=(input.user() or "").strip() or state.user,
+                    screen=grade)
+                touch()
+
+            @reactive.effect
+            @reactive.event(input[f"grades_from_{grade}"])
+            def _switch_view():
+                _set_grade_view(input[f"grades_from_{grade}"]())
 
             @reactive.effect
             @reactive.event(input[f"group_{grade}"])
@@ -2805,11 +3093,19 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 rows = _found_rows(grade, merge_annotations(rows, state.annotations))
             return {str(pid) for pid in rows["processid"]}
 
-        def _current_group(grade: str):
+        def _groups_shown(grade: str) -> list:
+            """The screen's groups as the curator sees them (see
+            ``shown_groups``), or freshly if it hasn't been shown."""
             search = state.search
             if search is None:
-                return None
-            groups = search.groups(store, grade)
+                return []
+            shown = shown_groups.get(grade)
+            if shown is not None and shown[0] is search:
+                return shown[1]
+            return search.groups(store, grade)
+
+        def _current_group(grade: str):
+            groups = _groups_shown(grade)
             if not groups:
                 return None
             return groups[min(group_index[grade].get(), len(groups) - 1)]
@@ -3433,11 +3729,14 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     "dialog, defaulting to Downloads too).",
                     class_="small text-muted",
                     style="display:block;margin-bottom:10px;"),
+                _filter_banner("sp", found, matches=table.total_rows,
+                               total=search.plan.expanded_records),
                 ui.HTML(_group_html(
                     rows, columns=_all_columns_ordered(rows), limit=len(rows),
                     sort_input="spec_sort_click",
                     sortable=frozenset(table.sortable_columns),
-                    sort_state=(table.sort_column, table.sort_descending))),
+                    sort_state=(table.sort_column, table.sort_descending),
+                    filtered=bool(found))),
                 class_="bc-tab-body",
             )
 
@@ -4053,7 +4352,7 @@ def _table(frame: pd.DataFrame, labels: dict[str, str] | None = None,
            cell=None, limit: int = 500, *, sort_input: str | None = None,
            sortable: frozenset[str] = frozenset(),
            sort_state: tuple[str | None, bool] = (None, False),
-           sticky: frozenset[str] = frozenset()) -> str:
+           sticky: frozenset[str] = frozenset(), filtered: bool = False) -> str:
     """Render one table.
 
     ``sort_input`` names the Shiny input a header click posts its column name
@@ -4113,7 +4412,8 @@ def _table(frame: pd.DataFrame, labels: dict[str, str] | None = None,
     # after it, so it is part of the scrolling content instead of extra
     # height tacked on past the fill area.
     return (
-        f"<div class='{SCROLL_CLASS}' style='overflow:auto;height:100%;'>"
+        f"<div class='{SCROLL_CLASS}{' bc-filtered' if filtered else ''}' "
+        "style='overflow:auto;height:100%;'>"
         "<table class='table table-sm table-hover' style='font-size:13px;"
         "border-collapse:separate;'>"
         f"<thead><tr>{head}</tr></thead>"
@@ -4142,7 +4442,8 @@ def _link_cell(value: object, url: str) -> str:
 def _checklist_html(frame: pd.DataFrame, *,
                     sort_state: tuple[str | None, bool] = (None, False)) -> str:
     def cell(column, value, row):
-        if column == "bags_grade" and not _is_missing(value) and value:
+        if (column == "bags_grade" or column in VIEW_GRADE_COLUMNS.values()) \
+                and not _is_missing(value) and value:
             return _chip(value, GRADE_COLOURS.get(str(value), "#adb5bd"))
         if column == "species" and not _is_missing(value) and value:
             return _link_cell(value, bold_species_url(str(value)))
@@ -4208,7 +4509,8 @@ def _checkbox_cell(pid: object, checked: bool, css_class: str, *,
 def _group_html(frame: pd.DataFrame, columns: list[str] | None = None,
                 limit: int = 500, *, sort_input: str | None = None,
                 sortable: frozenset[str] | None = None,
-                sort_state: tuple[str | None, bool] = (None, False)) -> str:
+                sort_state: tuple[str | None, bool] = (None, False),
+                filtered: bool = False) -> str:
     """One group's specimens, with the grade and flag colours carried through.
 
     ``columns`` defaults to the BAGS group layout. It is a parameter because
@@ -4280,7 +4582,7 @@ def _group_html(frame: pd.DataFrame, columns: list[str] | None = None,
         return None
     return _table(shown, GROUP_LABELS, cell=cell, limit=limit, sort_input=sort_input,
                  sortable=sortable, sort_state=sort_state,
-                 sticky=frozenset(STICKY_COLUMN_WIDTHS))
+                 sticky=frozenset(STICKY_COLUMN_WIDTHS), filtered=filtered)
 
 
 def run(snapshot: str | Path, *, host: str = "127.0.0.1", port: int = 8000,

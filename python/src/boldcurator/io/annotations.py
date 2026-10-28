@@ -172,7 +172,8 @@ class Resolution:
 
 @dataclass
 class Annotations:
-    """The annotation stores: four keyed by ``processid``, one by name."""
+    """The annotation stores: four keyed by ``processid``, one by name, one
+    by BAGS group."""
 
     selected: dict[str, dict] = field(default_factory=dict)
     #: ``{"flag", "contamination", "other_issue", "sequence_taxon", "user",
@@ -187,9 +188,18 @@ class Annotations:
     #: The temporary "checked, to flag/note/update in bulk" set. See the
     #: module docstring -- this is deliberately not ``selected``.
     working: set[str] = field(default_factory=set)
+    #: Groups a curator has finished with (a BAGS screen's species, BIN or
+    #: species-in-BIN, by ``group_unit``): ``{"user", "timestamp",
+    #: "screen"}``. Keyed by the unit rather than the screen, so a mark
+    #: survives regrading moving the species to another screen.
+    reviewed: dict[str, dict] = field(default_factory=dict)
     #: Records whose retired flag was converted on load (``from_dict``), so
     #: the app can say so once. Not saved.
     converted: int = field(default=0, compare=False)
+    #: Bumped by every change that can alter a grade or a group's marks, so
+    #: anything built from the annotations (``SearchState``'s regraded
+    #: views) knows when it is stale. Not saved.
+    revision: int = field(default=0, compare=False)
 
     # -- mutation ----------------------------------------------------------
 
@@ -224,6 +234,7 @@ class Annotations:
                 f"Unknown record flag {flag!r}; expected one of "
                 f"{sorted(set(ID_FLAGS) - TAXON_FLAGS)} -- name issue and "
                 "synonym are taxon updates")
+        self.revision += 1
         if not (flag or contamination or other_issue):
             self.flags.pop(processid, None)
             return
@@ -236,6 +247,7 @@ class Annotations:
 
     def set_updated_id(self, processid: str, text: str, *, rank: str = "",
                        method: str = "", user: str = "") -> None:
+        self.revision += 1
         if not _text(text):
             self.updated_ids.pop(processid, None)
             return
@@ -245,6 +257,7 @@ class Annotations:
         }
 
     def set_note(self, processid: str, text: str, *, user: str = "") -> None:
+        self.revision += 1
         if not _text(text):
             self.curator_notes.pop(processid, None)
             return
@@ -258,6 +271,7 @@ class Annotations:
         if flag not in TAXON_FLAGS:
             raise ValueError(f"{flag!r} is not a taxon flag; expected one of "
                              f"{sorted(TAXON_FLAGS)}")
+        self.revision += 1
         self.taxon_updates[_text(name)] = {
             "flag": flag, "new_name": _text(new_name), "rank": _text(rank),
             "citation": _text(citation), "note": _text(note),
@@ -265,14 +279,26 @@ class Annotations:
         }
 
     def remove_taxon_update(self, name: str) -> None:
+        self.revision += 1
         self.taxon_updates.pop(name, None)
 
     def clear_record(self, processid: str) -> None:
         """Remove a record's own flag, issues, corrected ID and note. A taxon
         update for its name is not the record's, so stays."""
+        self.revision += 1
         self.flags.pop(processid, None)
         self.updated_ids.pop(processid, None)
         self.curator_notes.pop(processid, None)
+
+    def set_reviewed(self, unit: str, reviewed: bool = True, *, user: str = "",
+                     screen: str = "") -> None:
+        """Mark a BAGS group (by ``group_unit``) as finished with, or not."""
+        self.revision += 1
+        if reviewed:
+            self.reviewed[unit] = {"user": user, "timestamp": _now(),
+                                   "screen": screen}
+        else:
+            self.reviewed.pop(unit, None)
 
     # -- the annotation form -----------------------------------------------
 
@@ -335,6 +361,7 @@ class Annotations:
               identifications: Mapping[str, str]) -> None:
         """Apply a validated ``form`` to these records (processid -> current
         identification). Call :meth:`validate` first."""
+        self.revision += 1
         user = _text(form.curator)
         if form.id_flag in TAXON_FLAGS:
             name = _text(next(iter(identifications.values()), ""))
@@ -492,31 +519,54 @@ class Annotations:
         """
         idents = list(identifications) if identifications is not None \
             else [""] * len(processids)
+        # Most records carry no annotation of their own, and what a taxon
+        # update gives one depends only on its name: those rows are built
+        # once per name, not once per record -- 85,000 records with one
+        # widespread synonym took seconds otherwise.
+        own = set(self.flags) | set(self.updated_ids) | set(self.curator_notes)
+        blank = (False, "", False, False, "", "", "", "", "", "", "", "", "")
+        by_name: dict[str, tuple] = {}
         rows = []
         for pid, ident in zip(processids, idents):
             ident = _text(ident) if isinstance(ident, str) else ""
-            entry = self.flags.get(pid)
-            entry = entry if isinstance(entry, dict) else (
-                {"flag": entry} if isinstance(entry, str) else {})
-            resolved = self.resolve(pid, ident)
-            contamination = bool(entry.get("contamination"))
-            updated = resolved.updated_id or (ident if contamination else "")
-            note = self.curator_notes.get(pid)
-            stamped = [e for e in (entry, self.updated_ids.get(pid), note,
-                                   *(self.taxon_updates[t] for t in resolved.taxa))
-                       if isinstance(e, dict) and e.get("timestamp")]
-            latest = max(stamped, key=lambda e: e["timestamp"], default={})
-            rows.append((
-                pid in self.selected, resolved.flag, contamination,
-                bool(entry.get("other_issue")), updated, resolved.rank,
-                resolved.method, resolved.source,
-                entry.get("sequence_taxon", "") or "", resolved.citation,
-                _value(note, "text", "note", "value"),
-                latest.get("user", ""), latest.get("timestamp", ""),
-            ))
+            if pid in own:
+                row = self._row(pid, ident)
+            elif ident in self.taxon_updates:
+                row = by_name.get(ident)
+                if row is None:
+                    row = by_name[ident] = self._row(pid, ident)
+            else:
+                row = blank
+            if pid in self.selected:
+                row = (True,) + row[1:]
+            elif row[0]:
+                row = (False,) + row[1:]
+            rows.append(row)
         frame = pd.DataFrame(rows, columns=list(ANNOTATION_COLUMNS))
         frame.insert(0, "processid", list(processids))
         return frame
+
+    def _row(self, pid: str, ident: str) -> tuple:
+        """One record's ``ANNOTATION_COLUMNS`` values (see ``to_frame``)."""
+        entry = self.flags.get(pid)
+        entry = entry if isinstance(entry, dict) else (
+            {"flag": entry} if isinstance(entry, str) else {})
+        resolved = self.resolve(pid, ident)
+        contamination = bool(entry.get("contamination"))
+        updated = resolved.updated_id or (ident if contamination else "")
+        note = self.curator_notes.get(pid)
+        stamped = [e for e in (entry, self.updated_ids.get(pid), note,
+                               *(self.taxon_updates[t] for t in resolved.taxa))
+                   if isinstance(e, dict) and e.get("timestamp")]
+        latest = max(stamped, key=lambda e: e["timestamp"], default={})
+        return (
+            pid in self.selected, resolved.flag, contamination,
+            bool(entry.get("other_issue")), updated, resolved.rank,
+            resolved.method, resolved.source,
+            entry.get("sequence_taxon", "") or "", resolved.citation,
+            _value(note, "text", "note", "value"),
+            latest.get("user", ""), latest.get("timestamp", ""),
+        )
 
     def taxon_frame(self, identifications: Iterable[str] | None = None) -> pd.DataFrame:
         """One row per taxon update, with how many of these records (their
@@ -541,7 +591,8 @@ class Annotations:
                            updated_ids=dict(self.updated_ids),
                            curator_notes=dict(self.curator_notes),
                            taxon_updates=dict(self.taxon_updates),
-                           working=set(self.working))
+                           reviewed=dict(self.reviewed),
+                           working=set(self.working), revision=self.revision)
 
     # -- serialisation -----------------------------------------------------
 
@@ -552,6 +603,7 @@ class Annotations:
             "updated_ids": self.updated_ids,
             "curator_notes": self.curator_notes,
             "taxon_updates": self.taxon_updates,
+            "reviewed": self.reviewed,
         }
 
     @classmethod
@@ -586,6 +638,7 @@ class Annotations:
             updated_ids=dict(data.get("updated_ids") or {}),
             curator_notes=dict(data.get("curator_notes") or {}),
             taxon_updates=dict(data.get("taxon_updates") or {}),
+            reviewed=dict(data.get("reviewed") or {}),
             converted=converted,
         )
 
@@ -631,3 +684,11 @@ def merge_annotations(frame: pd.DataFrame, annotations: Annotations) -> pd.DataF
         c for c in out.columns if c not in ANNOTATION_COLUMNS
     ]
     return out[ordered]
+
+
+def group_unit(key: str) -> str:
+    """A BAGS group's key without its screen (``"CE|Aus bus"`` ->
+    ``"Aus bus"``, ``"C|Aus bus|BOLD:AAA1"`` -> ``"Aus bus|BOLD:AAA1"``):
+    what ``Annotations.reviewed`` is keyed by, and what stays the same when
+    regrading moves a species or BIN to another screen."""
+    return key.split("|", 1)[1] if "|" in key else key

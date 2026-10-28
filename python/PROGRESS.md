@@ -10,6 +10,27 @@ performance investigation, the packaging saga) was trimmed from this file on
 2026-09-26 -- it is in git history (`git log -- python/PROGRESS.md`) if a
 similar bug resurfaces and you want to see how it was fixed last time.
 
+## Round 12 (2026-10-28) -- done
+
+- [x] 1 The C+E group list showed mostly blanks: a native `<select>` popup
+  with very long options. Now a selectize list (drawn in the page,
+  searchable), options cut at `OPTION_CAPTION_CHARS`.
+- [x] 2 Find records: an amber `_filter_banner` above the table with
+  "showing N of M" and Clear filter, and the table outlined (`bc-filtered`).
+- [x] 3 Regrading (`core/curation.py`): views original / curated /
+  unaltered, chosen by "Grades from" on every BAGS screen and the Species
+  tab (`SearchState.grade_view`). `regrade` re-runs `grade_frame` on a
+  curated copy of the analysed frame, with the snapshot's `bin_species`
+  patched for the changed records so shared BINs are judged at the same
+  scope. Cached per `Annotations.revision`. 85,067 records with a synonym
+  reaching 24,000 of them: 2.0 s curated, 1.1 s unaltered -- so over 20,000
+  records it runs on a thread with the analysis's progress panel.
+- [x] 4 Review progress: `Annotations.reviewed`, keyed by `group_unit` (the
+  group key without its screen, so marks survive regrading); ✓ and ✎ in the
+  group list, "N reviewed", Mark reviewed, Next unreviewed. Group buttons act
+  on the groups as last shown (`shown_groups`), never regrading on the event
+  loop.
+
 ## Flag scheme (2026-10-27) -- done
 
 From BOLDcuration_flag_options.docx and five requirements; the choices below

@@ -1026,3 +1026,75 @@ def test_the_specimens_toolbar_has_no_check_page_button():
     from boldcurator.ui import app
 
     assert '"select_page"' not in inspect.getsource(app)
+
+
+def test_group_options_carry_marks_and_are_cut_short():
+    """Round 12, items 1 and 4: ✓ reviewed, ✎ annotated, the original grade
+    when a view changed it -- and no option long enough to break the list."""
+    import pandas as pd
+
+    from boldcurator.core.grouping import SpecimenGroup
+    from boldcurator.ui.app import OPTION_CAPTION_CHARS, _group_option
+
+    group = SpecimenGroup(key="CE|Aus bus", caption="Species: Aus bus — " + "BOLD:X, " * 40,
+                          specimens=pd.DataFrame({"processid": ["P1", "P2"]}))
+    label = _group_option(group, reviewed=True, annotated=True, was="  · was C")
+    assert label.startswith("✓ ✎ Species: Aus bus")
+    assert label.endswith("(2)  · was C")
+    assert "…" in label and len(label) < OPTION_CAPTION_CHARS + 30
+    assert _group_option(group, reviewed=False, annotated=False).startswith("Species")
+
+
+def test_a_filter_puts_a_banner_above_the_table_and_outlines_it():
+    """Round 12, item 2."""
+    import pandas as pd
+
+    from boldcurator.ui.app import _filter_banner, _group_html
+
+    assert str(_filter_banner("C", None, matches=1, total=2)) == "<div></div>"
+    html = str(_filter_banner("C", ("identified_by", "smith"), matches=54,
+                              total=245))
+    assert "Filtered" in html and "showing 54 of 245 records" in html
+    assert "Identified by" in html and 'id="find_clear_C"' in html
+    frame = pd.DataFrame({"processid": ["P1"]})
+    assert "bc-filtered" in _group_html(frame, ["processid"], filtered=True)
+    assert "bc-filtered" not in _group_html(frame, ["processid"])
+
+
+def test_the_grades_view_switch_offers_the_three_views():
+    """Round 12, item 3."""
+    from boldcurator.core.curation import GRADE_VIEWS
+    from boldcurator.ui.app import _grade_view_switch
+
+    html = str(_grade_view_switch("E", "original", {}))
+    assert 'id="grades_from_E"' in html
+    assert all(f'value="{v}"' in html for v in GRADE_VIEWS)
+    assert "bc-grade-view-on" not in html
+    on = str(_grade_view_switch("E", "curated", {"changed": 3, "left_out": 1}))
+    assert "3 record(s) re-identified, 1 left out (contaminated)" in on
+    assert "bc-grade-view-on" in on
+
+
+def test_search_state_grades_by_the_chosen_view(store):
+    """The checklist gains the view's grade, and a species only the view has
+    gets its own row; the original stays the analysis."""
+    from boldcurator.ui.state import AppState
+
+    state = AppState(store, page_size=25)
+    state.run_search("Danaus plexippus")
+    search = state.search
+    names = search.analysis(store).specimens
+    pid = str(names.loc[names["species"] == "Danaus plexippus", "processid"].iloc[0])
+    state.annotations.set_flag(pid, "misidentification")
+    state.annotations.set_updated_id(pid, "Danaus newname", rank="species",
+                                     method="Morphology")
+    assert "bags_grade_curated" not in search.checklist(store).columns
+    search.grade_view = "curated"
+    checklist = search.checklist(store)
+    assert "bags_grade_curated" in checklist.columns
+    row = checklist[checklist["species"] == "Danaus newname"]
+    assert len(row) == 1 and row["bags_grade"].isna().all()
+    assert search.view(store).curation["changed"] == 1
+    assert search.view_is_ready()
+    state.annotations.set_note(pid, "changed")
+    assert not search.view_is_ready()

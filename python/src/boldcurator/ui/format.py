@@ -123,7 +123,8 @@ HIDDEN_COLUMNS = frozenset({"annotation_timestamp"})
 #: from the underlying data (other callers, e.g. tests, still get it).
 CHECKLIST_LABELS = {
     "species": "Species", "name_status": "Name", "specimen_count": "Specimens",
-    "bin_count": "BINs",
+    "bin_count": "BINs", "bags_grade_curated": "BAGS (curated IDs)",
+    "bags_grade_unaltered": "BAGS (unaltered)",
     "bin_uris": "BIN URIs", "bags_grade": "BAGS", "c_plus_e": "C+E",
     "countries": "Countries",
 }

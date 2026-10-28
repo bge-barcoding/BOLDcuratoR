@@ -405,3 +405,24 @@ def test_the_annotated_workbook_carries_a_taxon_updates_sheet(store, tmp_path):
     assert list(sheets) == ["Records", "Taxon updates", "About"]
     assert sheets["Taxon updates"]["new_name"].tolist() == ["Danaus plexipus"]
     assert (sheets["Records"]["updated_id"] == "Danaus plexipus").all()
+
+
+def test_downloads_carry_the_chosen_views_grade_beside_the_original(store, tmp_path):
+    """Round 12, item 3: before -> after in the downloads too."""
+    from boldcurator.ui.state import AppState
+
+    state = AppState(store, page_size=25)
+    state.run_search("Danaus plexippus")
+    frame = state.search.analysis(store).specimens
+    pid = str(frame["processid"].iloc[0])
+    state.annotations.set_flag(pid, contamination=True, sequence_taxon="Homo sapiens")
+    written = state.search.export_specimens(store, "annotated", tmp_path / "a.tsv")
+    assert "bags_grade_unaltered" not in Path(written).read_text(encoding="utf-8")
+    state.search.grade_view = "unaltered"
+    written = state.search.export_specimens(store, "annotated", tmp_path / "b.tsv")
+    body = [l for l in Path(written).read_text(encoding="utf-8").splitlines()
+            if not l.startswith("#")]
+    header = body[0].split("\t")
+    assert header.index("bags_grade_unaltered") == header.index("bags_grade") + 1
+    # The contaminated record is left out of that view, so it has no grade there.
+    assert body[1].split("\t")[header.index("bags_grade_unaltered")] in ("", '""')

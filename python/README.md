@@ -69,6 +69,29 @@ selected process IDs (one per line, for a BOLD dataset), the BOLD curation
 report and the taxon updates (TSV), FASTA, CSV, xlsx species and BIN
 analyses, and the tree as Newick.
 
+### Working through the BAGS screens
+
+Each screen shows one species or BIN at a time; the list above it can be
+searched by typing. **Mark reviewed ✓** records that a curator has finished
+with it (✓ in the list, "N reviewed" above it, **Next unreviewed ›** skips
+it); ✎ marks one holding annotated records. Marks are saved with the
+session, and follow the species or BIN if regrading moves it to another
+screen.
+
+**Grades from** regrades the search without touching the snapshot:
+*Original IDs*; *With curated IDs* (each record's updated ID and rank, taxon
+updates included; contaminated records left out); or *Excluding altered
+records* (no record with an ID flag, corrected ID, contamination or taxon
+update). Counts read "before → after", the checklist and downloads add the
+view's grade beside the original (`bags_grade_curated` /
+`bags_grade_unaltered`), and group entries note "was X". The BIN dashboard
+and the Specimens table keep the original grades. A search over 20,000
+records regrades in the background, with a progress panel.
+
+While **Find records** narrows a table, an amber bar above it says how many
+of how many records it shows, with **Clear filter**, and the table is
+outlined.
+
 ### Annotations
 
 Check records, then **Annotate checked…** opens a form that shows each
