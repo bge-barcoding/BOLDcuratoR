@@ -133,6 +133,8 @@ BIN_LABELS = {
     "bin_uri": "BIN", "total_records": "Records", "unique_species": "Species",
     "species_list": "Species list", "countries": "Countries",
     "concordance": "Concordance",
+    "concordance_curated": "Concordance (curated IDs)",
+    "concordance_unaltered": "Concordance (unaltered)",
 }
 
 GAP_LABELS = {

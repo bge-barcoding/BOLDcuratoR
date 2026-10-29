@@ -1098,3 +1098,129 @@ def test_search_state_grades_by_the_chosen_view(store):
     assert search.view_is_ready()
     state.annotations.set_note(pid, "changed")
     assert not search.view_is_ready()
+
+
+def _tree_case():
+    """Three representatives on a small tree, P1 re-identified, P3
+    contaminated -- and the curated view of them."""
+    from io import StringIO
+
+    import pandas as pd
+    from Bio import Phylo
+
+    from boldcurator.core.curation import CURATED, regrade
+    from boldcurator.core.phylogeny import PhylogenyResult
+    from boldcurator.core.pipeline import Resolution, SearchResult, grade_frame
+    from boldcurator.core.species import name_status
+    from boldcurator.io.annotations import Annotations
+
+    frame = pd.DataFrame({
+        "processid": ["P1", "P2", "P3"],
+        "species": ["Aus bis", "Aus bis", "Cus dus"],
+        "identification": ["Aus bis", "Aus bis", "Cus dus"],
+        "identification_rank": ["species"] * 3,
+        "bin_uri": ["BIN1", "BIN2", "BIN3"],
+        "genus": ["Aus", "Aus", "Cus"],
+        "country.ocean": ["Kenya", "Peru", "Peru"],
+    })
+    frame["name_status"] = name_status(frame)
+    graded, grades, shared = grade_frame(frame, None)
+    search_result = SearchResult(specimens=graded, bags_grades=grades,
+                                 bin_analysis={}, selections={},
+                                 resolution=Resolution(), estimate={},
+                                 shared_bins=frozenset(shared))
+    labels = ["BIN1-P1-Aus bis-Kenya", "BIN2-P2-Aus bis-Peru", "BIN3-P3-Cus dus-Peru"]
+    reps = graded.copy()
+    reps["_tip_label"] = labels
+    newick = f"(('{labels[0]}':1,'{labels[1]}':1):1,'{labels[2]}':1);"
+    tree = Phylo.read(StringIO(newick), "newick")
+    phylo_result = PhylogenyResult(representatives=reps, newick=newick,
+                                   monophyly={"Aus bis": True}, tree=tree)
+    a = Annotations()
+    a.set_flag("P1", "misidentification")
+    a.set_updated_id("P1", "Aus bus", rank="species", method="Morphology")
+    a.set_flag("P3", contamination=True, sequence_taxon="Homo sapiens")
+    viewed = regrade(search_result, a, CURATED)
+    return phylo_result, viewed, a, labels
+
+
+def test_tree_tips_follow_the_grades_view():
+    """Round 13, item 1: a re-identified tip reads "old → new" (purple in
+    the viewer), a left-out one is grey, colours and grades are the view's."""
+    from boldcurator.ui.app import (
+        LEFT_OUT_COLOUR,
+        _phylo_tips,
+        _phylo_view_data,
+    )
+    from boldcurator.ui.format import GRADE_COLOURS
+
+    phylo_result, viewed, a, labels = _tree_case()
+    data = _phylo_view_data(phylo_result, viewed, a, "curated", {"P1", "P2", "P3"})
+    tips = {t["tip"]: t for t in _phylo_tips(phylo_result, {}, data)}
+    renamed = tips[labels[0]]
+    assert renamed["display"] == "BIN1-P1-Aus bis → Aus bus-Kenya"
+    assert renamed["renamed"] and not renamed["left_out"]
+    assert renamed["species"] == "Aus bus"
+    assert renamed["color"] == GRADE_COLOURS[renamed["bags_grade"]]
+    left = tips[labels[2]]
+    assert left["left_out"] and left["color"] == LEFT_OUT_COLOUR
+    assert left["bags_grade"] == "" and left["monophyletic"] is None
+    plain = tips[labels[1]]
+    assert plain["display"] == labels[1] and not plain["renamed"]
+    # The original view is untouched.
+    original = {t["tip"]: t for t in _phylo_tips(phylo_result, {})}
+    assert original[labels[0]]["display"] == labels[0]
+
+
+def test_the_newick_download_carries_the_views_labels():
+    from boldcurator.ui.app import _phylo_tips, _phylo_view_data, _view_newick
+
+    phylo_result, viewed, a, labels = _tree_case()
+    data = _phylo_view_data(phylo_result, viewed, a, "curated", {"P1", "P2", "P3"})
+    newick = _view_newick(phylo_result, _phylo_tips(phylo_result, {}, data))
+    assert "Aus bis -> Aus bus" in newick and "→" not in newick
+    assert labels[1] in newick
+    # The stored tree keeps its own names (rerooting relies on them).
+    assert _view_newick(phylo_result, _phylo_tips(phylo_result, {})) \
+        == phylo_result.newick
+    assert all(c.name in labels for c in phylo_result.tree.get_terminals())
+
+
+def test_the_specimens_downloads_are_short_and_on_one_row():
+    """Round 13, item 2."""
+    import inspect
+
+    from boldcurator.ui import app
+
+    source = inspect.getsource(app)
+    assert "(xlsx)" not in source and "(txt)" not in source
+    assert '"Download:"' in source and "bc-download-row" in source
+    assert ".bc-download-row { display: flex;" in source
+
+
+def test_the_bin_table_shows_the_views_concordance():
+    import pandas as pd
+
+    from boldcurator.ui.app import _bins_html
+
+    html = _bins_html(pd.DataFrame({
+        "bin_uri": ["BOLD:A", "BOLD:B"], "concordance": ["Discordant"] * 2,
+        "concordance_curated": ["Concordant", "—"]}))
+    assert "Concordance (curated IDs)" in html
+    assert ">Concordant</span>" in html and ">—</td>" in html
+
+
+def test_search_state_bin_analysis_follows_the_view(store):
+    from boldcurator.ui.state import AppState
+
+    state = AppState(store, page_size=25)
+    state.run_search("Danaus plexippus")
+    search = state.search
+    assert "concordance_curated" not in search.bin_analysis(store)["content"].columns
+    search.grade_view = "curated"
+    analysis = search.bin_analysis(store)
+    content = analysis["content"]
+    assert list(content.columns).index("concordance_curated") \
+        == list(content.columns).index("concordance") + 1
+    assert "concordant_bins (With curated IDs)" in analysis["summary"]
+    assert analysis["view_summary"]["total_bins"] >= 1

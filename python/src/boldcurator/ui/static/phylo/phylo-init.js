@@ -165,7 +165,10 @@
       })(node);
       return `${tipNames.length} tips (collapsed)`;
     }
-    return node.name;
+    // Round 13, item 1: in a grades view a re-identified tip reads
+    // "old → new"; the node keeps its name, which rerooting relies on.
+    const meta = byName[node.name];
+    return meta && meta.display ? meta.display : node.name;
   }
 
   // -- Rendering --------------------------------------------------------
@@ -254,9 +257,15 @@
         // the circle so it never competes with the grade fill or the
         // monophyly ring.
         const flagged = meta && meta.flags && meta.flags.length > 0;
+        // Round 13, item 1: purple for a re-identified tip, grey for one
+        // the grades view leaves out; a warning still wins.
+        const labelColour = flagged ? "#b8860b"
+          : meta && meta.left_out ? "#adb5bd"
+          : meta && meta.renamed ? "#6f42c1" : "#212529";
         const text = svgEl("text", {
           x: px(node.x) + 8, y: py(node.y) + 4,
-          "font-size": 11, fill: flagged ? "#b8860b" : "#212529",
+          "font-size": 11, fill: labelColour,
+          "font-weight": meta && meta.renamed ? 600 : 400,
         });
         text.textContent = flagged ? `${label} \u26a0` : label;
         // Round 8, item 9.2: a real tip's name links to its BIN on BOLD.
@@ -395,6 +404,8 @@
       meta.bin_uri ? `BIN: ${meta.bin_uri}` : null,
       meta.bags_grade ? `BAGS grade: ${meta.bags_grade}` : null,
       meta.monophyletic === false ? "Not monophyletic on this tree" : null,
+      meta.renamed ? `Re-identified: ${meta.display}` : null,
+      meta.left_out ? "Left out of grading in this view" : null,
       ...(meta.flags || []).map((f) => `\u26a0 ${f}`),
       canReroot ? "Right-click to reroot here" : null,
     ].filter(Boolean);

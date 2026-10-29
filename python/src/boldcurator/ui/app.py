@@ -63,6 +63,7 @@ from ..core.curation import (
     CURATED,
     GRADE_VIEWS,
     ORIGINAL,
+    VIEW_CONCORDANCE_COLUMNS,
     VIEW_GRADE_COLUMNS,
 )
 from ..core.species import SPECIES_LEVEL_STATUSES
@@ -851,8 +852,9 @@ def _grade_view_switch(screen: str, view: str, curation: dict) -> ui.Tag:
         summary = ", ".join(bits) if bits else "no curation affects grading yet"
         note = ui.tags.span(
             summary[0].upper() + summary[1:]
-            + ". Grades, groups and the checklist follow this view; the BIN "
-              "dashboard and the Specimens table keep the original grades.",
+            + ". Grades, groups, the checklist, BIN concordance and the tree "
+              "follow this view; the Specimens table keeps the original "
+              "grades.",
             class_="small")
     return ui.div(
         ui.input_radio_buttons(f"grades_from_{screen}", "Grades from",
@@ -971,31 +973,134 @@ def _cell_text(row: pd.Series, *columns: str) -> str:
     return ""
 
 
-def _phylo_tips(result, grade_by_species: dict[str, str]) -> list[dict]:
+#: A tip the grades view leaves out (contaminated, or altered when
+#: excluding altered records): grey, whatever its grade was.
+LEFT_OUT_COLOUR = "#adb5bd"
+
+
+def _phylo_view_data(result, viewed, annotations, view: str,
+                     original_pids: set[str]) -> dict:
+    """Round 13, item 1: the tree's tips as a grades view sees them, without
+    rebuilding the tree. ``result`` is the ``PhylogenyResult``, ``viewed``
+    the regraded ``SearchResult``, ``original_pids`` the processids of the
+    original result.
+
+    Returns ``{"tips": {tip label: {...}}, "monophyly": {...}}``. Each tip
+    has the view's ``species``, ``level`` (species-level) and ``grade``,
+    ``renamed_to`` (with curated IDs, the record's new name, if it has one)
+    and ``left_out`` (the view drops the record). Monophyly is re-asked of
+    the same tree with the view's names and grades; left-out tips don't
+    count.
+    """
+    from ..core import phylogeny as phylo
+
+    reps = result.representatives
+    frame = viewed.specimens
+    pids = [str(p) for p in reps["processid"]]
+    by_pid = {str(p): i for i, p in enumerate(frame["processid"])}
+    grades = (dict(zip(viewed.bags_grades["species"], viewed.bags_grades["bags_grade"]))
+              if len(viewed.bags_grades) else {})
+    idents = [_cell_text(row, "identification") for _, row in reps.iterrows()]
+    ann = annotations.to_frame(pids, idents)
+    tips: dict[str, dict] = {}
+    kept = []
+    for (_, row), pid, source, new in zip(reps.iterrows(), pids,
+                                          ann["update_source"], ann["updated_id"]):
+        label = row["_tip_label"]
+        original = _cell_text(row, "species", "identification")
+        renamed = new if view == CURATED and source and new != original else ""
+        if pid not in by_pid:
+            # Not in the regraded frame: left out -- unless it was never in
+            # the result at all (a stand-in fetched for its sequence), which
+            # the view can't have changed.
+            gone = view != ORIGINAL and pid in original_pids
+            tips[label] = {"species": original, "level": False, "grade": "",
+                           "renamed_to": "", "left_out": gone}
+            continue
+        vrow = frame.iloc[by_pid[pid]]
+        species = _cell_text(vrow, "species", "identification")
+        level = _cell_text(vrow, "name_status") in SPECIES_LEVEL_STATUSES \
+            if "name_status" in vrow.index else True
+        tips[label] = {"species": species if level else (renamed or original),
+                       "level": level, "grade": grades.get(species, "") if level else "",
+                       "renamed_to": renamed, "left_out": False}
+        kept.append({"_tip_label": label, "species": species if level else ""})
+    monophyly = (phylo.check_monophyly(result.tree, pd.DataFrame(kept),
+                                       viewed.bags_grades)
+                 if kept and result.tree is not None else {})
+    return {"tips": tips, "monophyly": monophyly}
+
+
+def _phylo_tips(result, grade_by_species: dict[str, str],
+                view_data: dict | None = None) -> list[dict]:
     """Per-tip metadata for the tree renderer (phylo-init.js).
 
     A tip is coloured by its name's BAGS grade only when the record is
     species-level (``core.species.name_status``): a genus-rank "Danaus sp."
     is not the interim species "Danaus sp.", whatever the text says.
+
+    ``view_data`` (``_phylo_view_data``) puts the tree in a grades view: the
+    view's grades and monophyly, a re-identified tip labelled "old → new"
+    (``display``, ``renamed``), a left-out one grey (``left_out``).
     """
     tips = []
+    monophyly = view_data["monophyly"] if view_data else result.monophyly
     for _, row in result.representatives.iterrows():
+        label = row["_tip_label"]
         species = _cell_text(row, "species", "identification")
         level = _cell_text(row, "name_status") in SPECIES_LEVEL_STATUSES \
             if "name_status" in row.index else True
         grade = grade_by_species.get(species, "") if level else ""
+        display, renamed, left_out = label, False, False
+        seen = (view_data or {}).get("tips", {}).get(label)
+        if seen is not None:
+            if seen["renamed_to"]:
+                display = _renamed_label(label, species, seen["renamed_to"])
+                renamed = True
+            species, level, grade = seen["species"], seen["level"], seen["grade"]
+            left_out = seen["left_out"]
         bin_uri = _cell_text(row, "bin_uri")
         tips.append({
-            "tip": row["_tip_label"],
+            "tip": label,
+            "display": display,
+            "renamed": renamed,
+            "left_out": left_out,
             "species": species,
             "bin_uri": bin_uri,
             "bin_url": bold_bin_url(bin_uri) if bin_uri else "",  # round 8, 9.2
-            "bags_grade": grade,
-            "monophyletic": result.monophyly.get(species) if level else None,
-            "color": GRADE_COLOURS.get(grade, "#495057"),
-            "flags": result.flags.get(row["_tip_label"], []),
+            "bags_grade": "" if left_out else grade,
+            "monophyletic": monophyly.get(species) if level and not left_out else None,
+            "color": LEFT_OUT_COLOUR if left_out else GRADE_COLOURS.get(grade, "#495057"),
+            "flags": result.flags.get(label, []),
         })
     return tips
+
+
+def _renamed_label(label: str, old: str, new: str, arrow: str = "→") -> str:
+    """A tip label (``BIN-processid-species-country``) with its species
+    shown as ``old → new``."""
+    part = f"-{old}-"
+    if part in label:
+        return label.replace(part, f"-{old} {arrow} {new}-", 1)
+    return f"{label} {arrow} {new}"
+
+
+def _view_newick(result, tips: list[dict]) -> str:
+    """The tree as Newick with each re-identified tip renamed as the screen
+    shows it -- with an ASCII "->", which every tree program reads."""
+    renamed = {t["tip"]: t["display"].replace(" → ", " -> ")
+               for t in tips if t.get("renamed")}
+    if not renamed or result.tree is None:
+        return result.newick
+    import copy
+
+    from ..core import phylogeny as phylo
+
+    tree = copy.deepcopy(result.tree)
+    for clade in tree.get_terminals():
+        if clade.name in renamed:
+            clade.name = renamed[clade.name]
+    return phylo.to_newick(tree)
 
 
 def _json_for_script(value) -> str:
@@ -1169,6 +1274,11 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                ordinary scrolling columns. The full value is still one hover
                away via each cell's own `title` attribute (_table's default
                cell renderer). */
+            /* Round 13, item 2: the Specimens downloads on one row. */
+            .bc-download-row { display: flex; align-items: center; gap: 6px;
+                flex-wrap: nowrap; margin-bottom: 2px; overflow-x: auto; }
+            .bc-download-row .btn { white-space: nowrap;
+                padding: 2px 8px; }
             /* Round 12, item 2: a table narrowed by Find records. */
             .bc-filter-banner {
                 display: flex; align-items: center; gap: 10px;
@@ -2646,8 +2756,10 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     # Shiny output id is unreliable (duplicate HTML ids), so
                     # this gets its own id wired to the same export below.
                     ui.download_button("dl_gap_analysis",
-                                       "Download species analysis (xlsx)",
-                                       class_="btn-sm mb-2"),
+                                       "Download species analysis",
+                                       class_="btn-sm mb-2",
+                                       title="Excel workbook: the species "
+                                             "checklist and gap analysis"),
                     ui.HTML(_gap_html(_sorted_by(gaps, gap_sort),
                                       sort_state=gap_sort.get())),
                     class_="bc-tab-body",
@@ -2700,8 +2812,10 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                         style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:nowrap;",
                     ),
                     ui.download_button("dl_species_analysis",
-                                       "Download species analysis (xlsx)",
-                                       class_="btn-sm mb-2"),
+                                       "Download species analysis",
+                                       class_="btn-sm mb-2",
+                                       title="Excel workbook: the species "
+                                             "checklist and gap analysis"),
                     ui.HTML(_checklist_html(checklist, sort_state=checklist_sort.get())),
                     class_="bc-tab-body",
                 )
@@ -2713,26 +2827,37 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         @render.ui
         def bins_body():
             def body(search):
-                analysis = search.analysis(store).bin_analysis
+                analysis = search.bin_analysis(store)
                 summary = analysis["summary"]
+                # Round 13, item 3: in another grades view each count reads
+                # "original → view", as on the Species tab.
+                after = analysis.get("view_summary") or summary
+
+                def count(key: str) -> str:
+                    was, now = summary.get(key, 0), after.get(key, 0)
+                    return f"{now:,}" if was == now else f"{was:,} → {now:,}"
+
                 content = _sorted_by(analysis["content"], bins_sort)
                 return ui.div(
+                    _grade_view_switch("bins", search.grade_view,
+                                       search.view(store).curation),
                     ui.div(
-                        value_box(f"{summary['total_bins']:,}", "Total BINs",
-                                  "#2c7fb8"),
-                        value_box(f"{summary['concordant_bins']:,}",
+                        value_box(count("total_bins"), "Total BINs", "#2c7fb8"),
+                        value_box(count("concordant_bins"),
                                   "Concordant BINs", "#28a745"),
-                        value_box(f"{summary['discordant_bins']:,}",
+                        value_box(count("discordant_bins"),
                                   "Discordant BINs", "#dc3545"),
                         style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap;",
                     ),
                     ui.download_button("dl_bin_analysis",
-                                       "Download BIN analysis (xlsx)",
-                                       class_="btn-sm mb-2"),
+                                       "Download BIN analysis",
+                                       class_="btn-sm mb-2",
+                                       title="Excel workbook: summary, every "
+                                             "BIN, statistics"),
                     ui.HTML(_bins_html(content, sort_state=bins_sort.get())),
                     class_="bc-tab-body",
                 )
-            return _needs_analysis(body)
+            return _needs_analysis(body, graded=True)
 
         # -- the BAGS grade screens ----------------------------------------
 
@@ -2751,6 +2876,16 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         @reactive.event(input.grades_from_species)
         def _switch_view_species():
             _set_grade_view(input.grades_from_species())
+
+        @reactive.effect
+        @reactive.event(input.grades_from_bins)
+        def _switch_view_bins():
+            _set_grade_view(input.grades_from_bins())
+
+        @reactive.effect
+        @reactive.event(input.grades_from_phylogeny)
+        def _switch_view_phylogeny():
+            _set_grade_view(input.grades_from_phylogeny())
 
         def _group_marks(search, groups) -> tuple[set[str], set[int]]:
             """The groups' review marks: which units are reviewed, and which
@@ -3185,15 +3320,33 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                              daemon=True).start()
             phylo_op_seq.set(phylo_op_seq.get() + 1)
 
+        def _phylo_in_view(result) -> tuple[list[dict], dict, str]:
+            """The tree's tip metadata and monophyly in the search's grades
+            view (round 13, item 1), and the view's name ("" if original)."""
+            search = state.search
+            if search is None:
+                return _phylo_tips(result, {}), result.monophyly, ""
+            if search.grade_view == ORIGINAL:
+                return (_phylo_tips(result, search.grade_lookup()),
+                        result.monophyly, "")
+            viewed = search.view(store)
+            original = search.analysis(store).specimens
+            data = _phylo_view_data(
+                result, viewed, state.annotations, search.grade_view,
+                set(original["processid"].astype(str)))
+            return (_phylo_tips(result, {}, data), data["monophyly"],
+                    GRADE_VIEWS[search.grade_view])
+
         def _phylo_tree_panel(result) -> ui.Tag:
             rows = []
+            tips, monophyly, view_name = _phylo_in_view(result)
             for warning in result.warnings:
                 rows.append(ui.div(warning, class_="alert alert-warning py-2 px-3 small"))
             if not result.newick:
                 rows.append(ui.div("Nothing to show.", class_="text-muted"))
                 return ui.div(*rows)
 
-            if result.monophyly:
+            if monophyly:
                 # Same visual language the tree itself uses, not a second,
                 # conflicting palette: every grade-C tip is filled
                 # GRADE_COLOURS["C"] regardless of its own monophyly (see the
@@ -3206,8 +3359,8 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 # colour, which is what made these look like two unrelated
                 # conventions before.
                 badges = []
-                for species in sorted(result.monophyly):
-                    ok = result.monophyly[species]
+                for species in sorted(monophyly):
+                    ok = monophyly[species]
                     label = "Monophyletic" if ok else "Not monophyletic"
                     ring = "" if ok else "box-shadow:0 0 0 2px #dc3545;"
                     badges.append(ui.tags.span(
@@ -3218,13 +3371,13 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                               f"margin:2px 8px 4px 0;display:inline-block;{ring}",
                     ))
                 rows.append(ui.div(
-                    ui.tags.strong("BAGS grade C monophyly ", class_="small"),
+                    ui.tags.strong("BAGS grade C monophyly"
+                                   + (f" ({view_name})" if view_name else "")
+                                   + " ", class_="small"),
                     ui.div(*badges, style="margin-top:4px;"),
                     style="margin-bottom:10px;",
                 ))
 
-            search = state.search
-            tips = _phylo_tips(result, search.grade_lookup() if search else {})
 
             container_id = "phylo-tree-container"
             rows.append(ui.download_button(
@@ -3285,7 +3438,8 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             if result is None or not result.newick:
                 yield "Nothing to export: no tree has been built yet.\n"
                 return
-            yield result.newick
+            # Round 13, item 1: labelled as the screen shows it.
+            yield _view_newick(result, _phylo_in_view(result)[0])
 
         @output
         @render.ui
@@ -3299,6 +3453,10 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 pool_count = len(pool)
                 over_limit = pool_count > PHYLOGENY_LIMITS["MAX_TIPS"]
                 rows = [
+                    # Round 13, item 1: colours, labels and monophyly follow
+                    # the grades view; the tree itself isn't rebuilt.
+                    _grade_view_switch("phylogeny", search.grade_view,
+                                       search.view(store).curation),
                     ui.div(
                         f"{pool_count:,} representative specimens in this "
                         "result (one per selected BIN x country) -- this is "
@@ -3334,7 +3492,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     rows.append(_phylo_tree_panel(phylo_state["result"]))
                 return ui.div(*rows, class_="bc-tab-body")
 
-            return _needs_analysis(body)
+            return _needs_analysis(body, graded=True)
 
         # -- annotation, shared by every screen ----------------------------
 
@@ -3691,37 +3849,45 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 _taxon_updates_panel(state.annotations.taxon_frame(
                     table.identifications_by_rowid().tolist()))
                 if state.annotations.taxon_updates else ui.div(),
+                # Round 13, item 2: one row -- "Download:" then short
+                # names, each saying on hover what file it is.
                 ui.div(
+                    ui.tags.span("Download:", class_="small fw-semibold"),
                     # Round 10, item 3: prepared in the background, saved by
                     # itself when ready (prep_status, dl_prepared).
-                    ui.input_action_button("prep_all", "Download All (xlsx)",
-                                           class_="btn-sm"),
-                    ui.input_action_button("prep_selected",
-                                           "Download Selected (xlsx)",
-                                           class_="btn-sm"),
-                    ui.input_action_button("prep_annotated",
-                                           "Download Annotated Records (xlsx)",
-                                           class_="btn-sm"),
+                    ui.input_action_button(
+                        "prep_all", "All", class_="btn-sm",
+                        title="Excel workbook of every record in this result"),
+                    ui.input_action_button(
+                        "prep_selected", "Selected", class_="btn-sm",
+                        title="Excel workbook of the representative records"),
+                    ui.input_action_button(
+                        "prep_annotated", "Annotated", class_="btn-sm",
+                        title="Excel workbook of the annotated records, with "
+                              "the taxon updates"),
                     # Round 9, item 3: the same records as Download Selected,
                     # as a plain list for making a dataset on BOLD.
                     ui.download_button(
-                        "dl_selected_ids", "Selected process IDs (txt)",
-                        class_="btn-sm",
-                        title="The representatives' process IDs, one per "
-                              "line -- paste them into a new dataset on BOLD."),
-                    ui.download_button("dl_curation_report",
-                                       "Download BOLD Curation Report",
-                                       class_="btn-sm"),
-                    ui.download_button("dl_taxon_updates",
-                                       "Download Taxon Updates",
-                                       class_="btn-sm",
-                                       title="One row per name issue or "
-                                             "synonym: what BOLD fixes once, "
-                                             "on the taxon record."),
-                    ui.download_button("dl_fasta", "Download FASTA", class_="btn-sm"),
-                    ui.download_button("dl_selected_fasta", "Download Selected FASTA",
-                                       class_="btn-sm"),
-                    style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:2px;",
+                        "dl_selected_ids", "Selected IDs", class_="btn-sm",
+                        title="Text file of the representatives' process IDs, "
+                              "one per line -- paste them into a new dataset "
+                              "on BOLD."),
+                    ui.download_button(
+                        "dl_curation_report", "Curation report", class_="btn-sm",
+                        title="Tab-separated BOLD curation report: one row per "
+                              "annotated record"),
+                    ui.download_button(
+                        "dl_taxon_updates", "Taxon updates", class_="btn-sm",
+                        title="Tab-separated, one row per name issue or "
+                              "synonym: what BOLD fixes once, on the taxon "
+                              "record."),
+                    ui.download_button(
+                        "dl_fasta", "FASTA", class_="btn-sm",
+                        title="FASTA sequences of every record"),
+                    ui.download_button(
+                        "dl_selected_fasta", "Selected FASTA", class_="btn-sm",
+                        title="FASTA sequences of the representative records"),
+                    class_="bc-download-row",
                 ),
                 ui.tags.span(
                     "Downloads save to your computer's usual Downloads "
@@ -4456,7 +4622,8 @@ def _checklist_html(frame: pd.DataFrame, *,
 def _bins_html(frame: pd.DataFrame, *,
               sort_state: tuple[str | None, bool] = (None, False)) -> str:
     def cell(column, value, row):
-        if column == "concordance" and not _is_missing(value) and value:
+        if (column == "concordance" or column in VIEW_CONCORDANCE_COLUMNS.values()) \
+                and not _is_missing(value) and value and value != "—":
             return _chip(value, CONCORDANCE_COLOURS.get(str(value), "#adb5bd"))
         if column == "bin_uri" and not _is_missing(value) and value:
             return _link_cell(value, bold_bin_url(str(value)))

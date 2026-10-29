@@ -84,9 +84,13 @@ updates included; contaminated records left out); or *Excluding altered
 records* (no record with an ID flag, corrected ID, contamination or taxon
 update). Counts read "before → after", the checklist and downloads add the
 view's grade beside the original (`bags_grade_curated` /
-`bags_grade_unaltered`), and group entries note "was X". The BIN dashboard
-and the Specimens table keep the original grades. A search over 20,000
-records regrades in the background, with a progress panel.
+`bags_grade_unaltered`), and group entries note "was X". The BINs tab adds
+the view's concordance beside the original, with before → after counts. The
+tree keeps its shape but takes the view's colours and monophyly: a
+re-identified tip reads "old → new" in purple, a left-out one is grey, and
+the Newick download carries the same labels (with "->"). Only the
+Specimens table keeps the original grades. A search over 20,000 records
+regrades in the background, with a progress panel.
 
 While **Find records** narrows a table, an amber bar above it says how many
 of how many records it shows, with **Clear filter**, and the table is

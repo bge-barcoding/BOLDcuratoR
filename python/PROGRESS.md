@@ -10,6 +10,21 @@ performance investigation, the packaging saga) was trimmed from this file on
 2026-09-26 -- it is in git history (`git log -- python/PROGRESS.md`) if a
 similar bug resurfaces and you want to see how it was fixed last time.
 
+## Round 13 (2026-10-29) -- done
+
+- [x] 1 The tree follows the grades view without rebuilding:
+  `_phylo_view_data` re-reads each tip from the regraded frame, re-asks
+  monophyly of the same tree, and `_phylo_tips` adds `display` ("old →
+  new"), `renamed` (purple label) and `left_out` (grey). Node names stay the
+  tip labels, so rerooting is unchanged. The Newick download relabels a copy
+  of the tree ("->").
+- [x] 2 Specimens downloads: "Download:" then short names on one row
+  (`.bc-download-row`), the file type on hover; no "(xlsx)" anywhere.
+- [x] 3 BINs tab: `regrade` also runs `bins.analyse_bins`;
+  `SearchState.bin_analysis` adds `concordance_curated` /
+  `concordance_unaltered` ("—" for a BIN the view emptied) and the view's
+  summary; before → after boxes; the BIN workbook carries both.
+
 ## Round 12 (2026-10-28) -- done
 
 - [x] 1 The C+E group list showed mostly blanks: a native `<select>` popup

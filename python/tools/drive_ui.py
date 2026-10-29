@@ -685,6 +685,57 @@ def main(argv: list[str] | None = None) -> int:
               after_reroot != before_reroot)
         page.screenshot(path=str(args.out / "06-phylogeny.png"), full_page=True)
 
+        # -- round 13: the tree, the BINs tab and the downloads after
+        # curation. Re-identify one tip's record on the Specimens tab...
+        tip_pid = (tip_link[1].split("-")[1] if tip_link else "")
+        show("Specimens", settle=SETTLE)
+        tops = page.evaluate(
+            "Array.from(document.querySelectorAll('.bc-download-row .btn'))"
+            ".map(b => Math.round(b.getBoundingClientRect().top))")
+        check("the download buttons sit on one row",
+              len(tops) == 8 and len(set(tops)) == 1, str(tops))
+        page.fill("#find_text_sp", tip_pid)
+        page.click("#find_go_sp")
+        time.sleep(SETTLE * 1.5)
+        page.click("#select_all")
+        time.sleep(SETTLE)
+        error = annotate("sp", flag="misidentification", new_id="Danaus drivenus",
+                         method="Morphology", note="driven by drive_ui",
+                         curator="Drive Tester")
+        check("a tree tip's record can be re-identified", not error, error)
+        page.click("#find_clear_sp")
+        time.sleep(SETTLE)
+        page.click("#clear_selection")
+        time.sleep(SETTLE)
+        # ...then grade with curated IDs: its tip reads "old → new".
+        show("Phylogeny", settle=SETTLE)
+        page.check("#grades_from_phylogeny input[value='curated']")
+        time.sleep(SETTLE * 2)
+        labels = page.evaluate(
+            "Array.from(document.querySelectorAll('#phylo-tree-container text'))"
+            ".map(t => [t.textContent, t.getAttribute('fill')])")
+        renamed = [l for l in labels if "→ Danaus drivenus" in l[0]]
+        # Purple -- unless the tip also carries an alignment warning, whose
+        # amber (and ⚠) wins.
+        check("with curated IDs the re-identified tip reads old → new, in purple",
+              bool(renamed) and (renamed[0][1] == "#6f42c1"
+                                 or renamed[0][0].endswith("\u26a0")),
+              str(renamed[:1]))
+        href = page.get_attribute("#dl_phylo_newick", "href") or ""
+        newick = page.request.get(f"{base}/{href.lstrip('/')}").text()
+        check("the Newick download carries the curated label",
+              "-> Danaus drivenus" in newick, newick[:80])
+        page.screenshot(path=str(args.out / "06b-phylogeny-curated.png"),
+                        full_page=True)
+        show("BINs", settle=SETTLE)
+        check("the BINs tab adds concordance with curated IDs",
+              "Concordance (curated IDs)" in page.locator("#bins_body").inner_text())
+        page.check("#grades_from_bins input[value='original']")
+        time.sleep(SETTLE * 1.5)
+        check("and back to the original",
+              "Concordance (curated IDs)" not in
+              page.locator("#bins_body").inner_text())
+
         # -- round 8, item 1.1: a dropped connection (a sleeping machine)
         # reloads the page and restores the work, rather than leaving a dead
         # page whose buttons do nothing and whose downloads are an error.

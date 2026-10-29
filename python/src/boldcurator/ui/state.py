@@ -34,7 +34,13 @@ from ..core.pipeline import (
     flatten_taxa,
 )
 from ..core import selection
-from ..core.curation import ORIGINAL, VIEW_GRADE_COLUMNS, regrade
+from ..core.curation import (
+    GRADE_VIEWS,
+    ORIGINAL,
+    VIEW_CONCORDANCE_COLUMNS,
+    VIEW_GRADE_COLUMNS,
+    regrade,
+)
 from ..core.ranking import score_and_rank
 from ..core.summaries import build_species_checklist
 from ..core.summaries import gap_analysis as _gap_analysis
@@ -419,11 +425,36 @@ class SearchState:
             return None
         return written, n
 
+    def bin_analysis(self, store: SnapshotStore) -> dict:
+        """The BIN dashboard's analysis. Outside the original view, the
+        view's concordance sits beside the original (``concordance_curated``
+        ...) -- "—" for a BIN the view left no records in -- and the summary
+        adds the view's counts (``concordant_bins (With curated IDs)`` ...).
+        """
+        analysis = self.analysis(store).bin_analysis
+        if self.grade_view == ORIGINAL or not analysis:
+            return analysis
+        viewed = self.view(store).bin_analysis or {}
+        content = analysis.get("content", pd.DataFrame()).copy()
+        other = viewed.get("content", pd.DataFrame())
+        column = VIEW_CONCORDANCE_COLUMNS[self.grade_view]
+        lookup = (dict(zip(other["bin_uri"], other["concordance"]))
+                  if len(other) else {})
+        if len(content):
+            content.insert(list(content.columns).index("concordance") + 1, column,
+                           [lookup.get(b, "—") for b in content["bin_uri"]])
+        label = GRADE_VIEWS[self.grade_view]
+        summary = dict(analysis.get("summary", {}))
+        for key, value in (viewed.get("summary") or {}).items():
+            summary[f"{key} ({label})"] = value
+        return {**analysis, "content": content, "summary": summary,
+                "view_summary": dict(viewed.get("summary") or {})}
+
     def export_bin_analysis(self, store: SnapshotStore, path) -> "Path | None":
         from ..io import exports as export_io
 
         result = self.analysis(store)
-        analysis = result.bin_analysis
+        analysis = self.bin_analysis(store)
         if not analysis or not len(analysis.get("content", [])):
             return None
         return export_io.write_bin_analysis_xlsx(analysis, path,

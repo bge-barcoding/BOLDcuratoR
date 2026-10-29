@@ -137,3 +137,20 @@ def test_a_corrected_name_stops_counting_against_the_bin_snapshot_wide():
 
 def test_patching_without_a_snapshot_table_is_a_no_op():
     assert patch_bin_species(None, SHARED, SHARED) is None
+
+
+def test_the_bin_dashboard_is_regraded_too():
+    """Round 13, item 3: a misidentification that leaves BIN1 with one name
+    makes it concordant in the curated view."""
+    result = _result(SHARED)
+    from boldcurator.core import bins
+
+    original = bins.analyse_bins(result.specimens)
+    assert original["content"].set_index("bin_uri").loc["BIN1", "concordance"] \
+        == "Discordant"
+    a = Annotations()
+    _misidentify(a, ["P5", "P6", "P7"], "Aus bus")
+    curated = regrade(result, a, CURATED).bin_analysis
+    assert curated["content"].set_index("bin_uri").loc["BIN1", "concordance"] \
+        == "Concordant"
+    assert curated["summary"]["concordant_bins"] == 1

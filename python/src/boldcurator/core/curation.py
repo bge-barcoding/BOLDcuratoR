@@ -17,8 +17,8 @@ the analysed result in one of two views:
     corrected ID, no contamination, not reached by a taxon update. A note or
     an Other issue tick doesn't count -- neither questions the ID.
 
-Scores aren't recomputed, and the BIN dashboard isn't regraded: only the BAGS
-grades and the groups built from them.
+Scores aren't recomputed. The BAGS grades, the groups built from them and
+the BIN dashboard's concordance are.
 """
 
 from __future__ import annotations
@@ -29,6 +29,7 @@ import pandas as pd
 
 from ..config.constants import ID_RANKS
 from ..io.annotations import Annotations, guess_rank
+from . import bins
 from .pipeline import SearchResult, grade_frame
 from .species import column_or_missing, name_status, to_text
 
@@ -46,6 +47,10 @@ GRADE_VIEWS: dict[str, str] = {
 #: The export column holding each non-original view's grade.
 VIEW_GRADE_COLUMNS = {CURATED: "bags_grade_curated",
                       UNALTERED: "bags_grade_unaltered"}
+
+#: The BIN table column holding each non-original view's concordance.
+VIEW_CONCORDANCE_COLUMNS = {CURATED: "concordance_curated",
+                            UNALTERED: "concordance_unaltered"}
 
 #: The taxonomy columns a new identification sets, highest first: the one for
 #: its rank gets the name, every lower one is cleared.
@@ -167,6 +172,7 @@ def regrade(result: SearchResult, annotations: Annotations,
     return dataclasses.replace(
         result, specimens=graded, bags_grades=grades,
         shared_bins=frozenset(shared), bin_species=bin_species,
+        bin_analysis=bins.analyse_bins(graded),
         curation={"view": view, "changed": changed, "left_out": left_out})
 
 
