@@ -10,6 +10,15 @@ performance investigation, the packaging saga) was trimmed from this file on
 2026-09-26 -- it is in git history (`git log -- python/PROGRESS.md`) if a
 similar bug resurfaces and you want to see how it was fixed last time.
 
+## Round 14 (2026-10-30) -- done
+
+- [x] 1 Group screens: the navigator is one line (`.bc-group-nav`) -- the
+  list takes the room the buttons leave (`flex:1 1 0`), its entry cut with
+  "…" (the full caption is just below), options capped at 70 characters.
+- [x] 2 Guide: numbered steps, each a bold title and short bullets, brought
+  up to date (review marks, Find records' amber bar, Grades from, the tree,
+  the short download names).
+
 ## Round 13 (2026-10-29) -- done
 
 - [x] 1 The tree follows the grades view without rebuilding:

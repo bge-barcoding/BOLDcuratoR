@@ -1224,3 +1224,30 @@ def test_search_state_bin_analysis_follows_the_view(store):
         == list(content.columns).index("concordance") + 1
     assert "concordant_bins (With curated IDs)" in analysis["summary"]
     assert analysis["view_summary"]["total_bins"] >= 1
+
+
+def test_the_guide_is_numbered_steps_of_bullets():
+    """Round 14, item 2: separate steps, each a short bulleted list -- and
+    naming today's controls, so a renamed button shows up here."""
+    from boldcurator.ui.app import _guide_panel
+
+    html = str(_guide_panel().content)
+    steps = html.split("<ol")[1].split("</ol>")[0]
+    assert steps.count("<strong>") >= 10
+    assert steps.count("<ul") == steps.count("<strong>")
+    for control in ("Mark reviewed", "Next unreviewed", "Grades from",
+                    "Annotate checked", "Clear filter", "Clear annotations",
+                    "Check this group", "Selected IDs", "Curation report"):
+        assert control in steps, control
+
+
+def test_the_group_navigator_keeps_to_one_line():
+    """Round 14, item 1: the list shrinks to fit beside the buttons."""
+    import inspect
+
+    from boldcurator.ui import app
+
+    source = inspect.getsource(app)
+    assert 'class_="bc-group-nav"' in source
+    assert 'style="flex:1 1 0;min-width:200px;"' in source
+    assert ".bc-group-nav .selectize-input > .item" in source

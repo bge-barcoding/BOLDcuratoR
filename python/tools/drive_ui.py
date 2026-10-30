@@ -373,6 +373,18 @@ def main(argv: list[str] | None = None) -> int:
 
         # Round 12, item 4: groups marked reviewed, and annotated ones, show
         # in the group list; Next unreviewed skips the reviewed ones.
+        # Round 14, item 1: Mark reviewed shares the group list's line.
+        nav = page.evaluate(f"""() => {{
+            const list = document.querySelector('#grade_{grade}_body .selectize-input')
+                .getBoundingClientRect();
+            const button = document.querySelector('#review_{grade}')
+                .getBoundingClientRect();
+            const mid = button.top + button.height / 2;
+            return [mid >= list.top && mid <= list.bottom,
+                    Math.round(list.top), Math.round(button.top)];
+        }}""")
+        check("Mark reviewed is on the same line as the group list",
+              bool(nav[0]), str(nav))
         body = page.locator(f"#grade_{grade}_body").inner_text()
         page.click(f"#review_{grade}")
         time.sleep(SETTLE)

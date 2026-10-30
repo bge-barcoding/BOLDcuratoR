@@ -683,9 +683,14 @@ def _guide_panel() -> ui.Tag:
     Static text, so a change to a screen's name or a button's label needs
     the matching line here too.
     """
-    def step(title: str, *body) -> ui.Tag:
-        return ui.tags.li(ui.tags.strong(title), " ", *body,
-                          style="margin-bottom:8px;")
+    def step(title: str, *bullets) -> ui.Tag:
+        """Round 14, item 2: one numbered step -- a bold title, then short
+        bullets rather than a paragraph."""
+        return ui.tags.li(
+            ui.tags.strong(title),
+            ui.tags.ul(*[ui.tags.li(b) for b in bullets],
+                       style="margin:2px 0 0;padding-left:18px;"),
+            style="margin-bottom:10px;")
 
     grades = ui.tags.ul(
         *[ui.tags.li(
@@ -708,63 +713,76 @@ def _guide_panel() -> ui.Tag:
                 "files at the end."),
             ui.div(
             ui.tags.ol(
-                step("Get the data.",
-                     "On the Data tab, download the latest BOLD snapshot (once; "
-                     "about 2 GB) or point to a copy you already have."),
-                step("Type your name",
-                     "in the box at the top right, so your flags and notes "
-                     "carry it."),
-                step("Search.",
-                     "On the Search tab, type the taxa (one per line), and "
-                     "optionally countries, continents, or dataset and project "
-                     "codes. Check size says how big the result will be; "
-                     "Search runs it. Records that share a BIN with your "
-                     "taxa come in too, so every BIN is seen whole."),
-                step("Check what was found.",
-                     "Gap analysis lists every taxon you typed as found or "
-                     "missing. Species and BINs give the overview: grade "
-                     "counts, the species checklist, concordant and "
-                     "discordant BINs."),
-                step("Work through the BAGS screens, E and C first.",
-                     "They carry a coloured dot and \"work here first\": that is where "
-                     "the name and the barcode disagree. Each screen shows one "
-                     "problem at a time (a species, or a BIN); move with "
-                     "Previous and Next, or type in the list to find one. "
-                     "Mark reviewed when you're done with it -- ✓ in the "
-                     "list, and Next unreviewed skips it; ✎ marks one with "
-                     "annotations. Grades from: With curated IDs regrades "
-                     "with your corrections, Excluding altered records "
-                     "without the records you changed. BAGS C+E gathers "
-                     "species that are both split across BINs and share "
-                     "one, and Unnamed BINs the BINs no grade covers."),
-                step("Find records.",
-                     "On Specimens and every BAGS screen, Find records shows "
-                     "only the records with some text in a column you choose, "
-                     "or in any column: a country, a collector or identifier, "
-                     "a BIN. The check button above then checks just those."),
-                step("Annotate.",
-                     "Tick Check on the records you mean (Check this group "
-                     "ticks them all) and press Annotate checked. Choose an "
-                     "ID issue -- the form says what each means and asks "
-                     "for what it needs -- and tick Contamination or Other "
-                     "issue if they apply. A name issue or synonym corrects "
-                     "the name itself, so it reaches every record with it, "
-                     "except records with their own corrected ID. Clear "
-                     "annotations undoes a record's own."),
-                step("Pick representatives.",
+                step("Get the data",
+                     "On the Data tab, download the latest BOLD snapshot -- "
+                     "once; about 2 GB.",
+                     "Or point to a copy you already have."),
+                step("Enter your full name",
+                     "In the box at the top right.",
+                     "It goes on every annotation and review mark."),
+                step("Search",
+                     "On the Search tab, type the taxa, one per line.",
+                     "Optionally narrow by countries or continents, or give "
+                     "dataset and project codes.",
+                     "Check size says how big the result will be; Search "
+                     "runs it.",
+                     "Records sharing a BIN with your taxa come in too, so "
+                     "every BIN is seen whole."),
+                step("Check what was found",
+                     "Gap analysis: every taxon you typed, found or missing.",
+                     "Species: the grade counts and the species checklist.",
+                     "BINs: concordant and discordant BINs."),
+                step("Work through the BAGS screens",
+                     "Start with those marked by a coloured dot -- E, C+E "
+                     "and C -- where the name and the barcode disagree.",
+                     "Each shows one species or BIN at a time: Previous and "
+                     "Next, or type in the list to find one.",
+                     "Mark reviewed ✓ when you're done with one; Next "
+                     "unreviewed skips the ones you've done.",
+                     "✎ in the list marks one holding annotated records.",
+                     "BAGS C+E: species both split across BINs and sharing "
+                     "one, every BIN together.",
+                     "Unnamed BINs: the BINs no grade covers, with no "
+                     "species-level name."),
+                step("Find records",
+                     "On Specimens and every BAGS screen: choose a column "
+                     "(or any), type some text, Search.",
+                     "An amber bar means you're looking at a filtered table; "
+                     "Clear filter shows every record again.",
+                     "The check button then checks just the records found."),
+                step("Annotate",
+                     "Tick Check on the records you mean, or Check this "
+                     "group for all of them.",
+                     "Press Annotate checked and choose an ID issue: the "
+                     "form says what each means and asks for what it needs.",
+                     "Tick Contamination or Other issue if they apply.",
+                     "A name issue or synonym corrects the name itself, so "
+                     "it reaches every record with that name -- except "
+                     "records with their own corrected ID.",
+                     "Clear annotations removes a record's own annotations."),
+                step("See the effect of your curation",
+                     "Grades from: Original IDs, With curated IDs (your "
+                     "corrections applied), or Excluding altered records.",
+                     "It changes the BAGS screens, Species, BINs and the "
+                     "tree, showing before → after.",
+                     "The Specimens table keeps the original grades."),
+                step("Representatives and the tree",
                      "Rep. marks the best record for each BIN in each "
-                     "country, picked for you on a new search; tick or untick "
-                     "it to change the pick. The Phylogeny tab builds a tree "
-                     "from them."),
-                step("Download.",
-                     "The Specimens tab holds every record, and the downloads: "
-                     "all, selected (the representatives) or annotated records "
-                     "as Excel, the selected process IDs as a list to make a "
-                     "dataset on BOLD, the BOLD curation report and taxon "
-                     "updates to send to BOLD, and FASTA sequences."),
-                step("Save your work.",
-                     "It saves itself every minute; on the Data tab you can "
-                     "name a session, and load it again later."),
+                     "country, picked for you; tick or untick it to change "
+                     "the pick.",
+                     "The Phylogeny tab builds a tree from them; with "
+                     "curated IDs a re-identified tip reads old → new."),
+                step("Download",
+                     "On the Specimens tab: All, Selected (the "
+                     "representatives) or Annotated records, as Excel.",
+                     "Selected IDs: a list of process IDs to make a dataset "
+                     "on BOLD.",
+                     "Curation report and Taxon updates: to send to BOLD.",
+                     "FASTA sequences. Hover a button for its file type."),
+                step("Save your work",
+                     "It saves itself every minute.",
+                     "On the Data tab, name a session and load it again "
+                     "later."),
                 style="padding-left:28px;margin:0;",
             ),
             ui.div(
@@ -870,7 +888,7 @@ INLINE_REGRADE_RECORDS = 20_000
 
 #: The longest group caption a dropdown option shows; the full caption is in
 #: bold under the navigator.
-OPTION_CAPTION_CHARS = 110
+OPTION_CAPTION_CHARS = 70
 
 
 def _group_option(group, *, reviewed: bool, annotated: bool,
@@ -1274,6 +1292,17 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                ordinary scrolling columns. The full value is still one hover
                away via each cell's own `title` attribute (_table's default
                cell renderer). */
+            /* Round 14, item 1: a group screen's navigator on one line. */
+            .bc-group-nav { display: flex; align-items: center; gap: 10px;
+                flex-wrap: wrap; margin-bottom: 8px; }
+            .bc-group-nav > span, .bc-group-nav .btn { white-space: nowrap; }
+            .bc-group-nav .shiny-input-container { margin-bottom: 0; }
+            .bc-group-nav .selectize-input { white-space: nowrap; }
+            .bc-group-nav .selectize-control.single .selectize-input {
+                padding-right: 34px; }
+            .bc-group-nav .selectize-input > .item { white-space: nowrap;
+                overflow: hidden; text-overflow: ellipsis;
+                max-width: calc(100% - 6px); vertical-align: middle; }
             /* Round 13, item 2: the Specimens downloads on one row. */
             .bc-download-row { display: flex; align-items: center; gap: 6px;
                 flex-wrap: nowrap; margin-bottom: 2px; overflow-x: auto; }
@@ -2996,7 +3025,11 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                                     was=_was(search, grade, g, original))
                                     for i, g in enumerate(groups)},
                                 selected=str(index), width="100%"),
-                            style="flex:1 1 auto;min-width:280px;max-width:1000px;",
+                            # Round 14, item 1: the list takes the room the
+                            # buttons leave, not its text's width -- the
+                            # caption is in full just below -- so the row
+                            # stays one line with Mark reviewed on it.
+                            style="flex:1 1 0;min-width:200px;",
                         ),
                         ui.input_action_button(f"prev_{grade}", "‹ Previous",
                                                class_="btn-sm"),
@@ -3014,8 +3047,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                                                 else "btn-outline-success"),
                             title="Record that you have finished with this "
                                   f"{unit}, whether or not it needed changes"),
-                        style="display:flex;align-items:center;gap:10px;"
-                              "flex-wrap:wrap;margin-bottom:8px;",
+                        class_="bc-group-nav",
                     ),
                     ui.div(ui.tags.strong(group.caption),
                            ui.tags.span(f"  ·  {group.specimen_count} specimens",
