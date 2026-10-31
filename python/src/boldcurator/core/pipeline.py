@@ -149,6 +149,13 @@ class SearchResult:
     #: "this species has a *different* BIN that is shared", which grading alone
     #: cannot distinguish.
     shared_bins: frozenset[str] = field(default_factory=frozenset)
+    #: The snapshot's species per BIN for this result's BINs (the
+    #: ``bin_species`` table, filtered) -- kept so a regrade with curated IDs
+    #: (``core.curation``) judges shared BINs over the same scope.
+    bin_species: pd.DataFrame | None = field(default=None, repr=False)
+    #: Set on a regraded copy (``core.curation.regrade``): the view, and how
+    #: many records it changed or left out.
+    curation: dict = field(default_factory=dict)
 
     @property
     def record_count(self) -> int:
@@ -320,20 +327,7 @@ def analyse_plan(
         ).df()
     else:
         bin_species = None
-    grades = bags.calculate_bags_grades(frame, bin_species=bin_species)
-    if len(grades):
-        frame = frame.merge(
-            grades[["species", "bags_grade"]], on="species", how="left"
-        )
-        # A grade belongs to species-level records. A higher-rank record whose
-        # species field happens to read like a graded name (a genus-rank
-        # "Danaus sp." beside an interim-species "Danaus sp.") is not one.
-        frame["bags_grade"] = frame["bags_grade"].where(
-            is_species_level(frame), pd.NA)
-    # The same set calculate_bags_grades used for "has_shared_bins": which
-    # BINs are *themselves* discordant, not which species have a discordant
-    # BIN somewhere among their (possibly several) BINs.
-    shared = bags.discordant_bins(frame, bin_species)
+    frame, grades, shared = grade_frame(frame, bin_species)
 
     say("Analysing BINs")
     analysis = bins.analyse_bins(frame)
@@ -352,4 +346,26 @@ def analyse_plan(
         snapshot_id=store.info().snapshot_id,
         warnings=warnings,
         shared_bins=frozenset(shared),
+        bin_species=bin_species,
     )
+
+
+def grade_frame(frame: pd.DataFrame, bin_species: pd.DataFrame | None
+                ) -> tuple[pd.DataFrame, pd.DataFrame, set[str]]:
+    """BAGS-grade ``frame``: the frame with ``bags_grade`` on its
+    species-level records, the grades per species, and the discordant BINs.
+    Shared by a search's analysis and its regrades (``core.curation``)."""
+    grades = bags.calculate_bags_grades(frame, bin_species=bin_species)
+    if len(grades):
+        frame = frame.merge(
+            grades[["species", "bags_grade"]], on="species", how="left"
+        )
+        # A grade belongs to species-level records. A higher-rank record whose
+        # species field happens to read like a graded name (a genus-rank
+        # "Danaus sp." beside an interim-species "Danaus sp.") is not one.
+        frame["bags_grade"] = frame["bags_grade"].where(
+            is_species_level(frame), pd.NA)
+    # The same set calculate_bags_grades used for "has_shared_bins": which
+    # BINs are *themselves* discordant, not which species have a discordant
+    # BIN somewhere among their (possibly several) BINs.
+    return frame, grades, bags.discordant_bins(frame, bin_species)

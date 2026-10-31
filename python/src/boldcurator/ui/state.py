@@ -20,6 +20,8 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass, field
 
+import pandas as pd
+
 from ..config.constants import DOWNLOAD_LIMITS
 from ..core.grouping import SpecimenGroup, group_specimens
 from ..core.pipeline import (
@@ -32,6 +34,13 @@ from ..core.pipeline import (
     flatten_taxa,
 )
 from ..core import selection
+from ..core.curation import (
+    GRADE_VIEWS,
+    ORIGINAL,
+    VIEW_CONCORDANCE_COLUMNS,
+    VIEW_GRADE_COLUMNS,
+    regrade,
+)
 from ..core.ranking import score_and_rank
 from ..core.summaries import build_species_checklist
 from ..core.summaries import gap_analysis as _gap_analysis
@@ -97,7 +106,16 @@ class SearchState:
     #: that one rather than computing it a second time.
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False,
                                   compare=False)
-    _groups: dict[str, list[SpecimenGroup]] = field(default_factory=dict, repr=False)
+    _groups: dict[tuple, list[SpecimenGroup]] = field(default_factory=dict, repr=False)
+    #: Which grades the BAGS screens, the checklist and the downloads show:
+    #: ``core.curation.GRADE_VIEWS``. The analysis itself is always the
+    #: original; the others are regrades of it, cached per annotations
+    #: revision (``_views``).
+    grade_view: str = ORIGINAL
+    _views: dict[str, tuple[int, SearchResult]] = field(default_factory=dict,
+                                                        repr=False)
+    _view_lock: threading.Lock = field(default_factory=threading.Lock,
+                                       repr=False, compare=False)
 
     @property
     def record_count(self) -> int:
@@ -178,9 +196,61 @@ class SearchState:
                 self.annotations.selected = merged
         return result
 
-    def checklist(self, store: SnapshotStore):
+    def _revision(self) -> int:
+        return self.annotations.revision if self.annotations is not None else 0
+
+    def view(self, store: SnapshotStore, view: str | None = None) -> SearchResult:
+        """The analysis graded in ``view`` (default: ``grade_view``) --
+        regraded from the original whenever the annotations have changed
+        since it was last asked for."""
+        view = view or self.grade_view
         result = self.analysis(store)
-        return build_species_checklist(result.specimens, result.bags_grades)
+        if view == ORIGINAL:
+            return result
+        with self._view_lock:
+            cached = self._views.get(view)
+            if cached is None or cached[0] != self._revision():
+                # A copy: the app may regrade on a background thread while
+                # the curator goes on annotating.
+                ann = (self.annotations.snapshot() if self.annotations is not None
+                       else Annotations())
+                cached = (ann.revision, regrade(result, ann, view))
+                self._views[view] = cached
+        return cached[1]
+
+    def view_is_ready(self, view: str | None = None) -> bool:
+        """Whether ``view`` (default: ``grade_view``) can be shown without
+        grading anything: analysed, and regraded since the last change."""
+        view = view or self.grade_view
+        if not self.analysis_is_ready:
+            return False
+        if view == ORIGINAL:
+            return True
+        cached = self._views.get(view)
+        return cached is not None and cached[0] == self._revision()
+
+    def checklist(self, store: SnapshotStore):
+        """One row per species. Outside the original view, the view's grade
+        sits beside the original (``bags_grade_curated`` ...), and a species
+        only the view has -- a misidentification's correct name -- gets a row
+        of its own with no original grade."""
+        result = self.analysis(store)
+        checklist = build_species_checklist(result.specimens, result.bags_grades)
+        if self.grade_view == ORIGINAL:
+            return checklist
+        viewed = self.view(store)
+        column = VIEW_GRADE_COLUMNS[self.grade_view]
+        other = build_species_checklist(viewed.specimens, viewed.bags_grades)
+        grades = dict(zip(other["species"], other["bags_grade"])) if len(other) else {}
+        checklist.insert(list(checklist.columns).index("bags_grade") + 1, column,
+                         [grades.get(s, pd.NA) for s in checklist["species"]])
+        new = other[~other["species"].isin(set(checklist["species"]))].copy()
+        if len(new):
+            new[column] = new["bags_grade"]
+            new["bags_grade"] = pd.NA
+            checklist = pd.concat([checklist, new[checklist.columns]],
+                                  ignore_index=True)
+        return checklist
 
     def gap_analysis(self, store: SnapshotStore):
         """Found/Missing per taxon typed, against what the search returned.
@@ -193,10 +263,14 @@ class SearchState:
         result = self.analysis(store)
         return _gap_analysis(result.taxonomy_groups, result.specimens)
 
-    def groups(self, store: SnapshotStore, grade: str) -> list[SpecimenGroup]:
-        """The groups for one grade, cached -- a curator revisits a tab often."""
-        if grade not in self._groups:
-            result = self.analysis(store)
+    def groups(self, store: SnapshotStore, grade: str,
+               view: str | None = None) -> list[SpecimenGroup]:
+        """The groups for one grade, in ``view`` (default: ``grade_view``),
+        cached -- a curator revisits a tab often."""
+        view = view or self.grade_view
+        key = (view, grade) if view == ORIGINAL else (view, grade, self._revision())
+        if key not in self._groups:
+            result = self.view(store, view)
 
             def fetch_bin(bin_uri: str, store=store):
                 """Everything in this BIN, straight from the snapshot.
@@ -211,10 +285,10 @@ class SearchState:
                     return extra
                 return score_and_rank(process_specimen_data(extra))
 
-            self._groups[grade] = group_specimens(
+            self._groups[key] = group_specimens(
                 result.specimens, result.bags_grades, grade,
                 shared_bins=result.shared_bins, fetch_bin=fetch_bin)
-        return self._groups[grade]
+        return self._groups[key]
 
     def grade_lookup(self) -> dict[str, str]:
         """species -> grade, but only if the analysis has already been computed.
@@ -229,9 +303,10 @@ class SearchState:
         grades = self._analysis.bags_grades
         return dict(zip(grades["species"], grades["bags_grade"]))
 
-    def grade_counts(self, store: SnapshotStore) -> dict[str, int]:
+    def grade_counts(self, store: SnapshotStore,
+                     view: str | None = None) -> dict[str, int]:
         """Species per grade, for the badges on the navigation."""
-        grades = self.analysis(store).bags_grades
+        grades = self.view(store, view).bags_grades
         if not len(grades):
             return {}
         return grades["bags_grade"].value_counts().to_dict()
@@ -275,15 +350,39 @@ class SearchState:
                 export_io.annotated_rows(frame, ann), ann)
         elif kind == "curation_report":
             rows = export_io.curation_report(frame, ann)
+        elif kind == "taxon_updates":
+            rows = export_io.taxon_updates_report(frame, ann)
         else:
             raise ValueError(f"Unknown export {kind!r}")
 
         if len(rows) == 0:
             return None
+        rows = self._with_view_grade(store, rows)
         if excel:
+            # The taxon updates ride along with the annotated records, as
+            # their own sheet: the records show what each update reaches.
+            extra = ({"Taxon updates": export_io.taxon_updates_report(frame, ann)}
+                     if kind == "annotated" and ann.taxon_updates else None)
             return export_io.write_xlsx(rows, path, snapshot_id=result.snapshot_id,
-                                        progress=progress)
+                                        progress=progress, extra_sheets=extra)
         return export_io.write_tsv(rows, path, snapshot_id=result.snapshot_id)
+
+    def _with_view_grade(self, store: SnapshotStore, rows):
+        """Outside the original view, an export carries the view's grade
+        beside ``bags_grade`` (``bags_grade_curated`` ...)."""
+        if self.grade_view == ORIGINAL or "processid" not in rows.columns:
+            return rows
+        viewed = self.view(store).specimens
+        lookup = dict(zip(viewed["processid"].astype(str),
+                          viewed.get("bags_grade", pd.Series(dtype=object))))
+        rows = rows.copy()
+        column = VIEW_GRADE_COLUMNS[self.grade_view]
+        values = [lookup.get(str(p), pd.NA) for p in rows["processid"]]
+        if "bags_grade" in rows.columns:
+            rows.insert(list(rows.columns).index("bags_grade") + 1, column, values)
+        else:
+            rows[column] = values
+        return rows
 
     def representative_processids(self) -> list[str]:
         """This result's representative picks (what "Download Selected"
@@ -326,11 +425,36 @@ class SearchState:
             return None
         return written, n
 
+    def bin_analysis(self, store: SnapshotStore) -> dict:
+        """The BIN dashboard's analysis. Outside the original view, the
+        view's concordance sits beside the original (``concordance_curated``
+        ...) -- "—" for a BIN the view left no records in -- and the summary
+        adds the view's counts (``concordant_bins (With curated IDs)`` ...).
+        """
+        analysis = self.analysis(store).bin_analysis
+        if self.grade_view == ORIGINAL or not analysis:
+            return analysis
+        viewed = self.view(store).bin_analysis or {}
+        content = analysis.get("content", pd.DataFrame()).copy()
+        other = viewed.get("content", pd.DataFrame())
+        column = VIEW_CONCORDANCE_COLUMNS[self.grade_view]
+        lookup = (dict(zip(other["bin_uri"], other["concordance"]))
+                  if len(other) else {})
+        if len(content):
+            content.insert(list(content.columns).index("concordance") + 1, column,
+                           [lookup.get(b, "—") for b in content["bin_uri"]])
+        label = GRADE_VIEWS[self.grade_view]
+        summary = dict(analysis.get("summary", {}))
+        for key, value in (viewed.get("summary") or {}).items():
+            summary[f"{key} ({label})"] = value
+        return {**analysis, "content": content, "summary": summary,
+                "view_summary": dict(viewed.get("summary") or {})}
+
     def export_bin_analysis(self, store: SnapshotStore, path) -> "Path | None":
         from ..io import exports as export_io
 
         result = self.analysis(store)
-        analysis = result.bin_analysis
+        analysis = self.bin_analysis(store)
         if not analysis or not len(analysis.get("content", [])):
             return None
         return export_io.write_bin_analysis_xlsx(analysis, path,
@@ -535,6 +659,12 @@ class AppState:
                 f"{plan.expanded_records:,} records: the specimen table works, "
                 "but the species, BIN and BAGS screens need a narrower search.")
 
+        if saved.annotations.converted:
+            warnings.append(
+                f"{saved.annotations.converted:,} record(s) carried a flag this "
+                "version no longer offers and were converted: Data Issue is "
+                "now the Other issue tick-box, ID Uncertain is now ID "
+                "unfounded. Check that their notes still fit.")
         self.annotations = saved.annotations
         query = saved.query if isinstance(saved.query, dict) else {}
         label = saved.name or saved.session_id

@@ -42,9 +42,12 @@ from ..config.constants import (
     DEFAULT_SNAPSHOT_DIR,
     DEFAULT_SNAPSHOT_ZENODO_DOI,
     DOWNLOAD_LIMITS,
-    FLAG_CHOICES,
-    FLAG_CLEAR,
+    ID_FLAGS,
+    ID_METHODS,
+    ID_RANKS,
+    ISSUE_TICKS,
     PHYLOGENY_LIMITS,
+    TAXON_FLAGS,
 )
 from ..core.grouping import (
     GRADE_DESCRIPTIONS,
@@ -56,12 +59,24 @@ from ..core.grouping import (
     PRIORITY_GRADES,
     SPECIES_GRADES,
 )
+from ..core.curation import (
+    CURATED,
+    GRADE_VIEWS,
+    ORIGINAL,
+    VIEW_CONCORDANCE_COLUMNS,
+    VIEW_GRADE_COLUMNS,
+)
 from ..core.species import SPECIES_LEVEL_STATUSES
 from ..core.table import DEFAULT_PAGE_SIZE, search_frame
 from ..data.snapshot import SnapshotError, SnapshotStore
 from ..desktop import DEFAULT_CONFIG_PATH, load_snapshot_path, save_snapshot_path
 from ..io import exports as export_io
-from ..io.annotations import merge_annotations
+from ..io.annotations import (
+    AnnotationForm,
+    group_unit,
+    guess_rank,
+    merge_annotations,
+)
 from ..io.session import SessionStore
 from .setup import _pick_snapshot_file
 from .format import (
@@ -76,7 +91,9 @@ from .format import (
     GRADE_COLOURS,
     GROUP_COLUMNS,
     GROUP_LABELS,
+    HIDDEN_COLUMNS,
     INLINE_INPUT_CSS,
+    TRAILING_COLUMNS,
     UNNAMED_COLOUR,
     bold_bin_url,
     bold_record_url,
@@ -279,8 +296,11 @@ def _all_columns_ordered(frame: pd.DataFrame) -> list[str]:
     specially excluded here.
     """
     preferred = [c for c in GROUP_COLUMNS if c in frame.columns]
-    rest = [c for c in frame.columns if c not in GROUP_COLUMNS]
-    return preferred + rest
+    trailing = [c for c in TRAILING_COLUMNS if c in frame.columns]
+    rest = [c for c in frame.columns
+            if c not in GROUP_COLUMNS and c not in TRAILING_COLUMNS
+            and c not in HIDDEN_COLUMNS]
+    return preferred + rest + trailing
 
 #: Why each specimen-handling download can come back empty, keyed the same
 #: way ``SearchState.export_specimens`` is.
@@ -289,6 +309,7 @@ _EMPTY_REASONS = {
     "selected": "no specimens selected",
     "annotated": "no flags, updated IDs or notes recorded",
     "curation_report": "no flags, updated IDs or notes recorded",
+    "taxon_updates": "no name issues or synonyms recorded",
 }
 
 
@@ -424,47 +445,232 @@ BOX_STYLE = ("padding:10px 14px;background:#f8f9fa;border:1px solid #dee2e6;"
 
 
 def _annotation_controls(prefix: str) -> list:
-    """Flag / note / corrected-ID, plus Apply. Repeated per screen, so shared.
+    """"Annotate checked…" and "Clear annotations". Repeated per screen, so
+    shared.
 
-    Explicit widths, because these sit in a flex row: a Shiny input is a block
-    element and will otherwise take the full width and stack, turning a
-    one-line toolbar into half a screen of form.
+    The annotation itself is a form in a dialog (``_annotation_modal``): an
+    ID issue, contamination, other issue, and the fields each needs, which
+    no longer fit one toolbar row.
 
-    Round 6, curation tools item 6: no per-field label stacked above its own
-    input any more -- that was three different heights (a one-word "Flag"
-    label next to a much longer "Corrected identification" one) is exactly
-    what made the toolbar look uneven, on top of taking a second line
-    vertically it didn't need. A compact inline "Flag" tag replaces its
-    label (a `<select>`'s own options don't show a placeholder the way a
-    text input's greyed-out text can); the two text fields use `placeholder`
-    instead of `label` -- same information, without a label row of its own.
-
-    "Apply to checked" acts on ``Annotations.working`` -- the disposable
-    bulk-edit selection, not the representative pick. See ``io.annotations``'s
-    module docstring.
+    Both act on ``Annotations.working`` -- the disposable bulk-edit
+    selection, not the representative pick. See ``io.annotations``'s module
+    docstring.
     """
     return [
-        ui.div(
-            ui.tags.span("Flag", class_="small text-muted"),
-            ui.input_select(f"{prefix}_flag", None,
-                            choices=FLAG_CHOICES, width="140px"),
-            style="display:flex;align-items:center;gap:6px;",
-        ),
-        ui.input_text(f"{prefix}_note", None, placeholder="Curator note",
-                     width="170px"),
-        # Round 8, item 4.2: "Correct ID", 1.5x the old 150px so a full
-        # binomial fits.
-        ui.input_text(f"{prefix}_updated_id", None,
-                     placeholder="Correct ID", width="225px"),
-        ui.input_action_button(f"{prefix}_apply", "Apply to checked",
-                               class_="btn-primary btn-sm"),
+        ui.input_action_button(f"{prefix}_apply", "Annotate checked…",
+                               class_="btn-primary btn-sm",
+                               title="Flag, correct or note the checked "
+                                     "records"),
         # Round 9, item 5: the undo -- asks first (``_confirm_clear``).
         ui.input_action_button(
             f"{prefix}_clear_ann", "Clear annotations",
             class_="btn-outline-danger btn-sm",
-            title="Remove the flag, note and Correct ID from the checked "
+            title="Remove the flags, corrected ID and note from the checked "
                   "records"),
     ]
+
+
+#: The form's "leave each record as it is" choice for the ID issue, offered
+#: only when the checked records' annotations differ. Never stored.
+KEEP = "__keep__"
+
+
+def _shown_if(condition: str, *children, flex: str | None = None):
+    """A part of the form shown only while ``condition`` (JavaScript over
+    ``input``) holds: Shiny's own conditional panel, kept in the page, so
+    whatever was typed in it survives being hidden. ``flex`` sizes it in a
+    ``_form_row``, where the parts still shown widen into the space -- on a
+    wrapper inside the panel, because Shiny shows a panel as
+    ``display: contents``, which makes its child the row's item."""
+    if flex:
+        children = (_part(*children, flex=flex),)
+    return ui.panel_conditional(condition, *children)
+
+
+def _form_row(*children) -> ui.Tag:
+    """Form fields side by side (each child sized by its own ``flex``)."""
+    return ui.div(*children, class_="bc-ann-row")
+
+
+def _part(*children, flex: str = "1 1 0") -> ui.Tag:
+    """An always-shown part of a ``_form_row``."""
+    return ui.div(*children, style=f"flex:{flex};min-width:0;")
+
+
+#: Round 11, item 3: the form fits a 1400x900 window without scrolling --
+#: tight spacing, fields side by side, definitions in small print.
+ANNOTATION_FORM_CSS = """
+.modal-body.bc-ann { padding: 10px 16px; }
+#shiny-modal:has(.bc-ann) .modal-dialog { margin-top: 16px; margin-bottom: 16px; }
+#shiny-modal:has(.bc-ann) .modal-header,
+#shiny-modal:has(.bc-ann) .modal-footer { padding: 8px 16px; }
+#shiny-modal:has(.bc-ann) .modal-title { font-size: 1.15rem; }
+.bc-ann .form-group, .bc-ann .shiny-input-container { margin-bottom: 6px; }
+.bc-ann .control-label, .bc-ann label { margin-bottom: 2px; }
+.bc-ann .bc-ann-row { display: flex; gap: 12px; align-items: flex-start; }
+.bc-ann .bc-ann-help { font-size: 12px; color: #6c757d; margin: -2px 0 6px;
+    line-height: 1.3; }
+.bc-ann .checkbox, .bc-ann .form-check { margin-bottom: 2px; }
+.bc-ann textarea { resize: vertical; }
+"""
+
+
+def _required(label: str) -> ui.Tag:
+    """A field label with the red asterisk that marks it required."""
+    return ui.span(label, ui.tags.span(" *", class_="text-danger"))
+
+
+def _form_labels(flag: str, other_issue: bool) -> tuple[ui.Tag, ui.Tag]:
+    """The new-ID and note labels for the chosen ID issue: what the new ID
+    is called for it, and whether the note is required."""
+    new_id = _required(ID_FLAGS[flag]["new_id"] if flag in ID_FLAGS
+                       else "New identification")
+    note_needed = other_issue or flag in ("misidentification", "id_unfounded")
+    return new_id, _required("Curator note") if note_needed \
+        else ui.span("Curator note")
+
+
+def _flag_is(*flags: str) -> str:
+    return " || ".join(f"input.ann_id_flag === '{f}'" for f in flags)
+
+
+def _annotation_modal(count: int, form, uniform: bool, curator: str) -> ui.Tag:
+    """The annotation form for ``count`` checked records, starting from
+    ``form`` (``AnnotationForm``). Shows only the fields the chosen ID issue
+    and tick-boxes need, each flag's definition beneath it, and marks the
+    required ones; ``_confirm_annotate`` refuses it until they're filled.
+
+    ``uniform`` is whether the records' annotations all agree. When they
+    don't, the form starts empty and leaves each record's own alone for
+    anything not filled in: the ID issue offers "keep", an unticked box or a
+    blank note changes nothing.
+    """
+    record_flags = [k for k, v in ID_FLAGS.items() if v["level"] == "record"]
+    choices = ({KEEP: "(keep each record's own)"} if not uniform else {}) \
+        | {"": "None"} | {k: v["label"] for k, v in ID_FLAGS.items()}
+    flag = form.id_flag if form.id_flag is not None else KEEP
+
+    def help_text(info: dict) -> ui.Tag:
+        return ui.div(ui.tags.strong(info["definition"]), " ", info["comment"],
+                      class_="bc-ann-help")
+
+    # Set here and again by ``_update_form_labels`` as the ID issue
+    # changes: a conditional panel inside a label doesn't hide.
+    new_id_label, note_label = _form_labels(flag, bool(form.other_issue))
+
+    mixed = ("" if uniform else
+             ui.div("These records differ: anything left blank or unticked "
+                    "stays as each record has it.",
+                    class_="alert alert-warning py-1 px-2 mb-2 small"))
+    tick_suffix = "" if uniform else " (sets it on every record)"
+    return ui.modal(
+        ui.tags.style(ANNOTATION_FORM_CSS),
+        mixed,
+        ui.input_select("ann_id_flag", "ID issue", choices=choices,
+                        selected=flag, width="100%"),
+        *(_shown_if(_flag_is(k), help_text(v)) for k, v in ID_FLAGS.items()),
+        _shown_if(
+            _flag_is(*ID_FLAGS),
+            _form_row(
+                _part(ui.input_text("ann_new_id", new_id_label,
+                                    value=form.new_id, width="100%"),
+                      flex="2 1 0"),
+                _part(ui.input_select(
+                    "ann_rank",
+                    ui.span("Rank", ui.tags.span(" *", class_="text-danger"),
+                            ui.tags.span(" (suggested)", class_="text-muted small")),
+                    choices={"": "Choose…"} | {r: r for r in ID_RANKS},
+                    selected=form.rank, width="100%"), flex="1 1 0"),
+                _shown_if(_flag_is(*record_flags),
+                          ui.input_select("ann_method",
+                                          _required("Identification method"),
+                                          choices={"": "Choose…"}
+                                          | {m: m for m in ID_METHODS},
+                                          selected=form.method, width="100%"),
+                          flex="1.6 1 0"),
+                _shown_if(_flag_is("synonym"),
+                          ui.input_text("ann_citation", _required("Citation"),
+                                        value=form.citation, width="100%",
+                                        placeholder="Where the synonymy was "
+                                                    "published"),
+                          flex="1.6 1 0"),
+            ),
+        ),
+        _shown_if(_flag_is(*record_flags), ui.output_ui("ann_method_help")),
+        ui.output_ui("ann_impact"),
+        _form_row(
+            _part(
+                ui.input_checkbox("ann_contamination",
+                                  ISSUE_TICKS["contamination"]["label"]
+                                  + tick_suffix,
+                                  value=bool(form.contamination)),
+                _shown_if("input.ann_contamination",
+                          help_text(ISSUE_TICKS["contamination"]),
+                          ui.input_text("ann_sequence_taxon",
+                                        _required("Sequence taxon -- what the "
+                                                  "sequence actually comes from"),
+                                        value=form.sequence_taxon,
+                                        width="100%")),
+            ),
+            _part(
+                ui.input_checkbox("ann_other_issue",
+                                  ISSUE_TICKS["other_issue"]["label"]
+                                  + tick_suffix,
+                                  value=bool(form.other_issue)),
+                _shown_if("input.ann_other_issue",
+                          help_text(ISSUE_TICKS["other_issue"])),
+            ),
+        ),
+        _form_row(
+            _part(ui.input_text_area(
+                "ann_note", note_label, value=form.note or "", width="100%",
+                rows=2, placeholder="" if uniform else "Leave blank to keep "
+                                                       "each record's own note"),
+                flex="2 1 0"),
+            _part(ui.input_text("ann_curator",
+                                _required("Curator (your full name)"),
+                                value=curator, width="100%"), flex="1 1 0"),
+        ),
+        ui.output_ui("ann_errors"),
+        title=f"Annotate {count:,} checked record{'s' if count != 1 else ''}",
+        footer=ui.div(
+            ui.input_action_button("ann_cancel", "Cancel", class_="btn-sm"),
+            ui.input_action_button("ann_confirm", "Apply",
+                                   class_="btn-sm btn-primary"),
+        ),
+        size="xl",
+        easy_close=False,
+        class_="bc-ann",
+    )
+
+
+def _taxon_updates_panel(updates: pd.DataFrame) -> ui.Tag:
+    """The taxon updates in force -- each a name issue or synonym, saved once
+    for a name and reaching every record with it -- and a way to remove
+    one."""
+    return ui.tags.details(
+        ui.tags.summary(f"Taxon updates ({len(updates):,})",
+                        class_="small fw-semibold"),
+        ui.div("Each name issue or synonym is saved once, for the name, and "
+               "applies to every record identified as it -- except records "
+               "with their own corrected ID, which keep it.",
+               class_="small text-muted my-1"),
+        ui.HTML(_table(updates, {
+            "old_name": "Name", "flag": "Update", "new_name": "Corrected to",
+            "rank": "Rank", "citation": "Citation", "note": "Note",
+            "curator": "Curator", "timestamp": "When",
+            "records_affected": "Records here"}, limit=len(updates))),
+        ui.div(
+            ui.input_select("taxon_update_pick", None,
+                            choices={n: n for n in updates["old_name"]},
+                            width="260px"),
+            ui.input_action_button("taxon_update_remove", "Remove taxon update",
+                                   class_="btn-outline-danger btn-sm"),
+            style="display:flex;align-items:center;gap:8px;margin-top:6px;",
+        ),
+        style="margin-bottom:10px;padding:6px 8px;border:1px solid #dee2e6;"
+              "border-radius:5px;",
+    )
 
 
 #: The BAGS paper (Fontes et al. 2021, Molecular Ecology Resources).
@@ -477,9 +683,14 @@ def _guide_panel() -> ui.Tag:
     Static text, so a change to a screen's name or a button's label needs
     the matching line here too.
     """
-    def step(title: str, *body) -> ui.Tag:
-        return ui.tags.li(ui.tags.strong(title), " ", *body,
-                          style="margin-bottom:8px;")
+    def step(title: str, *bullets) -> ui.Tag:
+        """Round 14, item 2: one numbered step -- a bold title, then short
+        bullets rather than a paragraph."""
+        return ui.tags.li(
+            ui.tags.strong(title),
+            ui.tags.ul(*[ui.tags.li(b) for b in bullets],
+                       style="margin:2px 0 0;padding-left:18px;"),
+            style="margin-bottom:10px;")
 
     grades = ui.tags.ul(
         *[ui.tags.li(
@@ -502,55 +713,76 @@ def _guide_panel() -> ui.Tag:
                 "files at the end."),
             ui.div(
             ui.tags.ol(
-                step("Get the data.",
-                     "On the Data tab, download the latest BOLD snapshot (once; "
-                     "about 2 GB) or point to a copy you already have."),
-                step("Type your name",
-                     "in the box at the top right, so your flags and notes "
-                     "carry it."),
-                step("Search.",
-                     "On the Search tab, type the taxa (one per line), and "
-                     "optionally countries, continents, or dataset and project "
-                     "codes. Check size says how big the result will be; "
-                     "Search runs it. Records that share a BIN with your "
-                     "taxa come in too, so every BIN is seen whole."),
-                step("Check what was found.",
-                     "Gap analysis lists every taxon you typed as found or "
-                     "missing. Species and BINs give the overview: grade "
-                     "counts, the species checklist, concordant and "
-                     "discordant BINs."),
-                step("Work through the BAGS screens, E and C first.",
-                     "They carry a coloured dot and \"work here first\": that is where "
-                     "the name and the barcode disagree. Each screen shows one "
-                     "problem at a time (a species, or a BIN); move with "
-                     "Previous and Next. BAGS C+E gathers species that are "
-                     "both split across BINs and share one, and Unnamed BINs "
-                     "the BINs no grade covers."),
-                step("Find records.",
-                     "On Specimens and every BAGS screen, Find records shows "
-                     "only the records with some text in a column you choose, "
-                     "or in any column: a country, a collector or identifier, "
-                     "a BIN. The check button above then checks just those."),
-                step("Annotate.",
-                     "Tick Check on the records you mean (Check this group "
-                     "ticks them all), choose a flag, type a note or a "
-                     "Correct ID, and press Apply to checked. A blank flag "
-                     "leaves the flag as it is; Clear flag, or Clear "
-                     "annotations, undoes it."),
-                step("Pick representatives.",
+                step("Get the data",
+                     "On the Data tab, download the latest BOLD snapshot -- "
+                     "once; about 2 GB.",
+                     "Or point to a copy you already have."),
+                step("Enter your full name",
+                     "In the box at the top right.",
+                     "It goes on every annotation and review mark."),
+                step("Search",
+                     "On the Search tab, type the taxa, one per line.",
+                     "Optionally narrow by countries or continents, or give "
+                     "dataset and project codes.",
+                     "Check size says how big the result will be; Search "
+                     "runs it.",
+                     "Records sharing a BIN with your taxa come in too, so "
+                     "every BIN is seen whole."),
+                step("Check what was found",
+                     "Gap analysis: every taxon you typed, found or missing.",
+                     "Species: the grade counts and the species checklist.",
+                     "BINs: concordant and discordant BINs."),
+                step("Work through the BAGS screens",
+                     "Start with those marked by a coloured dot -- E, C+E "
+                     "and C -- where the name and the barcode disagree.",
+                     "Each shows one species or BIN at a time: Previous and "
+                     "Next, or type in the list to find one.",
+                     "Mark reviewed ✓ when you're done with one; Next "
+                     "unreviewed skips the ones you've done.",
+                     "✎ in the list marks one holding annotated records.",
+                     "BAGS C+E: species both split across BINs and sharing "
+                     "one, every BIN together.",
+                     "Unnamed BINs: the BINs no grade covers, with no "
+                     "species-level name."),
+                step("Find records",
+                     "On Specimens and every BAGS screen: choose a column "
+                     "(or any), type some text, Search.",
+                     "An amber bar means you're looking at a filtered table; "
+                     "Clear filter shows every record again.",
+                     "The check button then checks just the records found."),
+                step("Annotate",
+                     "Tick Check on the records you mean, or Check this "
+                     "group for all of them.",
+                     "Press Annotate checked and choose an ID issue: the "
+                     "form says what each means and asks for what it needs.",
+                     "Tick Contamination or Other issue if they apply.",
+                     "A name issue or synonym corrects the name itself, so "
+                     "it reaches every record with that name -- except "
+                     "records with their own corrected ID.",
+                     "Clear annotations removes a record's own annotations."),
+                step("See the effect of your curation",
+                     "Grades from: Original IDs, With curated IDs (your "
+                     "corrections applied), or Excluding altered records.",
+                     "It changes the BAGS screens, Species, BINs and the "
+                     "tree, showing before → after.",
+                     "The Specimens table keeps the original grades."),
+                step("Representatives and the tree",
                      "Rep. marks the best record for each BIN in each "
-                     "country, picked for you on a new search; tick or untick "
-                     "it to change the pick. The Phylogeny tab builds a tree "
-                     "from them."),
-                step("Download.",
-                     "The Specimens tab holds every record, and the downloads: "
-                     "all, selected (the representatives) or annotated records "
-                     "as Excel, the selected process IDs as a list to make a "
-                     "dataset on BOLD, the BOLD curation report to send to "
-                     "BOLD, and FASTA sequences."),
-                step("Save your work.",
-                     "It saves itself every minute; on the Data tab you can "
-                     "name a session, and load it again later."),
+                     "country, picked for you; tick or untick it to change "
+                     "the pick.",
+                     "The Phylogeny tab builds a tree from them; with "
+                     "curated IDs a re-identified tip reads old → new."),
+                step("Download",
+                     "On the Specimens tab: All, Selected (the "
+                     "representatives) or Annotated records, as Excel.",
+                     "Selected IDs: a list of process IDs to make a dataset "
+                     "on BOLD.",
+                     "Curation report and Taxon updates: to send to BOLD.",
+                     "FASTA sequences. Hover a button for its file type."),
+                step("Save your work",
+                     "It saves itself every minute.",
+                     "On the Data tab, name a session and load it again "
+                     "later."),
                 style="padding-left:28px;margin:0;",
             ),
             ui.div(
@@ -591,7 +823,7 @@ def _search_controls(key: str, columns: list[str], *,
     column, text = current if current else (None, "")
     choices = {"": "Any column"} | {
         c: GROUP_LABELS.get(c, c) for c in columns if c not in _UNSEARCHABLE}
-    parts = [
+    return ui.div(
         ui.tags.span("Find records", class_="small text-muted"),
         ui.input_select(f"find_col_{key}", None, choices=choices,
                         selected=column or "", width="190px"),
@@ -599,19 +831,76 @@ def _search_controls(key: str, columns: list[str], *,
                       placeholder="e.g. Canada, a name, BOLD:AAA1234",
                       width="260px"),
         ui.input_action_button(f"find_go_{key}", "Search", class_="btn-sm"),
-    ]
-    if current:
-        where = GROUP_LABELS.get(column, column) if column else "any column"
-        parts += [
-            ui.input_action_button(f"find_clear_{key}", "Clear search",
-                                   class_="btn-sm"),
-            ui.tags.span(
-                f"{matches:,} of {total:,} records with \u201c{text}\u201d "
-                f"in {where}", class_="small",
-                style="font-weight:600;color:#0d6efd;"),
-        ]
-    return ui.div(*parts, style="display:flex;align-items:center;gap:8px;"
-                                "flex-wrap:wrap;margin-bottom:6px;")
+        style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;"
+              "margin-bottom:6px;")
+
+
+def _filter_banner(key: str, current: tuple[str | None, str] | None, *,
+                   matches: int, total: int):
+    """Round 12, item 2: while "Find records" narrows a table, an amber bar
+    right above it says so -- with how many of how many, and the way back --
+    so nobody takes the filtered table for the whole of it. The table itself
+    gets an amber outline too (``_table(..., filtered=True)``)."""
+    if not current:
+        return ui.div()
+    column, text = current
+    where = GROUP_LABELS.get(column, column) if column else "any column"
+    return ui.div(
+        ui.tags.span("⚠ Filtered", style="font-weight:700;"),
+        ui.tags.span(f"showing {matches:,} of {total:,} records with "
+                     f"\u201c{text}\u201d in {where}"),
+        ui.input_action_button(f"find_clear_{key}", "Clear filter",
+                               class_="btn-sm btn-dark"),
+        class_="bc-filter-banner",
+    )
+
+
+#: Round 12, item 3: the BAGS screens' "Grades from" switch, one per screen
+#: (``grades_from_{screen}``), all showing and setting the search's one view.
+def _grade_view_switch(screen: str, view: str, curation: dict) -> ui.Tag:
+    note = ""
+    if view != ORIGINAL:
+        bits = []
+        if curation.get("changed"):
+            bits.append(f"{curation['changed']:,} record(s) re-identified")
+        if curation.get("left_out"):
+            bits.append(f"{curation['left_out']:,} left out"
+                        + (" (contaminated)" if view == CURATED else
+                           " (corrected or flagged)"))
+        summary = ", ".join(bits) if bits else "no curation affects grading yet"
+        note = ui.tags.span(
+            summary[0].upper() + summary[1:]
+            + ". Grades, groups, the checklist, BIN concordance and the tree "
+              "follow this view; the Specimens table keeps the original "
+              "grades.",
+            class_="small")
+    return ui.div(
+        ui.input_radio_buttons(f"grades_from_{screen}", "Grades from",
+                               choices=GRADE_VIEWS, selected=view, inline=True),
+        note,
+        class_="bc-grade-view" + (" bc-grade-view-on" if view != ORIGINAL else ""),
+    )
+
+
+#: Results up to this size regrade in the render (well under a second);
+#: larger ones on a background thread with a progress panel.
+INLINE_REGRADE_RECORDS = 20_000
+
+#: The longest group caption a dropdown option shows; the full caption is in
+#: bold under the navigator.
+OPTION_CAPTION_CHARS = 70
+
+
+def _group_option(group, *, reviewed: bool, annotated: bool,
+                  was: str = "") -> str:
+    """One group's dropdown entry: ✓ reviewed, ✎ annotated, the caption
+    (cut short), its record count, and the original grade if the view
+    changed it."""
+    caption = group.caption
+    if len(caption) > OPTION_CAPTION_CHARS:
+        caption = caption[:OPTION_CAPTION_CHARS - 1].rstrip() + "…"
+    marks = ("✓ " if reviewed else "") + ("✎ " if annotated else "")
+    return f"{marks}{caption}  ({group.specimen_count}){was}"
 
 
 def _grade_panel(grade: str) -> ui.Tag:
@@ -702,31 +991,134 @@ def _cell_text(row: pd.Series, *columns: str) -> str:
     return ""
 
 
-def _phylo_tips(result, grade_by_species: dict[str, str]) -> list[dict]:
+#: A tip the grades view leaves out (contaminated, or altered when
+#: excluding altered records): grey, whatever its grade was.
+LEFT_OUT_COLOUR = "#adb5bd"
+
+
+def _phylo_view_data(result, viewed, annotations, view: str,
+                     original_pids: set[str]) -> dict:
+    """Round 13, item 1: the tree's tips as a grades view sees them, without
+    rebuilding the tree. ``result`` is the ``PhylogenyResult``, ``viewed``
+    the regraded ``SearchResult``, ``original_pids`` the processids of the
+    original result.
+
+    Returns ``{"tips": {tip label: {...}}, "monophyly": {...}}``. Each tip
+    has the view's ``species``, ``level`` (species-level) and ``grade``,
+    ``renamed_to`` (with curated IDs, the record's new name, if it has one)
+    and ``left_out`` (the view drops the record). Monophyly is re-asked of
+    the same tree with the view's names and grades; left-out tips don't
+    count.
+    """
+    from ..core import phylogeny as phylo
+
+    reps = result.representatives
+    frame = viewed.specimens
+    pids = [str(p) for p in reps["processid"]]
+    by_pid = {str(p): i for i, p in enumerate(frame["processid"])}
+    grades = (dict(zip(viewed.bags_grades["species"], viewed.bags_grades["bags_grade"]))
+              if len(viewed.bags_grades) else {})
+    idents = [_cell_text(row, "identification") for _, row in reps.iterrows()]
+    ann = annotations.to_frame(pids, idents)
+    tips: dict[str, dict] = {}
+    kept = []
+    for (_, row), pid, source, new in zip(reps.iterrows(), pids,
+                                          ann["update_source"], ann["updated_id"]):
+        label = row["_tip_label"]
+        original = _cell_text(row, "species", "identification")
+        renamed = new if view == CURATED and source and new != original else ""
+        if pid not in by_pid:
+            # Not in the regraded frame: left out -- unless it was never in
+            # the result at all (a stand-in fetched for its sequence), which
+            # the view can't have changed.
+            gone = view != ORIGINAL and pid in original_pids
+            tips[label] = {"species": original, "level": False, "grade": "",
+                           "renamed_to": "", "left_out": gone}
+            continue
+        vrow = frame.iloc[by_pid[pid]]
+        species = _cell_text(vrow, "species", "identification")
+        level = _cell_text(vrow, "name_status") in SPECIES_LEVEL_STATUSES \
+            if "name_status" in vrow.index else True
+        tips[label] = {"species": species if level else (renamed or original),
+                       "level": level, "grade": grades.get(species, "") if level else "",
+                       "renamed_to": renamed, "left_out": False}
+        kept.append({"_tip_label": label, "species": species if level else ""})
+    monophyly = (phylo.check_monophyly(result.tree, pd.DataFrame(kept),
+                                       viewed.bags_grades)
+                 if kept and result.tree is not None else {})
+    return {"tips": tips, "monophyly": monophyly}
+
+
+def _phylo_tips(result, grade_by_species: dict[str, str],
+                view_data: dict | None = None) -> list[dict]:
     """Per-tip metadata for the tree renderer (phylo-init.js).
 
     A tip is coloured by its name's BAGS grade only when the record is
     species-level (``core.species.name_status``): a genus-rank "Danaus sp."
     is not the interim species "Danaus sp.", whatever the text says.
+
+    ``view_data`` (``_phylo_view_data``) puts the tree in a grades view: the
+    view's grades and monophyly, a re-identified tip labelled "old → new"
+    (``display``, ``renamed``), a left-out one grey (``left_out``).
     """
     tips = []
+    monophyly = view_data["monophyly"] if view_data else result.monophyly
     for _, row in result.representatives.iterrows():
+        label = row["_tip_label"]
         species = _cell_text(row, "species", "identification")
         level = _cell_text(row, "name_status") in SPECIES_LEVEL_STATUSES \
             if "name_status" in row.index else True
         grade = grade_by_species.get(species, "") if level else ""
+        display, renamed, left_out = label, False, False
+        seen = (view_data or {}).get("tips", {}).get(label)
+        if seen is not None:
+            if seen["renamed_to"]:
+                display = _renamed_label(label, species, seen["renamed_to"])
+                renamed = True
+            species, level, grade = seen["species"], seen["level"], seen["grade"]
+            left_out = seen["left_out"]
         bin_uri = _cell_text(row, "bin_uri")
         tips.append({
-            "tip": row["_tip_label"],
+            "tip": label,
+            "display": display,
+            "renamed": renamed,
+            "left_out": left_out,
             "species": species,
             "bin_uri": bin_uri,
             "bin_url": bold_bin_url(bin_uri) if bin_uri else "",  # round 8, 9.2
-            "bags_grade": grade,
-            "monophyletic": result.monophyly.get(species) if level else None,
-            "color": GRADE_COLOURS.get(grade, "#495057"),
-            "flags": result.flags.get(row["_tip_label"], []),
+            "bags_grade": "" if left_out else grade,
+            "monophyletic": monophyly.get(species) if level and not left_out else None,
+            "color": LEFT_OUT_COLOUR if left_out else GRADE_COLOURS.get(grade, "#495057"),
+            "flags": result.flags.get(label, []),
         })
     return tips
+
+
+def _renamed_label(label: str, old: str, new: str, arrow: str = "→") -> str:
+    """A tip label (``BIN-processid-species-country``) with its species
+    shown as ``old → new``."""
+    part = f"-{old}-"
+    if part in label:
+        return label.replace(part, f"-{old} {arrow} {new}-", 1)
+    return f"{label} {arrow} {new}"
+
+
+def _view_newick(result, tips: list[dict]) -> str:
+    """The tree as Newick with each re-identified tip renamed as the screen
+    shows it -- with an ASCII "->", which every tree program reads."""
+    renamed = {t["tip"]: t["display"].replace(" → ", " -> ")
+               for t in tips if t.get("renamed")}
+    if not renamed or result.tree is None:
+        return result.newick
+    import copy
+
+    from ..core import phylogeny as phylo
+
+    tree = copy.deepcopy(result.tree)
+    for clade in tree.get_terminals():
+        if clade.name in renamed:
+            clade.name = renamed[clade.name]
+    return phylo.to_newick(tree)
 
 
 def _json_for_script(value) -> str:
@@ -900,8 +1292,41 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                ordinary scrolling columns. The full value is still one hover
                away via each cell's own `title` attribute (_table's default
                cell renderer). */
+            /* Round 14, item 1: a group screen's navigator on one line. */
+            .bc-group-nav { display: flex; align-items: center; gap: 10px;
+                flex-wrap: wrap; margin-bottom: 8px; }
+            .bc-group-nav > span, .bc-group-nav .btn { white-space: nowrap; }
+            .bc-group-nav .shiny-input-container { margin-bottom: 0; }
+            .bc-group-nav .selectize-input { white-space: nowrap; }
+            .bc-group-nav .selectize-control.single .selectize-input {
+                padding-right: 34px; }
+            .bc-group-nav .selectize-input > .item { white-space: nowrap;
+                overflow: hidden; text-overflow: ellipsis;
+                max-width: calc(100% - 6px); vertical-align: middle; }
+            /* Round 13, item 2: the Specimens downloads on one row. */
+            .bc-download-row { display: flex; align-items: center; gap: 6px;
+                flex-wrap: nowrap; margin-bottom: 2px; overflow-x: auto; }
+            .bc-download-row .btn { white-space: nowrap;
+                padding: 2px 8px; }
+            /* Round 12, item 2: a table narrowed by Find records. */
+            .bc-filter-banner {
+                display: flex; align-items: center; gap: 10px;
+                flex-wrap: wrap; background: #ffc107; color: #212529;
+                padding: 6px 12px; border-radius: 5px; margin-bottom: 6px;
+            }
+            .bc-scroll.bc-filtered { outline: 3px solid #ffc107;
+                outline-offset: -3px; }
+            /* Round 12, item 3: the "Grades from" switch. */
+            .bc-grade-view { display: flex; align-items: center; gap: 12px;
+                flex-wrap: wrap; margin-bottom: 6px; }
+            .bc-grade-view .shiny-input-container { margin-bottom: 0;
+                width: auto; display: flex; align-items: center; gap: 10px; }
+            .bc-grade-view .control-label { margin-bottom: 0;
+                font-weight: 600; }
+            .bc-grade-view-on { background: #e7f1ff; border: 1px solid #9ec5fe;
+                border-radius: 5px; padding: 4px 10px; }
             .bc-scroll td {
-                max-width: 280px; overflow: hidden; text-overflow: ellipsis;
+                max-width: 200px; overflow: hidden; text-overflow: ellipsis;
             }
             /* Round 9, item 6: the Data tab in one column -- snapshot,
                then session, then the app -- now that the snapshot panel is
@@ -1113,7 +1538,8 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                      rel="noopener noreferrer", class_="small",
                      title=BOLD_ATTRIBUTION_TEXT),
             ui.div(
-                ui.input_text("user", None, placeholder="Your name (for annotations)",
+                ui.input_text("user", None,
+                              placeholder="Your full name (for annotations)",
                               width="240px"),
                 style="margin-left:auto;",
             ),
@@ -1365,6 +1791,13 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         #: None, text)`` (round 9, item 2); kept while moving between groups,
         #: dropped by a new search. The Specimens tab's lives on its table.
         find_state: dict[str, tuple[str | None, str]] = {}
+        #: The species/BIN (``group_unit``) each group screen last showed,
+        #: and, after a switch of grades view, the one to find again.
+        shown_unit: dict[str, str] = {}
+        restore_unit: dict[str, str] = {}
+        #: Each group screen's groups as last shown: what its buttons act
+        #: on, without regrading (on this thread) after every annotation.
+        shown_groups: dict[str, tuple] = {}
         checklist_sort = reactive.Value(("", False))
         gap_sort = reactive.Value(("", False))
         bins_sort = reactive.Value(("", False))
@@ -1420,11 +1853,12 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         @reactive.effect
         def _analysis_poll():
             analysis_seq.get()
-            if analysis_job["running"]:
+            busy = analysis_job["running"] or regrade_job["running"]
+            if busy:
                 reactive.invalidate_later(0.4)
             with reactive.isolate():
                 analysis_tick.set(analysis_tick.get() + 1)
-                if not analysis_job["running"] and not analysis_job["seen"]:
+                if not busy and not analysis_job["seen"]:
                     # Done: every screen (and the counts on Search, which
                     # the representatives just changed) shows the result.
                     analysis_job["seen"] = True
@@ -1433,6 +1867,37 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         def _analysing(search) -> bool:
             return (analysis_job["running"] and analysis_job["search"] is search
                     and not search.analysis_is_ready)
+
+        #: Round 12, item 3: a regrade in another grades view. Small results
+        #: regrade in the render (under a second); a large one -- 2 s for
+        #: 85,000 records with a widespread synonym -- on its own thread,
+        #: with the analysis's progress panel, like the analysis itself.
+        regrade_job: dict = {"running": False, "search": None, "view": "",
+                             "error": ""}
+
+        def _regrading(search) -> bool:
+            """Start (or report) a background regrade if the search's view
+            needs one; True while it runs."""
+            if search.view_is_ready() or search.record_count <= INLINE_REGRADE_RECORDS:
+                return False
+            if regrade_job["running"]:
+                return True
+            regrade_job.update(running=True, search=search,
+                               view=search.grade_view, error="")
+            analysis_job.update(seen=False)
+
+            def run() -> None:
+                try:
+                    search.view(store, regrade_job["view"])
+                except Exception as exc:  # noqa: BLE001 -- shown on the screens
+                    regrade_job["error"] = f"Could not regrade: {exc}"
+                finally:
+                    regrade_job["running"] = False
+
+            threading.Thread(target=run, daemon=True).start()
+            with reactive.isolate():
+                analysis_seq.set(analysis_seq.get() + 1)
+            return True
 
         # -- snapshot file management (round 5, file handling 1-3) ---------
         #
@@ -2218,7 +2683,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     value_box(f"{len(state.annotations.working):,}", "Checked",
                               "#f0ad4e"),
                     value_box(
-                        f"{len(state.annotations.annotated_processids()):,}",
+                        f"{search.table.annotated_count():,}",
                         "Annotated", "#6f42c1"),
                     style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;",
                 ),
@@ -2230,7 +2695,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
 
         # -- the guard every summary screen shares -------------------------
 
-        def _needs_analysis(render_body):
+        def _needs_analysis(render_body, *, graded: bool = False):
             search = current()
             if search is None:
                 return ui.div("Run a search first.", class_="text-muted")
@@ -2249,6 +2714,21 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             if analysis_job["search"] is search and analysis_job["error"] \
                     and not search.analysis_is_ready:
                 return ui.div(analysis_job["error"],
+                              class_="alert alert-warning py-2 px-3")
+            if graded and search.analysis_is_ready and _regrading(search):
+                analysis_tick.get()
+                return ui.div(
+                    ui.div(
+                        ui.tags.span(class_="spinner-border spinner-border-sm",
+                                     role="status"),
+                        ui.tags.strong(
+                            f"Regrading {GRADE_VIEWS[search.grade_view].lower()}"
+                            "..."),
+                        style="display:flex;align-items:center;gap:10px;"),
+                    class_="alert alert-info py-2 px-3")
+            if graded and regrade_job["search"] is search \
+                    and regrade_job["error"] and not search.view_is_ready():
+                return ui.div(regrade_job["error"],
                               class_="alert alert-warning py-2 px-3")
             try:
                 was_ready = search.analysis_is_ready
@@ -2305,8 +2785,10 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     # Shiny output id is unreliable (duplicate HTML ids), so
                     # this gets its own id wired to the same export below.
                     ui.download_button("dl_gap_analysis",
-                                       "Download species analysis (xlsx)",
-                                       class_="btn-sm mb-2"),
+                                       "Download species analysis",
+                                       class_="btn-sm mb-2",
+                                       title="Excel workbook: the species "
+                                             "checklist and gap analysis"),
                     ui.HTML(_gap_html(_sorted_by(gaps, gap_sort),
                                       sort_state=gap_sort.get())),
                     class_="bc-tab-body",
@@ -2330,11 +2812,25 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                                                  errors="ignore"),
                     checklist_sort)
                 counts = search.grade_counts(store)
+                # Round 12, item 3: in another grades view, each count reads
+                # "original → view".
+                before = (search.grade_counts(store, ORIGINAL)
+                          if search.grade_view != ORIGINAL else counts)
+                split_before = len(search.groups(store, SPLIT_SHARED, ORIGINAL))
+                split_now = len(search.groups(store, SPLIT_SHARED))
+
+                def count(was: int, now: int) -> str:
+                    return f"{now:,}" if was == now or search.grade_view == ORIGINAL \
+                        else f"{was:,} → {now:,}"
+
                 return ui.div(
+                    _grade_view_switch("species", search.grade_view,
+                                       search.view(store).curation),
                     ui.div(
-                        *[value_box(f"{counts.get(g, 0):,}", f"Grade {g}",
-                                    GRADE_COLOURS[g], compact=True) for g in GRADES],
-                        value_box(f"{len(search.groups(store, SPLIT_SHARED)):,}",
+                        *[value_box(count(before.get(g, 0), counts.get(g, 0)),
+                                    f"Grade {g}", GRADE_COLOURS[g], compact=True)
+                          for g in GRADES],
+                        value_box(count(split_before, split_now),
                                   "C+E (of grade E)", GRADE_COLOURS["E"],
                                   compact=True),
                         *[value_box(f"{n:,}", f"Unnamed BINs, {label}", colour,
@@ -2345,12 +2841,14 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                         style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:nowrap;",
                     ),
                     ui.download_button("dl_species_analysis",
-                                       "Download species analysis (xlsx)",
-                                       class_="btn-sm mb-2"),
+                                       "Download species analysis",
+                                       class_="btn-sm mb-2",
+                                       title="Excel workbook: the species "
+                                             "checklist and gap analysis"),
                     ui.HTML(_checklist_html(checklist, sort_state=checklist_sort.get())),
                     class_="bc-tab-body",
                 )
-            return _needs_analysis(body)
+            return _needs_analysis(body, graded=True)
 
         # -- BIN dashboard --------------------------------------------------
 
@@ -2358,49 +2856,129 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
         @render.ui
         def bins_body():
             def body(search):
-                analysis = search.analysis(store).bin_analysis
+                analysis = search.bin_analysis(store)
                 summary = analysis["summary"]
+                # Round 13, item 3: in another grades view each count reads
+                # "original → view", as on the Species tab.
+                after = analysis.get("view_summary") or summary
+
+                def count(key: str) -> str:
+                    was, now = summary.get(key, 0), after.get(key, 0)
+                    return f"{now:,}" if was == now else f"{was:,} → {now:,}"
+
                 content = _sorted_by(analysis["content"], bins_sort)
                 return ui.div(
+                    _grade_view_switch("bins", search.grade_view,
+                                       search.view(store).curation),
                     ui.div(
-                        value_box(f"{summary['total_bins']:,}", "Total BINs",
-                                  "#2c7fb8"),
-                        value_box(f"{summary['concordant_bins']:,}",
+                        value_box(count("total_bins"), "Total BINs", "#2c7fb8"),
+                        value_box(count("concordant_bins"),
                                   "Concordant BINs", "#28a745"),
-                        value_box(f"{summary['discordant_bins']:,}",
+                        value_box(count("discordant_bins"),
                                   "Discordant BINs", "#dc3545"),
                         style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap;",
                     ),
                     ui.download_button("dl_bin_analysis",
-                                       "Download BIN analysis (xlsx)",
-                                       class_="btn-sm mb-2"),
+                                       "Download BIN analysis",
+                                       class_="btn-sm mb-2",
+                                       title="Excel workbook: summary, every "
+                                             "BIN, statistics"),
                     ui.HTML(_bins_html(content, sort_state=bins_sort.get())),
                     class_="bc-tab-body",
                 )
-            return _needs_analysis(body)
+            return _needs_analysis(body, graded=True)
 
         # -- the BAGS grade screens ----------------------------------------
+
+        def _set_grade_view(view) -> None:
+            """Round 12, item 3: grade by another view -- every BAGS screen,
+            the Species tab and the downloads follow; each group screen
+            stays on its species or BIN if it is still there."""
+            search = state.search
+            if search is None or not view or view == search.grade_view:
+                return
+            restore_unit.update(shown_unit)
+            search.grade_view = view
+            touch()
+
+        @reactive.effect
+        @reactive.event(input.grades_from_species)
+        def _switch_view_species():
+            _set_grade_view(input.grades_from_species())
+
+        @reactive.effect
+        @reactive.event(input.grades_from_bins)
+        def _switch_view_bins():
+            _set_grade_view(input.grades_from_bins())
+
+        @reactive.effect
+        @reactive.event(input.grades_from_phylogeny)
+        def _switch_view_phylogeny():
+            _set_grade_view(input.grades_from_phylogeny())
+
+        def _group_marks(search, groups) -> tuple[set[str], set[int]]:
+            """The groups' review marks: which units are reviewed, and which
+            groups (by position) hold an annotated record -- its own
+            annotation, or a taxon update reaching its name."""
+            frame = search.analysis(store).specimens
+            idents = dict(zip(frame["processid"].astype(str),
+                              frame.get("identification",
+                                        pd.Series(dtype=object)).fillna("")))
+            annotated = state.annotations.annotated_processids(idents)
+            touched = {i for i, g in enumerate(groups)
+                       if annotated & set(g.specimens["processid"].astype(str))}
+            return set(state.annotations.reviewed), touched
+
+        def _was(search, grade: str, group, original: dict) -> str:
+            """" · was X" when the view gives a species-keyed group a grade
+            other than its original one (``original``: species -> grade)."""
+            if search.grade_view == ORIGINAL or grade == UNNAMED or grade == "E":
+                return ""
+            name = group_unit(group.key).split("|")[0]
+            now = "E" if grade == SPLIT_SHARED else grade
+            before = original.get(name)
+            if before is None:
+                return "  · new name"
+            return f"  · was {before}" if before != now else ""
 
         def _grade_body(grade: str):
             def body(search):
                 groups = search.groups(store, grade)
+                switch = _grade_view_switch(
+                    grade, search.grade_view, search.view(store).curation)
                 if not groups:
-                    return ui.div(
+                    return ui.div(switch, ui.div(
                         "No BINs without a species-level name in this result."
                         if grade == UNNAMED else
                         "No species both split across BINs and in a shared "
                         "BIN in this result."
                         if grade == SPLIT_SHARED else
                         f"No species graded {grade} in this result.",
-                        class_="text-muted")
+                        class_="text-muted"))
                 index = min(group_index[grade].get(), len(groups) - 1)
+                # After a switch of grades view, stay on the same species or
+                # BIN if it is still on this screen.
+                unit = restore_unit.pop(grade, None)
+                if unit is not None:
+                    units = [group_unit(g.key) for g in groups]
+                    index = units.index(unit) if unit in units else 0
+                    with reactive.isolate():
+                        group_index[grade].set(index)
                 group = groups[index]
+                shown_unit[grade] = group_unit(group.key)
+                shown_groups[grade] = (search, groups)
+                reviewed, touched = _group_marks(search, groups)
+                graded = search.analysis(store).bags_grades
+                original = (dict(zip(graded["species"], graded["bags_grade"]))
+                            if len(graded) else {})
+                done = sum(1 for g in groups if group_unit(g.key) in reviewed)
+                is_reviewed = group_unit(group.key) in reviewed
                 all_rows = _with_checked(
                     merge_annotations(group.specimens, state.annotations),
                     state.annotations)
                 found = find_state.get(grade)
                 rows = _sorted_by(_found_rows(grade, all_rows), group_sort)
-                # "Apply to checked" (and the count below) must act only on
+                # "Annotate checked" (and the count below) must act only on
                 # this group's own records -- Annotations.working is one
                 # global set, and checking rows via the per-row checkbox
                 # (rather than "Check this group", which replaces it) could
@@ -2414,42 +2992,75 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 unit = ("species" if grade in SPECIES_GRADES or grade == SPLIT_SHARED
                         else "BIN")
                 plural_unit = "species" if unit == "species" else "BINs"
+                review = state.annotations.reviewed.get(group_unit(group.key), {})
+                annotated_here = len(group_pids & state.annotations
+                                     .annotated_processids(dict(zip(
+                                         group.specimens["processid"].astype(str),
+                                         group.specimens.get(
+                                             "identification",
+                                             pd.Series(dtype=object)).fillna("")))))
                 # The navigator (which problem) sits in one compact row above
                 # the table, not in a sidebar column beside it -- the table is
                 # the thing a curator actually works in, and a fixed-width
                 # sidebar was taking a third of the tab for it permanently,
-                # whatever the screen width. A dropdown loses nothing a tall
-                # listbox had: every problem is still one click away.
+                # whatever the screen width. A searchable list loses nothing
+                # a tall listbox had: every problem is still one click away.
                 return ui.div(
+                    switch,
                     ui.div(
                         ui.tags.span(f"{len(groups):,} "
                                      f"{unit if len(groups) == 1 else plural_unit} "
-                                     "to work through", class_="small text-muted"),
-                        # Round 7, BAGS A/B/D item 1: a fixed 420px cut off a
-                        # long caption ("Species: X (>10 specimens, single
-                        # BIN)  (404)") -- flexible instead of another fixed
-                        # guess, so it actually uses the room a wide window
-                        # has rather than truncating regardless of it.
+                                     f"to work through · {done:,} reviewed",
+                                     class_="small text-muted"),
+                        # Round 12, item 1: a selectize list, drawn in the
+                        # page, not the window's native popup -- which left
+                        # most of C+E's long entries blank -- and searchable
+                        # by typing a name or BIN.
                         ui.div(
-                            ui.input_select(
+                            ui.input_selectize(
                                 f"group_{grade}", None,
-                                choices={str(i): f"{g.caption}  ({g.specimen_count})"
-                                         for i, g in enumerate(groups)},
+                                choices={str(i): _group_option(
+                                    g, reviewed=group_unit(g.key) in reviewed,
+                                    annotated=i in touched,
+                                    was=_was(search, grade, g, original))
+                                    for i, g in enumerate(groups)},
                                 selected=str(index), width="100%"),
-                            style="flex:1 1 auto;min-width:280px;max-width:1000px;",
+                            # Round 14, item 1: the list takes the room the
+                            # buttons leave, not its text's width -- the
+                            # caption is in full just below -- so the row
+                            # stays one line with Mark reviewed on it.
+                            style="flex:1 1 0;min-width:200px;",
                         ),
                         ui.input_action_button(f"prev_{grade}", "‹ Previous",
                                                class_="btn-sm"),
                         ui.tags.span(f"{index + 1} of {len(groups):,}",
-                                     class_="small text-muted"),
+                                     class_="small text-muted bc-group-pos"),
                         ui.input_action_button(f"next_{grade}", "Next ›",
                                                class_="btn-sm"),
-                        style="display:flex;align-items:center;gap:10px;"
-                              "flex-wrap:wrap;margin-bottom:8px;",
+                        ui.input_action_button(f"next_unrev_{grade}",
+                                               "Next unreviewed ›",
+                                               class_="btn-sm"),
+                        ui.input_action_button(
+                            f"review_{grade}",
+                            "Reviewed ✓ (undo)" if is_reviewed else "Mark reviewed ✓",
+                            class_="btn-sm " + ("btn-success" if is_reviewed
+                                                else "btn-outline-success"),
+                            title="Record that you have finished with this "
+                                  f"{unit}, whether or not it needed changes"),
+                        class_="bc-group-nav",
                     ),
                     ui.div(ui.tags.strong(group.caption),
                            ui.tags.span(f"  ·  {group.specimen_count} specimens",
                                         class_="text-muted small"),
+                           ui.tags.span(f"  ·  ✎ {annotated_here:,} annotated",
+                                        class_="small", style="color:#6f42c1;")
+                           if annotated_here else "",
+                           ui.tags.span(
+                               f"  ·  ✓ reviewed"
+                               + (f" by {review['user']}" if review.get("user")
+                                  else ""),
+                               class_="small text-success fw-semibold")
+                           if is_reviewed else "",
                            class_="mb-1"),
                     ui.div(group.note, class_="alert alert-info py-1 px-2 small")
                     if group.note else ui.div(),
@@ -2484,6 +3095,8 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                               "background:#f8f9fa;border:1px solid #dee2e6;"
                               "border-radius:5px;",
                     ),
+                    _filter_banner(grade, found, matches=len(rows),
+                                   total=len(all_rows)),
                     # Round 5, item 9: every column, like the Specimens tab --
                     # a curated subset (the old default) hid raw BOLD columns
                     # a curator might need mid-problem. `_table`'s own
@@ -2491,10 +3104,11 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     # makes that many columns usable.
                     ui.HTML(_group_html(rows, _all_columns_ordered(rows),
                                         sort_input="group_sort_click",
-                                        sort_state=group_sort.get())),
+                                        sort_state=group_sort.get(),
+                                        filtered=bool(found))),
                     class_="bc-tab-body",
                 )
-            return _needs_analysis(body)
+            return _needs_analysis(body, graded=True)
 
         def _register_grade(grade: str):
             @output(id=f"grade_{grade}_body")
@@ -2506,8 +3120,8 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             @reactive.event(input[f"prev_{grade}"])
             def _prev():
                 group_index[grade].set(max(0, group_index[grade].get() - 1))
-                ui.update_select(f"group_{grade}",
-                                 selected=str(group_index[grade].get()))
+                ui.update_selectize(f"group_{grade}",
+                                    selected=str(group_index[grade].get()))
                 touch()
 
             @reactive.effect
@@ -2516,17 +3130,61 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 search = state.search
                 if search is None:
                     return
-                last = len(search.groups(store, grade)) - 1
+                last = len(_groups_shown(grade)) - 1
                 group_index[grade].set(min(last, group_index[grade].get() + 1))
-                ui.update_select(f"group_{grade}",
-                                 selected=str(group_index[grade].get()))
+                ui.update_selectize(f"group_{grade}",
+                                    selected=str(group_index[grade].get()))
                 touch()
+
+            @reactive.effect
+            @reactive.event(input[f"next_unrev_{grade}"])
+            def _next_unreviewed():
+                """Round 12, item 4: on to the next group nobody has marked
+                reviewed, wrapping round to the start."""
+                search = state.search
+                if search is None:
+                    return
+                groups = _groups_shown(grade)
+                here = group_index[grade].get()
+                reviewed = state.annotations.reviewed
+                for step in range(1, len(groups) + 1):
+                    candidate = (here + step) % len(groups)
+                    if group_unit(groups[candidate].key) not in reviewed:
+                        group_index[grade].set(candidate)
+                        ui.update_selectize(f"group_{grade}",
+                                            selected=str(candidate))
+                        touch()
+                        return
+                _tell("Every group on this screen is marked reviewed.")
+
+            @reactive.effect
+            @reactive.event(input[f"review_{grade}"])
+            def _toggle_reviewed():
+                group = _current_group(grade)
+                if group is None:
+                    return
+                unit = group_unit(group.key)
+                done = unit not in state.annotations.reviewed
+                state.annotations.set_reviewed(
+                    unit, done, user=(input.user() or "").strip() or state.user,
+                    screen=grade)
+                touch()
+
+            @reactive.effect
+            @reactive.event(input[f"grades_from_{grade}"])
+            def _switch_view():
+                _set_grade_view(input[f"grades_from_{grade}"]())
 
             @reactive.effect
             @reactive.event(input[f"group_{grade}"])
             def _pick():
                 chosen = input[f"group_{grade}"]()
-                if chosen is not None and str(chosen).isdigit():
+                # Only a real change of group re-renders: Previous/Next
+                # already moved it and set this dropdown to match, and
+                # rendering the screen a second time for that reset any
+                # "Find records" column picked in between.
+                if (chosen is not None and str(chosen).isdigit()
+                        and int(chosen) != group_index[grade].get()):
                     group_index[grade].set(int(chosen))
                     touch()
 
@@ -2536,7 +3194,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 group = _current_group(grade)
                 if group is not None:
                     # Replaces the checked set rather than adding to it.
-                    # "Apply to checked" acts on whatever is checked, so if
+                    # "Annotate checked" acts on whatever is checked, so if
                     # this accumulated, annotating the second problem would
                     # silently re-annotate the first -- which is the opposite
                     # of working through one problem at a time. This never
@@ -2602,11 +3260,19 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 rows = _found_rows(grade, merge_annotations(rows, state.annotations))
             return {str(pid) for pid in rows["processid"]}
 
-        def _current_group(grade: str):
+        def _groups_shown(grade: str) -> list:
+            """The screen's groups as the curator sees them (see
+            ``shown_groups``), or freshly if it hasn't been shown."""
             search = state.search
             if search is None:
-                return None
-            groups = search.groups(store, grade)
+                return []
+            shown = shown_groups.get(grade)
+            if shown is not None and shown[0] is search:
+                return shown[1]
+            return search.groups(store, grade)
+
+        def _current_group(grade: str):
+            groups = _groups_shown(grade)
             if not groups:
                 return None
             return groups[min(group_index[grade].get(), len(groups) - 1)]
@@ -2686,15 +3352,33 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                              daemon=True).start()
             phylo_op_seq.set(phylo_op_seq.get() + 1)
 
+        def _phylo_in_view(result) -> tuple[list[dict], dict, str]:
+            """The tree's tip metadata and monophyly in the search's grades
+            view (round 13, item 1), and the view's name ("" if original)."""
+            search = state.search
+            if search is None:
+                return _phylo_tips(result, {}), result.monophyly, ""
+            if search.grade_view == ORIGINAL:
+                return (_phylo_tips(result, search.grade_lookup()),
+                        result.monophyly, "")
+            viewed = search.view(store)
+            original = search.analysis(store).specimens
+            data = _phylo_view_data(
+                result, viewed, state.annotations, search.grade_view,
+                set(original["processid"].astype(str)))
+            return (_phylo_tips(result, {}, data), data["monophyly"],
+                    GRADE_VIEWS[search.grade_view])
+
         def _phylo_tree_panel(result) -> ui.Tag:
             rows = []
+            tips, monophyly, view_name = _phylo_in_view(result)
             for warning in result.warnings:
                 rows.append(ui.div(warning, class_="alert alert-warning py-2 px-3 small"))
             if not result.newick:
                 rows.append(ui.div("Nothing to show.", class_="text-muted"))
                 return ui.div(*rows)
 
-            if result.monophyly:
+            if monophyly:
                 # Same visual language the tree itself uses, not a second,
                 # conflicting palette: every grade-C tip is filled
                 # GRADE_COLOURS["C"] regardless of its own monophyly (see the
@@ -2707,8 +3391,8 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 # colour, which is what made these look like two unrelated
                 # conventions before.
                 badges = []
-                for species in sorted(result.monophyly):
-                    ok = result.monophyly[species]
+                for species in sorted(monophyly):
+                    ok = monophyly[species]
                     label = "Monophyletic" if ok else "Not monophyletic"
                     ring = "" if ok else "box-shadow:0 0 0 2px #dc3545;"
                     badges.append(ui.tags.span(
@@ -2719,13 +3403,13 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                               f"margin:2px 8px 4px 0;display:inline-block;{ring}",
                     ))
                 rows.append(ui.div(
-                    ui.tags.strong("BAGS grade C monophyly ", class_="small"),
+                    ui.tags.strong("BAGS grade C monophyly"
+                                   + (f" ({view_name})" if view_name else "")
+                                   + " ", class_="small"),
                     ui.div(*badges, style="margin-top:4px;"),
                     style="margin-bottom:10px;",
                 ))
 
-            search = state.search
-            tips = _phylo_tips(result, search.grade_lookup() if search else {})
 
             container_id = "phylo-tree-container"
             rows.append(ui.download_button(
@@ -2786,7 +3470,8 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             if result is None or not result.newick:
                 yield "Nothing to export: no tree has been built yet.\n"
                 return
-            yield result.newick
+            # Round 13, item 1: labelled as the screen shows it.
+            yield _view_newick(result, _phylo_in_view(result)[0])
 
         @output
         @render.ui
@@ -2800,6 +3485,10 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 pool_count = len(pool)
                 over_limit = pool_count > PHYLOGENY_LIMITS["MAX_TIPS"]
                 rows = [
+                    # Round 13, item 1: colours, labels and monophyly follow
+                    # the grades view; the tree itself isn't rebuilt.
+                    _grade_view_switch("phylogeny", search.grade_view,
+                                       search.view(store).curation),
                     ui.div(
                         f"{pool_count:,} representative specimens in this "
                         "result (one per selected BIN x country) -- this is "
@@ -2835,7 +3524,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     rows.append(_phylo_tree_panel(phylo_state["result"]))
                 return ui.div(*rows, class_="bc-tab-body")
 
-            return _needs_analysis(body)
+            return _needs_analysis(body, graded=True)
 
         # -- annotation, shared by every screen ----------------------------
 
@@ -2846,8 +3535,16 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             ui.notification_show(text, duration=5)
             touch()
 
+        #: The records the open annotation form is for: processid -> current
+        #: identification, and whether their annotations all agree.
+        pending_annotate: reactive.Value = reactive.Value(None)
+        annotate_errors: reactive.Value = reactive.Value([])
+        #: The rank last suggested from the typed name, so a rank the curator
+        #: picked themselves is never replaced by the next guess.
+        rank_guess = {"last": ""}
+
         def _apply(prefix: str, scope: set[str] | None = None) -> None:
-            """Flag/note/update the *checked* records, never the
+            """Open the annotation form for the *checked* records, never the
             representative pick -- see ``io.annotations``'s module docstring.
 
             ``scope``, when given, restricts this to records that are both
@@ -2865,50 +3562,185 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             if not checked:
                 _tell("Nothing checked.")
                 return
-            user = (input.user() or "").strip()
-            flag = input[f"{prefix}_flag"]() or ""
-            note = (input[f"{prefix}_note"]() or "").strip()
-            updated = (input[f"{prefix}_updated_id"]() or "").strip()
-            if not (flag or note or updated):
-                _tell("Nothing to apply -- choose a flag, or type a note or "
-                      "Correct ID.")
+            if state.search is None:
+                _tell("Run a search first.")
                 return
-            for pid in checked:
-                # Round 9, item 5: a blank flag leaves the flag alone, so a
-                # note can be added without wiping it; "Clear flag" removes
-                # it.
-                if flag == FLAG_CLEAR:
-                    state.annotations.set_flag(pid, "", user=user)
-                elif flag:
-                    state.annotations.set_flag(pid, flag, user=user)
-                if note:
-                    state.annotations.set_note(pid, note, user=user)
-                if updated:
-                    state.annotations.set_updated_id(pid, updated, user=user)
-            status.set(f"Annotated {len(checked):,} records")
-            touch()
+            identifications = state.search.table.identifications(checked)
+            form, uniform = state.annotations.form_for(identifications)
+            pending_annotate.set({"records": identifications, "uniform": uniform})
+            annotate_errors.set([])
+            rank_guess["last"] = form.rank if form.rank == guess_rank(form.new_id) \
+                else ""
+            ui.modal_show(_annotation_modal(
+                len(checked), form, uniform,
+                (input.user() or "").strip() or state.user))
+
+        def _form_from_inputs(uniform: bool) -> AnnotationForm:
+            """The form as filled in. Over records that differ, what was left
+            blank or unticked keeps each record's own (``None``)."""
+            flag = input.ann_id_flag() or ""
+            note = input.ann_note() or ""
+            contamination = bool(input.ann_contamination())
+            other_issue = bool(input.ann_other_issue())
+            return AnnotationForm(
+                id_flag=None if flag == KEEP else flag,
+                new_id=(input.ann_new_id() or "").strip() if flag in ID_FLAGS else "",
+                rank=(input.ann_rank() or "") if flag in ID_FLAGS else "",
+                method=(input.ann_method() or "")
+                if flag in ID_FLAGS and flag not in TAXON_FLAGS else "",
+                citation=(input.ann_citation() or "").strip()
+                if flag == "synonym" else "",
+                contamination=contamination if uniform or contamination else None,
+                sequence_taxon=(input.ann_sequence_taxon() or "").strip(),
+                other_issue=other_issue if uniform or other_issue else None,
+                note=note.strip() if uniform or note.strip() else None,
+                curator=(input.ann_curator() or "").strip(),
+            )
+
+        @reactive.effect
+        @reactive.event(input.ann_id_flag, input.ann_other_issue,
+                        input.ann_contamination)
+        def _update_form_labels():
+            """Name the new ID for the chosen ID issue, mark the note
+            required when it is -- and drop the last Apply's complaints,
+            which were about a different form."""
+            if pending_annotate.get() is None:
+                return
+            new_id, note = _form_labels(input.ann_id_flag() or "",
+                                        bool(input.ann_other_issue()))
+            ui.update_text("ann_new_id", label=new_id)
+            ui.update_text_area("ann_note", label=note)
+            annotate_errors.set([])
+
+        @reactive.effect
+        @reactive.event(input.ann_new_id)
+        def _suggest_rank():
+            """Suggest the rank of the name being typed -- unless the curator
+            has picked one of their own, which stays."""
+            if pending_annotate.get() is None:
+                return
+            guess = guess_rank(input.ann_new_id() or "")
+            current = input.ann_rank() or ""
+            if guess and current in ("", rank_guess["last"]):
+                ui.update_select("ann_rank", selected=guess)
+                rank_guess["last"] = guess
+
+        @output(id="ann_method_help")
+        @render.ui
+        def _ann_method_help():
+            method = input.ann_method() or ""
+            if method not in ID_METHODS:
+                return ui.div()
+            return ui.div(ID_METHODS[method], class_="bc-ann-help")
+
+        @output(id="ann_impact")
+        @render.ui
+        def _ann_impact():
+            """What a name issue or synonym will reach -- they're saved for
+            the name, not the checked records -- or that one stays in
+            force."""
+            pending = pending_annotate.get()
+            flag = input.ann_id_flag() or ""
+            if pending is None or state.search is None:
+                return ui.div()
+            names = sorted({n for n in pending["records"].values()})
+            existing = [n for n in names if n in state.annotations.taxon_updates]
+            if flag in TAXON_FLAGS:
+                if len(names) != 1 or not names[0]:
+                    return ui.div(
+                        f"{ID_FLAGS[flag]['label']} corrects one name, but the "
+                        f"checked records have {len(names):,} different "
+                        "identifications. Check only records with the same "
+                        "name.", class_="alert alert-danger py-1 px-2 small")
+                name = names[0]
+                same = state.search.table.records_named(name)
+                own = sum(1 for p in same if p in state.annotations.updated_ids)
+                return ui.div(
+                    f"Saved once for the name '{name}': it applies to the "
+                    f"{len(same):,} record(s) identified as it in this result "
+                    "(and any later search)"
+                    + (f"; {own:,} of them keep their own corrected ID."
+                       if own else "."),
+                    class_="alert alert-info py-1 px-2 small")
+            if existing:
+                rule = state.annotations.taxon_updates[existing[0]]
+                return ui.div(
+                    f"The {ID_FLAGS[rule['flag']]['label'].lower()} for "
+                    f"'{existing[0]}' (→ {rule.get('new_name', '')}) still "
+                    "applies to these records unless they have their own "
+                    "corrected ID. Remove it under Taxon updates on the "
+                    "Specimens tab.", class_="small text-muted mb-2")
+            return ui.div()
+
+        @output(id="ann_errors")
+        @render.ui
+        def _ann_errors():
+            errors = annotate_errors.get()
+            if not errors:
+                return ui.div()
+            return ui.div(ui.tags.ul(*(ui.tags.li(e) for e in errors),
+                                     class_="mb-0"),
+                          class_="alert alert-danger py-1 px-2 small mb-0")
+
+        @reactive.effect
+        @reactive.event(input.ann_cancel)
+        def _cancel_annotate():
+            pending_annotate.set(None)
+            ui.modal_remove()
+
+        @reactive.effect
+        @reactive.event(input.ann_confirm)
+        def _confirm_annotate():
+            pending = pending_annotate.get()
+            if pending is None:
+                ui.modal_remove()
+                return
+            form = _form_from_inputs(pending["uniform"])
+            records = pending["records"]
+            errors = state.annotations.validate(form, records)
+            if errors:
+                annotate_errors.set(errors)
+                return
+            state.annotations.apply(form, records)
+            pending_annotate.set(None)
+            ui.modal_remove()
+            # The name just given is the curator's: the next form, and the
+            # representative picks, start from it.
+            if (input.user() or "").strip() != form.curator:
+                ui.update_text("user", value=form.curator)
+            state.user = form.curator
+            if form.id_flag in TAXON_FLAGS:
+                name = next(iter(records.values()))
+                _tell(f"Saved the {ID_FLAGS[form.id_flag]['label'].lower()} "
+                      f"'{name}' → '{form.new_id}' for every record with that "
+                      f"name, and annotated {len(records):,} checked records.")
+            else:
+                _tell(f"Annotated {len(records):,} records")
 
         #: ``(how many, the processids)`` a "Clear annotations" click is
         #: waiting to have confirmed.
         pending_clear: reactive.Value = reactive.Value(None)
 
         def _confirm_clear(scope: set[str] | None = None) -> None:
-            """Round 9, item 5: "Clear annotations" removes the flag, note
-            and Correct ID from the checked records (in ``scope``, as
-            ``_apply``), after a confirmation -- there's no undoing it."""
+            """Round 9, item 5: "Clear annotations" removes the flags, note
+            and corrected ID from the checked records (in ``scope``, as
+            ``_apply``), after a confirmation -- there's no undoing it. A
+            taxon update belongs to a name, not the records, so stays."""
             working = state.annotations.working
             checked = sorted(working if scope is None else working & scope)
             annotated = state.annotations.annotated_processids()
             targets = [p for p in checked if p in annotated]
             if not targets:
                 _tell("Nothing to clear -- none of the checked records has a "
-                      "flag, note or Correct ID." if checked
+                      "flag, note or corrected ID of its own." if checked
                       else "Nothing checked.")
                 return
             pending_clear.set(targets)
             ui.modal_show(ui.modal(
-                f"Remove the flag, note and Correct ID from {len(targets):,} "
-                "checked record(s)? This cannot be undone.",
+                f"Remove the flags, corrected ID and note from {len(targets):,} "
+                "checked record(s)? This cannot be undone. Taxon updates "
+                "(name issues and synonyms) stay: remove those under Taxon "
+                "updates on the Specimens tab.",
                 title="Clear annotations",
                 footer=ui.div(
                     ui.input_action_button("cancel_clear_ann", "Cancel",
@@ -2932,10 +3764,44 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             pending_clear.set(None)
             ui.modal_remove()
             for pid in targets:
-                state.annotations.set_flag(pid, "")
-                state.annotations.set_note(pid, "")
-                state.annotations.set_updated_id(pid, "")
+                state.annotations.clear_record(pid)
             _tell(f"Cleared the annotations on {len(targets):,} records.")
+
+        @reactive.effect
+        @reactive.event(input.taxon_update_remove)
+        def _confirm_remove_taxon_update():
+            name = input.taxon_update_pick() or ""
+            rule = state.annotations.taxon_updates.get(name)
+            if rule is None:
+                return
+            ui.modal_show(ui.modal(
+                f"Remove the {ID_FLAGS[rule['flag']]['label'].lower()} "
+                f"'{name}' → '{rule.get('new_name', '')}'? Records identified "
+                f"as '{name}' go back to their current ID (or their own "
+                "corrected ID). This cannot be undone.",
+                title="Remove taxon update",
+                footer=ui.div(
+                    ui.input_action_button("cancel_remove_taxon", "Cancel",
+                                           class_="btn-sm"),
+                    ui.input_action_button("confirm_remove_taxon", "Remove",
+                                           class_="btn-sm btn-danger"),
+                ),
+                easy_close=True,
+            ))
+
+        @reactive.effect
+        @reactive.event(input.cancel_remove_taxon)
+        def _cancel_remove_taxon():
+            ui.modal_remove()
+
+        @reactive.effect
+        @reactive.event(input.confirm_remove_taxon)
+        def _remove_taxon_update():
+            ui.modal_remove()
+            name = input.taxon_update_pick() or ""
+            if name in state.annotations.taxon_updates:
+                state.annotations.remove_taxon_update(name)
+                _tell(f"Removed the taxon update for '{name}'.")
 
         # -- the paged specimen table --------------------------------------
 
@@ -2999,8 +3865,6 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                 # Round 6, curation tools item 6: one flat row -- see the
                 # matching change in _grade_body for why.
                 ui.div(
-                    ui.input_action_button("select_page", "Check page",
-                                           class_="btn-sm"),
                     ui.input_action_button(
                         "select_all",
                         f"Check all {table.total_rows:,} found" if found
@@ -3014,31 +3878,48 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                           "margin-bottom:10px;padding:8px;background:#f8f9fa;"
                           "border:1px solid #dee2e6;border-radius:5px;",
                 ),
+                _taxon_updates_panel(state.annotations.taxon_frame(
+                    table.identifications_by_rowid().tolist()))
+                if state.annotations.taxon_updates else ui.div(),
+                # Round 13, item 2: one row -- "Download:" then short
+                # names, each saying on hover what file it is.
                 ui.div(
+                    ui.tags.span("Download:", class_="small fw-semibold"),
                     # Round 10, item 3: prepared in the background, saved by
                     # itself when ready (prep_status, dl_prepared).
-                    ui.input_action_button("prep_all", "Download All (xlsx)",
-                                           class_="btn-sm"),
-                    ui.input_action_button("prep_selected",
-                                           "Download Selected (xlsx)",
-                                           class_="btn-sm"),
-                    ui.input_action_button("prep_annotated",
-                                           "Download Annotated Records (xlsx)",
-                                           class_="btn-sm"),
+                    ui.input_action_button(
+                        "prep_all", "All", class_="btn-sm",
+                        title="Excel workbook of every record in this result"),
+                    ui.input_action_button(
+                        "prep_selected", "Selected", class_="btn-sm",
+                        title="Excel workbook of the representative records"),
+                    ui.input_action_button(
+                        "prep_annotated", "Annotated", class_="btn-sm",
+                        title="Excel workbook of the annotated records, with "
+                              "the taxon updates"),
                     # Round 9, item 3: the same records as Download Selected,
                     # as a plain list for making a dataset on BOLD.
                     ui.download_button(
-                        "dl_selected_ids", "Selected process IDs (txt)",
-                        class_="btn-sm",
-                        title="The representatives' process IDs, one per "
-                              "line -- paste them into a new dataset on BOLD."),
-                    ui.download_button("dl_curation_report",
-                                       "Download BOLD Curation Report",
-                                       class_="btn-sm"),
-                    ui.download_button("dl_fasta", "Download FASTA", class_="btn-sm"),
-                    ui.download_button("dl_selected_fasta", "Download Selected FASTA",
-                                       class_="btn-sm"),
-                    style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:2px;",
+                        "dl_selected_ids", "Selected IDs", class_="btn-sm",
+                        title="Text file of the representatives' process IDs, "
+                              "one per line -- paste them into a new dataset "
+                              "on BOLD."),
+                    ui.download_button(
+                        "dl_curation_report", "Curation report", class_="btn-sm",
+                        title="Tab-separated BOLD curation report: one row per "
+                              "annotated record"),
+                    ui.download_button(
+                        "dl_taxon_updates", "Taxon updates", class_="btn-sm",
+                        title="Tab-separated, one row per name issue or "
+                              "synonym: what BOLD fixes once, on the taxon "
+                              "record."),
+                    ui.download_button(
+                        "dl_fasta", "FASTA", class_="btn-sm",
+                        title="FASTA sequences of every record"),
+                    ui.download_button(
+                        "dl_selected_fasta", "Selected FASTA", class_="btn-sm",
+                        title="FASTA sequences of the representative records"),
+                    class_="bc-download-row",
                 ),
                 ui.tags.span(
                     "Downloads save to your computer's usual Downloads "
@@ -3046,11 +3927,14 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
                     "dialog, defaulting to Downloads too).",
                     class_="small text-muted",
                     style="display:block;margin-bottom:10px;"),
+                _filter_banner("sp", found, matches=table.total_rows,
+                               total=search.plan.expanded_records),
                 ui.HTML(_group_html(
                     rows, columns=_all_columns_ordered(rows), limit=len(rows),
                     sort_input="spec_sort_click",
                     sortable=frozenset(table.sortable_columns),
-                    sort_state=(table.sort_column, table.sort_descending))),
+                    sort_state=(table.sort_column, table.sort_descending),
+                    filtered=bool(found))),
                 class_="bc-tab-body",
             )
 
@@ -3124,16 +4008,6 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             search = state.search
             if search is not None:
                 offset.set((search.table.page_count - 1) * search.table.page_size)
-                touch()
-
-        @reactive.effect
-        @reactive.event(input.select_page)
-        def _check_page():
-            """"Check page": the working selection, not the representative
-            pick -- see io.annotations's module docstring.
-            """
-            if state.search is not None:
-                state.search.table.check_page(offset.get())
                 touch()
 
         @reactive.effect
@@ -3252,6 +4126,7 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             "all": "all_specimens", "selected": "selected_specimens",
             "annotated": "annotated_specimens",
             "curation_report": "bold_curation_report",
+            "taxon_updates": "bold_taxon_updates",
         }
 
         @output(id="dl_curation_report")
@@ -3270,6 +4145,26 @@ def create_app(snapshot: str | Path, *, page_size: int = DEFAULT_PAGE_SIZE,
             if written is None:
                 tmpdir.cleanup()
                 yield from _empty_download(_EMPTY_REASONS["curation_report"])
+                return
+            yield from _stream_file(written, tmpdir)
+
+        @output(id="dl_taxon_updates")
+        @render.download_button(
+            filename=lambda: (f"{_TSV_FILENAME_STEM['taxon_updates']}_"
+                              f"{export_io.timestamp()}.tsv"))
+        def _dl_taxon_updates():
+            """The name issues and synonyms, one row each -- small, so a
+            direct download like the curation report."""
+            search = state.search
+            if search is None:
+                yield from _empty_download("run a search first")
+                return
+            tmpdir = tempfile.TemporaryDirectory()
+            path = Path(tmpdir.name) / "export.tsv"
+            written = search.export_specimens(store, "taxon_updates", path)
+            if written is None:
+                tmpdir.cleanup()
+                yield from _empty_download(_EMPTY_REASONS["taxon_updates"])
                 return
             yield from _stream_file(written, tmpdir)
 
@@ -3594,8 +4489,8 @@ SCROLL_CLASS = "bc-scroll"
 #: -- the annotation columns a curator's eye and mouse live in while everything
 #: else scrolls out from under them.
 STICKY_COLUMN_WIDTHS: dict[str, int] = {
-    "selected": 44, "checked": 44, "flag": 90, "updated_id": 140,
-    "curator_notes": 160,
+    "selected": 40, "checked": 46, "id_flag": 95, "updated_id": 140,
+    "curator_notes": 90,
 }
 
 
@@ -3655,7 +4550,7 @@ def _table(frame: pd.DataFrame, labels: dict[str, str] | None = None,
            cell=None, limit: int = 500, *, sort_input: str | None = None,
            sortable: frozenset[str] = frozenset(),
            sort_state: tuple[str | None, bool] = (None, False),
-           sticky: frozenset[str] = frozenset()) -> str:
+           sticky: frozenset[str] = frozenset(), filtered: bool = False) -> str:
     """Render one table.
 
     ``sort_input`` names the Shiny input a header click posts its column name
@@ -3715,7 +4610,8 @@ def _table(frame: pd.DataFrame, labels: dict[str, str] | None = None,
     # after it, so it is part of the scrolling content instead of extra
     # height tacked on past the fill area.
     return (
-        f"<div class='{SCROLL_CLASS}' style='overflow:auto;height:100%;'>"
+        f"<div class='{SCROLL_CLASS}{' bc-filtered' if filtered else ''}' "
+        "style='overflow:auto;height:100%;'>"
         "<table class='table table-sm table-hover' style='font-size:13px;"
         "border-collapse:separate;'>"
         f"<thead><tr>{head}</tr></thead>"
@@ -3723,9 +4619,11 @@ def _table(frame: pd.DataFrame, labels: dict[str, str] | None = None,
     )
 
 
-def _chip(value: str, colour: str) -> str:
-    return (f"<td><span style='background:{colour};color:#fff;padding:1px 9px;"
-            f"border-radius:10px;font-weight:600;'>{_escape(value)}</span></td>")
+def _chip(value: str, colour: str, *, title: str = "") -> str:
+    attr = f" title='{_escape_attr(title)}'" if title else ""
+    return (f"<td{attr}><span style='background:{colour};color:#fff;"
+            "padding:1px 7px;border-radius:10px;font-weight:600;'>"
+            f"{_escape(value)}</span></td>")
 
 
 def _link_cell(value: object, url: str) -> str:
@@ -3742,7 +4640,8 @@ def _link_cell(value: object, url: str) -> str:
 def _checklist_html(frame: pd.DataFrame, *,
                     sort_state: tuple[str | None, bool] = (None, False)) -> str:
     def cell(column, value, row):
-        if column == "bags_grade" and not _is_missing(value) and value:
+        if (column == "bags_grade" or column in VIEW_GRADE_COLUMNS.values()) \
+                and not _is_missing(value) and value:
             return _chip(value, GRADE_COLOURS.get(str(value), "#adb5bd"))
         if column == "species" and not _is_missing(value) and value:
             return _link_cell(value, bold_species_url(str(value)))
@@ -3755,7 +4654,8 @@ def _checklist_html(frame: pd.DataFrame, *,
 def _bins_html(frame: pd.DataFrame, *,
               sort_state: tuple[str | None, bool] = (None, False)) -> str:
     def cell(column, value, row):
-        if column == "concordance" and not _is_missing(value) and value:
+        if (column == "concordance" or column in VIEW_CONCORDANCE_COLUMNS.values()) \
+                and not _is_missing(value) and value and value != "—":
             return _chip(value, CONCORDANCE_COLOURS.get(str(value), "#adb5bd"))
         if column == "bin_uri" and not _is_missing(value) and value:
             return _link_cell(value, bold_bin_url(str(value)))
@@ -3789,7 +4689,7 @@ def _gap_html(frame: pd.DataFrame, *,
 #:
 #: ``ROW_CHECK_CLASS`` toggles ``Annotations.working`` -- a disposable,
 #: session-scratch selection that exists only to gather targets for the
-#: "Apply to checked" toolbar. The bulk buttons (check page / group / all,
+#: "Annotate checked" form. The bulk buttons (check page / group / all,
 #: Clear) act on this one, never on the representative pick -- see
 #: ``io.annotations``'s module docstring for why conflating the two was a bug.
 ROW_REP_CLASS = "bc-row-rep"
@@ -3808,7 +4708,8 @@ def _checkbox_cell(pid: object, checked: bool, css_class: str, *,
 def _group_html(frame: pd.DataFrame, columns: list[str] | None = None,
                 limit: int = 500, *, sort_input: str | None = None,
                 sortable: frozenset[str] | None = None,
-                sort_state: tuple[str | None, bool] = (None, False)) -> str:
+                sort_state: tuple[str | None, bool] = (None, False),
+                filtered: bool = False) -> str:
     """One group's specimens, with the grade and flag colours carried through.
 
     ``columns`` defaults to the BAGS group layout. It is a parameter because
@@ -3849,12 +4750,28 @@ def _group_html(frame: pd.DataFrame, columns: list[str] | None = None,
             chosen = not _is_missing(value) and bool(value)
             if has_pid:
                 return _checkbox_cell(row["processid"], chosen, ROW_CHECK_CLASS,
-                                      title="Checked for bulk flag/note/update")
+                                      title="Checked for annotating in bulk")
             return f"<td>{'✔' if chosen else ''}</td>"
         if column == "bags_grade" and not _is_missing(value) and value:
             return _chip(value, GRADE_COLOURS.get(str(value), "#adb5bd"))
-        if column == "flag" and not _is_missing(value) and value:
-            return _chip(value, "#6f42c1")
+        # Round 11, item 4: short chips, so the frozen columns stay narrow;
+        # the full name is a hover away.
+        if column == "id_flag" and not _is_missing(value) and value:
+            info = ID_FLAGS.get(str(value), {})
+            return _chip(info.get("short", str(value)), "#6f42c1",
+                         title=info.get("label", str(value)))
+        if column in ISSUE_TICKS:
+            ticked = not _is_missing(value) and bool(value)
+            info = ISSUE_TICKS[column]
+            return _chip(info["short"], "#d63384", title=info["label"]) \
+                if ticked else "<td></td>"
+        if column == "updated_id" and not _is_missing(value) and value:
+            source = row.get("update_source", "") if hasattr(row, "get") else ""
+            if isinstance(source, str) and "taxon" in source:
+                return (f"<td title='{_escape_attr(f'{value} ({source})')}'>"
+                        f"<span class='badge bg-secondary'>taxon</span> "
+                        f"{_escape(value)}</td>")
+            return None
         if column == "processid" and not _is_missing(value) and value:
             return _link_cell(value, bold_record_url(str(value)))
         if column == "bin_uri" and not _is_missing(value) and value:
@@ -3864,7 +4781,7 @@ def _group_html(frame: pd.DataFrame, columns: list[str] | None = None,
         return None
     return _table(shown, GROUP_LABELS, cell=cell, limit=limit, sort_input=sort_input,
                  sortable=sortable, sort_state=sort_state,
-                 sticky=frozenset(STICKY_COLUMN_WIDTHS))
+                 sticky=frozenset(STICKY_COLUMN_WIDTHS), filtered=filtered)
 
 
 def run(snapshot: str | Path, *, host: str = "127.0.0.1", port: int = 8000,

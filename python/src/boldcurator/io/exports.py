@@ -43,9 +43,16 @@ CURATION_REPORT_COLUMNS = (
     "sampleid",
     "processid",
     "identification",
-    "flag",
+    "id_flag",
+    "contamination",
+    "other_issue",
     "updated_id",
-    "flag_user",
+    "updated_id_rank",
+    "updated_id_method",
+    "update_source",
+    "sequence_taxon",
+    "citation",
+    "curator",
     "curator_notes",
 )
 
@@ -240,7 +247,8 @@ def _xlsx_sheet(book, number: int, header: list, rows, *, freeze: bool,
 
 
 def write_xlsx(frame: pd.DataFrame, path: Path, *, snapshot_id: str = "",
-               sheet_name: str = "Records", progress=None) -> Path:
+               sheet_name: str = "Records", progress=None,
+               extra_sheets: dict[str, pd.DataFrame] | None = None) -> Path:
     """One table as a workbook: the rows on the first sheet, header bold and
     frozen, and the provenance ``write_tsv`` puts in its comment lines on an
     "About" sheet (round 9, item 4).
@@ -250,10 +258,14 @@ def write_xlsx(frame: pd.DataFrame, path: Path, *, snapshot_id: str = "",
     objects -- about ten times faster (85,000 records x 83 columns: 50 s
     with openpyxl, 5 s this way) for the same file. ``progress(rows_done,
     rows_total)`` is called after each chunk.
+
+    ``extra_sheets`` (name -> table) go between the rows and "About" -- the
+    taxon updates beside the annotated records, for one.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    sheets = [sheet_name, "About"]
+    extra = list((extra_sheets or {}).items())
+    sheets = [sheet_name, *(name for name, _ in extra), "About"]
     names = "".join(
         f'<sheet name="{_xml_attr(n)}" sheetId="{i}" r:id="rId{i}"/>'
         for i, n in enumerate(sheets, start=1))
@@ -291,8 +303,12 @@ def write_xlsx(frame: pd.DataFrame, path: Path, *, snapshot_id: str = "",
         _xlsx_sheet(book, 1, [str(c) for c in frame.columns],
                     frame.itertuples(index=False, name=None), freeze=True,
                     columns=frame.shape[1], total=len(frame), progress=progress)
-        _xlsx_sheet(book, 2, [], ([line.lstrip("# ")]
-                                  for line in _provenance(snapshot_id)),
+        for number, (_, table) in enumerate(extra, start=2):
+            _xlsx_sheet(book, number, [str(c) for c in table.columns],
+                        table.itertuples(index=False, name=None), freeze=True,
+                        columns=table.shape[1], total=len(table))
+        _xlsx_sheet(book, len(sheets), [], ([line.lstrip("# ")]
+                                            for line in _provenance(snapshot_id)),
                     freeze=False, columns=1)
     tmp.replace(path)
     return path
@@ -316,7 +332,16 @@ def selected_rows(frame: pd.DataFrame, annotations: Annotations) -> pd.DataFrame
 
 
 def annotated_rows(frame: pd.DataFrame, annotations: Annotations) -> pd.DataFrame:
-    return _subset(frame, annotations.annotated_processids())
+    """Records with annotations of their own, and those a taxon update
+    reaches by their identification."""
+    return _subset(frame, annotations.annotated_processids(_identifications(frame)))
+
+
+def _identifications(frame: pd.DataFrame) -> dict[str, str]:
+    if "processid" not in frame.columns or "identification" not in frame.columns:
+        return {}
+    return {str(p): (n if isinstance(n, str) else "")
+            for p, n in zip(frame["processid"], frame["identification"])}
 
 
 # --------------------------------------------------------------------------
@@ -385,11 +410,21 @@ def write_fasta(
 
 
 def curation_report(frame: pd.DataFrame, annotations: Annotations) -> pd.DataFrame:
-    """The narrow report BOLD curators are sent."""
+    """The narrow report BOLD curators are sent: one row per annotated record,
+    including those a taxon update reaches."""
     rows = annotated_rows(frame, annotations)
     merged = merge_annotations(rows, annotations)
     present = [c for c in CURATION_REPORT_COLUMNS if c in merged.columns]
     return merged[present]
+
+
+def taxon_updates_report(frame: pd.DataFrame, annotations: Annotations) -> pd.DataFrame:
+    """One row per taxon update (name issue or synonym) -- what the BOLD team
+    fixes once, on the taxon record -- with how many of ``frame``'s records
+    carry the old name."""
+    idents = frame["identification"].tolist() \
+        if frame is not None and "identification" in frame.columns else []
+    return annotations.taxon_frame(idents)
 
 
 # --------------------------------------------------------------------------
@@ -551,6 +586,15 @@ def export_all(
     else:
         skipped["annotated"] = "no flags, updated IDs or notes recorded"
         skipped["curation_report"] = "no flags, updated IDs or notes recorded"
+
+    if annotations.taxon_updates:
+        written["taxon_updates"] = write_tsv(
+            taxon_updates_report(frame, annotations),
+            directory / f"bold_taxon_updates_{stamp}.tsv",
+            snapshot_id=snapshot_id,
+        )
+    else:
+        skipped["taxon_updates"] = "no name issues or synonyms recorded"
 
     written["search_results"] = write_csv(
         frame, directory / f"bold_search_results_{stamp}.csv", snapshot_id=snapshot_id

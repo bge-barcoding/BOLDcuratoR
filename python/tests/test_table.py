@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from boldcurator.core.table import DEFAULT_PAGE_SIZE, SpecimenTable
+from boldcurator.io.annotations import AnnotationForm
 from boldcurator.data.queries import (
     ROW_ID_COLUMN,
     SearchQuery,
@@ -19,7 +20,17 @@ from boldcurator.data.queries import (
 def table(store):
     plan = plan_search(store, SearchQuery(
         taxa=resolve_taxa(store, ["Nymphalidae"]).resolved, expand_bins=True))
-    return SpecimenTable(store, plan, page_size=10, user="tester")
+    return SpecimenTable(store, plan, page_size=10, user="Test Curator")
+
+
+def _contamination() -> AnnotationForm:
+    return AnnotationForm(contamination=True, sequence_taxon="Homo sapiens")
+
+
+def _misidentification(new_id: str = "Danaus plexippus") -> AnnotationForm:
+    return AnnotationForm(id_flag="misidentification", new_id=new_id,
+                          rank="species", method="Morphology",
+                          note="checked against the type series")
 
 
 def test_paging_covers_every_row_exactly_once(table):
@@ -42,7 +53,7 @@ def test_a_page_never_holds_more_than_a_page(table):
 def test_pages_are_scored_and_annotated_like_the_pipeline(table, store):
     page = table.page(0)
     for column in ("quality_score", "rank", "criteria_met", "selected", "checked",
-                   "flag"):
+                   "id_flag", "contamination", "updated_id"):
         assert column in page.rows.columns
     # the same rows through the whole-result path must score identically
     full = fetch_planned(store, table.plan)
@@ -96,7 +107,8 @@ def test_sorting_by_a_computed_column_is_refused_not_ignored(table):
 
 
 def test_annotation_columns_are_sortable_without_touching_the_snapshot(table):
-    for column in ("selected", "checked", "flag", "updated_id", "curator_notes"):
+    for column in ("selected", "checked", "id_flag", "contamination",
+                   "updated_id", "curator_notes"):
         assert column in table.sortable_columns
 
 
@@ -119,8 +131,8 @@ def test_sorting_by_checked_reaches_rows_never_rendered(table):
 
 def test_sorting_by_flag_groups_the_flagged_records_together(table):
     ids = table.page_processids(0)[:3]
-    table.apply_flag("contamination", ids)
-    table.sort_by("flag", descending=True)  # non-empty strings sort after ""
+    table.annotate(_misidentification(), ids)
+    table.sort_by("id_flag", descending=True)  # non-empty strings sort after ""
     top = {str(p) for p in table.page(0).rows["processid"].iloc[:3]}
     assert top == set(ids)
 
@@ -128,8 +140,7 @@ def test_sorting_by_flag_groups_the_flagged_records_together(table):
 def test_sorting_by_updated_id_and_notes_uses_what_the_table_shows(table):
     ids = table.page_processids(0)[:2]
     table.set_checked(ids)
-    table.apply_note("checked against the type series")
-    table.apply_updated_id("Danaus plexippus")
+    table.annotate(_misidentification())
     for column in ("updated_id", "curator_notes"):
         table.sort_by(column, descending=True)
         top = {str(p) for p in table.page(0).rows["processid"].iloc[:2]}
@@ -186,36 +197,86 @@ def test_clearing_checked_leaves_the_representative_pick_alone(table):
 
 def test_bulk_flag_applies_to_the_checked_set_not_the_page(table):
     table.check_all()
-    changed = table.apply_flag("contamination")
+    changed = table.annotate(_contamination())
     assert changed == table.total_rows
     page = table.page(table.page_size)      # a page never rendered before
-    assert (page.rows["flag"] == "contamination").all()
+    assert page.rows["contamination"].all()
+    assert (page.rows["sequence_taxon"] == "Homo sapiens").all()
 
 
-def test_an_empty_flag_clears_it(table):
+def test_unticking_clears_it(table):
     table.check_page(0)
-    table.apply_flag("contamination")
-    table.apply_flag("")
-    assert (table.page(0).rows["flag"] == "").all()
+    table.annotate(_contamination())
+    table.annotate(AnnotationForm(contamination=False))
+    assert not table.page(0).rows["contamination"].any()
+    assert not table.annotations.flags
 
 
 def test_bulk_note_and_updated_id_land_on_the_checked_rows(table):
     ids = table.page_processids(0)[:3]
     table.set_checked(ids)
-    table.apply_note("checked against the type series")
-    table.apply_updated_id("Danaus plexippus")
+    table.annotate(_misidentification())
     page = table.page(0)
     touched = page.rows[page.rows["processid"].astype(str).isin(ids)]
     untouched = page.rows[~page.rows["processid"].astype(str).isin(ids)]
     assert (touched["curator_notes"] == "checked against the type series").all()
     assert (touched["updated_id"] == "Danaus plexippus").all()
+    assert (touched["updated_id_rank"] == "species").all()
+    assert (touched["updated_id_method"] == "Morphology").all()
+    assert (touched["curator"] == "Test Curator").all()
     assert (untouched["curator_notes"] == "").all()
 
 
-def test_an_unknown_flag_is_refused(table):
+def test_an_incomplete_form_is_refused_with_what_is_missing(table):
     table.check_page(0)
-    with pytest.raises(ValueError, match="Unknown flag"):
-        table.apply_flag("definitely not a flag")
+    with pytest.raises(ValueError, match="Rank is required"):
+        table.annotate(AnnotationForm(id_flag="misidentification",
+                                      new_id="Danaus plexippus",
+                                      method="Morphology", note="why"))
+    with pytest.raises(ValueError, match="full name"):
+        table.annotate(AnnotationForm(
+            contamination=True, sequence_taxon="Homo sapiens", curator="Ann"))
+    assert not table.annotations.flags
+
+
+def test_a_taxon_update_reaches_every_record_with_the_name(table):
+    """Saved once for the name, so it reaches records nobody checked -- and
+    a record's own corrected ID wins."""
+    name = "Danaus plexippus"
+    named = table.records_named(name)
+    assert len(named) >= 3
+    own = named[0]
+    table.annotate(_misidentification("Danaus chrysippus"), [own])
+    table.annotate(AnnotationForm(id_flag="synonym", new_id="Danaus archippus",
+                                  rank="species", citation="Smith 2019"),
+                   named[1:2])
+    assert set(table.annotations.taxon_updates) == {name}
+    assert table.annotated_count() == len(named)
+    table.search_for("Danaus archippus", "updated_id")
+    assert set(table.all_processids()) == set(named) - {own}
+    table.search_for("")
+    frame = table.annotations.to_frame(named, [name] * len(named)).set_index("processid")
+    assert frame.loc[own, "updated_id"] == "Danaus chrysippus"
+    assert frame.loc[own, "update_source"] == "record"
+    assert (frame.drop(own)["update_source"] == "taxon (synonym)").all()
+
+
+def test_a_taxon_update_needs_one_shared_name(table):
+    ids = table.all_processids()
+    names = table.identifications(ids)
+    mixed = [ids[0]] + [p for p in ids if names[p] != names[ids[0]]][:1]
+    with pytest.raises(ValueError, match="2 different identifications"):
+        table.annotate(AnnotationForm(id_flag="name_issue", new_id="Aus bus",
+                                      rank="species"), mixed)
+
+
+def test_clearing_annotations_leaves_the_taxon_update(table):
+    named = table.records_named("Danaus plexippus")
+    table.annotate(AnnotationForm(id_flag="name_issue", new_id="Danaus plexipus",
+                                  rank="species", note="typo"), named[:1])
+    table.clear_annotations(named[:1])
+    assert not table.annotations.curator_notes
+    assert "Danaus plexippus" in table.annotations.taxon_updates
 
 
 def test_an_empty_result_pages_without_blowing_up(store):

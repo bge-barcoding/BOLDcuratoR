@@ -130,17 +130,22 @@ def test_all_columns_ordered_drops_nothing_and_leads_with_the_curated_ones(store
     from boldcurator.core.table import SpecimenTable
     from boldcurator.data.queries import SearchQuery, plan_search, resolve_taxa
     from boldcurator.ui.app import _all_columns_ordered
-    from boldcurator.ui.format import GROUP_COLUMNS
+    from boldcurator.ui.format import GROUP_COLUMNS, HIDDEN_COLUMNS
 
     plan = plan_search(store, SearchQuery(
         taxa=resolve_taxa(store, ["Nymphalidae"]).resolved, expand_bins=True))
     rows = SpecimenTable(store, plan, page_size=5).page(0).rows
     ordered = _all_columns_ordered(rows)
 
-    assert set(ordered) == set(rows.columns), "a column was dropped or invented"
-    assert len(ordered) == len(rows.columns), "no duplicates either"
+    # Only the annotation timestamp is left to the download.
+    assert set(ordered) == set(rows.columns) - HIDDEN_COLUMNS, \
+        "a column was dropped or invented"
+    assert len(ordered) == len(set(ordered)), "no duplicates either"
     curated_present = [c for c in GROUP_COLUMNS if c in rows.columns]
     assert ordered[:len(curated_present)] == curated_present
+    # Round 11, item 5: how each update was made goes after the BOLD columns.
+    from boldcurator.ui.format import TRAILING_COLUMNS
+    assert ordered[-len(TRAILING_COLUMNS):] == TRAILING_COLUMNS
     # A real BOLD column that is deliberately not curated, to prove "the rest"
     # isn't empty -- this port's schema always carries it.
     assert "sampleid" in ordered[len(curated_present):]
@@ -284,7 +289,7 @@ def test_processid_bin_and_species_link_out_to_the_bold_portal():
 
 
 def test_sticky_columns_freeze_to_the_left_edge_in_column_order():
-    """selected/checked/flag/updated_id/curator_notes stay put while the rest
+    """selected/checked/id_flag/updated_id/curator_notes stay put while the rest
 
     of a wide table scrolls sideways underneath them.
     """
@@ -293,7 +298,7 @@ def test_sticky_columns_freeze_to_the_left_edge_in_column_order():
     from boldcurator.ui.app import STICKY_COLUMN_WIDTHS, _group_html
 
     frame = pd.DataFrame({
-        "selected": [True], "checked": [False], "flag": ["misidentification"],
+        "selected": [True], "checked": [False], "id_flag": ["misidentification"],
         "updated_id": ["Danaus plexippus"], "curator_notes": ["checked"],
         "processid": ["P1"], "species": ["Danaus plexippus"],
     })
@@ -301,7 +306,7 @@ def test_sticky_columns_freeze_to_the_left_edge_in_column_order():
     header = html.split("<tbody>")[0]
 
     running = 0
-    for column in ("selected", "checked", "flag", "updated_id", "curator_notes"):
+    for column in ("selected", "checked", "id_flag", "updated_id", "curator_notes"):
         width = STICKY_COLUMN_WIDTHS[column]
         assert f"left:{running}px" in html, f"{column} should sit at {running}px"
         running += width
@@ -723,16 +728,85 @@ def test_the_data_tab_has_no_download_from_url_or_attribution_footer(fixture_sna
     assert html.count("Full licence text") == 0
 
 
-def test_the_annotation_toolbar_says_correct_id_and_offers_contamination():
-    """Round 8, items 4.2 and 4.3."""
+def test_the_annotation_toolbar_opens_the_form_and_offers_clear():
+    """The fields moved into a form (``_annotation_modal``); the toolbar
+    keeps the button that opens it and Clear annotations (round 9, item 5)."""
     from htmltools import TagList
 
     from boldcurator.ui.app import _annotation_controls
 
     html = str(TagList(*_annotation_controls("sp")))
-    assert 'placeholder="Correct ID"' in html and "width:225px" in html
-    assert '<option value="contamination">Contamination</option>' in html
-    assert "id_uncertain" not in html
+    assert 'id="sp_apply"' in html and "Annotate checked" in html
+    assert 'id="sp_clear_ann"' in html
+    assert "<select" not in html
+
+
+def _modal_html(form=None, uniform=True, curator="Ann Curator") -> str:
+    from boldcurator.io.annotations import AnnotationForm
+    from boldcurator.ui.app import _annotation_modal
+
+    return str(_annotation_modal(3, form or AnnotationForm(id_flag=""), uniform,
+                                 curator))
+
+
+def test_the_annotation_form_offers_one_id_issue_and_two_ticks():
+    """Agreed: an ID issue dropdown (one new ID each), contamination and
+    other issue as tick-boxes that combine with it."""
+    from boldcurator.config.constants import ID_FLAGS, ID_METHODS, ID_RANKS
+
+    html = _modal_html()
+    for key, info in ID_FLAGS.items():
+        assert f'<option value="{key}">{info["label"]}</option>' in html
+        assert info["definition"] in html          # what each flag means
+    assert 'id="ann_contamination"' in html and 'id="ann_other_issue"' in html
+    assert all(f'<option value="{r}">' in html for r in ID_RANKS)
+    assert all(f'<option value="{m}">' in html for m in ID_METHODS)
+    assert "Annotate 3 checked records" in html
+    assert 'value="Ann Curator"' in html
+    for retired in ("id_uncertain", "data_issue"):
+        assert retired not in html
+
+
+def test_the_form_shows_each_field_only_for_the_flags_that_need_it():
+    from html import unescape
+
+    html = unescape(_modal_html())
+    # The citation only for a synonym; the method only for a record-level
+    # new ID -- not for name issue or synonym.
+    citation = html.split('id="ann_citation"')[0].rsplit("data-display-if", 1)[1]
+    assert "'synonym'" in citation and "'misidentification'" not in citation
+    method = html.split('id="ann_method"')[0].rsplit("data-display-if", 1)[1]
+    assert "'misidentification'" in method and "'id_unfounded'" in method
+    assert "'synonym'" not in method and "'name_issue'" not in method
+    taxon = html.split('id="ann_sequence_taxon"')[0].rsplit("data-display-if", 1)[1]
+    assert "input.ann_contamination" in taxon
+
+
+def test_a_form_over_records_that_differ_keeps_each_records_own():
+    from boldcurator.io.annotations import AnnotationForm
+
+    html = _modal_html(AnnotationForm(), uniform=False)
+    assert "(keep each record&#39;s own)" in html or "(keep each record's own)" in html
+    assert "These records differ" in html
+    assert "These records differ" not in _modal_html()
+
+
+def test_the_id_issue_and_ticks_render_as_chips():
+    import pandas as pd
+
+    from boldcurator.ui.app import _group_html
+
+    html = _group_html(pd.DataFrame({
+        "id_flag": ["id_unfounded"], "contamination": [True],
+        "other_issue": [False], "updated_id": ["Danaus"],
+        "update_source": ["taxon (name_issue)"], "processid": ["P1"]}),
+        ["id_flag", "contamination", "other_issue", "updated_id",
+         "update_source", "processid"])
+    # Round 11, item 4: short chips keep the frozen columns narrow; the
+    # full name is on hover.
+    assert ">Unfounded</span>" in html and "title='ID unfounded'" in html
+    assert ">Contam.</span>" in html and "Other</span>" not in html
+    assert ">taxon</span>" in html
 
 
 def test_a_broader_second_search_gets_representatives_for_its_new_bins(store):
@@ -862,22 +936,6 @@ def test_selected_processids_are_this_result_s_representatives(store, tmp_path):
 
 
 
-def test_the_flag_dropdown_keeps_by_default_and_offers_clear():
-    """Round 9, item 5: blank leaves the flag alone (applying a note used
-    to wipe it) and "Clear flag" is the undo; Clear annotations is beside
-    Apply."""
-    from htmltools import TagList
-
-    from boldcurator.config.constants import FLAG_CHOICES, FLAG_CLEAR, FLAG_OPTIONS
-    from boldcurator.ui.app import _annotation_controls
-
-    assert list(FLAG_CHOICES)[0] == "" and FLAG_CHOICES[""] == "(no change)"
-    assert list(FLAG_CHOICES)[-1] == FLAG_CLEAR
-    assert FLAG_CLEAR not in FLAG_OPTIONS    # never stored
-    html = str(TagList(*_annotation_controls("sp")))
-    assert "Clear flag" in html and 'id="sp_clear_ann"' in html
-
-
 def test_the_guide_is_the_first_tab_and_links_the_bags_paper(fixture_snapshot):
     """Round 9, item 7."""
     from boldcurator.ui.app import BAGS_PAPER_URL, create_app
@@ -946,3 +1004,250 @@ def test_the_analysis_runs_once_however_many_threads_ask(store, monkeypatch):
     assert len(calls) == 1 and results[0] is results[1]
     assert stages[0].startswith("Fetching") and stages[-1] == "Choosing representatives"
     assert app_state.annotations.selected            # representatives chosen
+
+
+def test_the_form_puts_fields_side_by_side_and_names_the_formed_name():
+    """Round 11, items 2 and 3: "Correctly formed name"; rows of fields, not
+    one long column, so the form needn't scroll."""
+    from html import unescape
+
+    from boldcurator.io.annotations import AnnotationForm
+
+    html = unescape(_modal_html(AnnotationForm(id_flag="name_issue")))
+    assert "Correctly formed name" in html and "spelt or" not in html
+    assert html.count('class="bc-ann-row"') == 3
+    assert "modal-xl" in html and "<hr" not in html
+
+
+def test_the_specimens_toolbar_has_no_check_page_button():
+    """Round 11, item 6."""
+    import inspect
+
+    from boldcurator.ui import app
+
+    assert '"select_page"' not in inspect.getsource(app)
+
+
+def test_group_options_carry_marks_and_are_cut_short():
+    """Round 12, items 1 and 4: ✓ reviewed, ✎ annotated, the original grade
+    when a view changed it -- and no option long enough to break the list."""
+    import pandas as pd
+
+    from boldcurator.core.grouping import SpecimenGroup
+    from boldcurator.ui.app import OPTION_CAPTION_CHARS, _group_option
+
+    group = SpecimenGroup(key="CE|Aus bus", caption="Species: Aus bus — " + "BOLD:X, " * 40,
+                          specimens=pd.DataFrame({"processid": ["P1", "P2"]}))
+    label = _group_option(group, reviewed=True, annotated=True, was="  · was C")
+    assert label.startswith("✓ ✎ Species: Aus bus")
+    assert label.endswith("(2)  · was C")
+    assert "…" in label and len(label) < OPTION_CAPTION_CHARS + 30
+    assert _group_option(group, reviewed=False, annotated=False).startswith("Species")
+
+
+def test_a_filter_puts_a_banner_above_the_table_and_outlines_it():
+    """Round 12, item 2."""
+    import pandas as pd
+
+    from boldcurator.ui.app import _filter_banner, _group_html
+
+    assert str(_filter_banner("C", None, matches=1, total=2)) == "<div></div>"
+    html = str(_filter_banner("C", ("identified_by", "smith"), matches=54,
+                              total=245))
+    assert "Filtered" in html and "showing 54 of 245 records" in html
+    assert "Identified by" in html and 'id="find_clear_C"' in html
+    frame = pd.DataFrame({"processid": ["P1"]})
+    assert "bc-filtered" in _group_html(frame, ["processid"], filtered=True)
+    assert "bc-filtered" not in _group_html(frame, ["processid"])
+
+
+def test_the_grades_view_switch_offers_the_three_views():
+    """Round 12, item 3."""
+    from boldcurator.core.curation import GRADE_VIEWS
+    from boldcurator.ui.app import _grade_view_switch
+
+    html = str(_grade_view_switch("E", "original", {}))
+    assert 'id="grades_from_E"' in html
+    assert all(f'value="{v}"' in html for v in GRADE_VIEWS)
+    assert "bc-grade-view-on" not in html
+    on = str(_grade_view_switch("E", "curated", {"changed": 3, "left_out": 1}))
+    assert "3 record(s) re-identified, 1 left out (contaminated)" in on
+    assert "bc-grade-view-on" in on
+
+
+def test_search_state_grades_by_the_chosen_view(store):
+    """The checklist gains the view's grade, and a species only the view has
+    gets its own row; the original stays the analysis."""
+    from boldcurator.ui.state import AppState
+
+    state = AppState(store, page_size=25)
+    state.run_search("Danaus plexippus")
+    search = state.search
+    names = search.analysis(store).specimens
+    pid = str(names.loc[names["species"] == "Danaus plexippus", "processid"].iloc[0])
+    state.annotations.set_flag(pid, "misidentification")
+    state.annotations.set_updated_id(pid, "Danaus newname", rank="species",
+                                     method="Morphology")
+    assert "bags_grade_curated" not in search.checklist(store).columns
+    search.grade_view = "curated"
+    checklist = search.checklist(store)
+    assert "bags_grade_curated" in checklist.columns
+    row = checklist[checklist["species"] == "Danaus newname"]
+    assert len(row) == 1 and row["bags_grade"].isna().all()
+    assert search.view(store).curation["changed"] == 1
+    assert search.view_is_ready()
+    state.annotations.set_note(pid, "changed")
+    assert not search.view_is_ready()
+
+
+def _tree_case():
+    """Three representatives on a small tree, P1 re-identified, P3
+    contaminated -- and the curated view of them."""
+    from io import StringIO
+
+    import pandas as pd
+    from Bio import Phylo
+
+    from boldcurator.core.curation import CURATED, regrade
+    from boldcurator.core.phylogeny import PhylogenyResult
+    from boldcurator.core.pipeline import Resolution, SearchResult, grade_frame
+    from boldcurator.core.species import name_status
+    from boldcurator.io.annotations import Annotations
+
+    frame = pd.DataFrame({
+        "processid": ["P1", "P2", "P3"],
+        "species": ["Aus bis", "Aus bis", "Cus dus"],
+        "identification": ["Aus bis", "Aus bis", "Cus dus"],
+        "identification_rank": ["species"] * 3,
+        "bin_uri": ["BIN1", "BIN2", "BIN3"],
+        "genus": ["Aus", "Aus", "Cus"],
+        "country.ocean": ["Kenya", "Peru", "Peru"],
+    })
+    frame["name_status"] = name_status(frame)
+    graded, grades, shared = grade_frame(frame, None)
+    search_result = SearchResult(specimens=graded, bags_grades=grades,
+                                 bin_analysis={}, selections={},
+                                 resolution=Resolution(), estimate={},
+                                 shared_bins=frozenset(shared))
+    labels = ["BIN1-P1-Aus bis-Kenya", "BIN2-P2-Aus bis-Peru", "BIN3-P3-Cus dus-Peru"]
+    reps = graded.copy()
+    reps["_tip_label"] = labels
+    newick = f"(('{labels[0]}':1,'{labels[1]}':1):1,'{labels[2]}':1);"
+    tree = Phylo.read(StringIO(newick), "newick")
+    phylo_result = PhylogenyResult(representatives=reps, newick=newick,
+                                   monophyly={"Aus bis": True}, tree=tree)
+    a = Annotations()
+    a.set_flag("P1", "misidentification")
+    a.set_updated_id("P1", "Aus bus", rank="species", method="Morphology")
+    a.set_flag("P3", contamination=True, sequence_taxon="Homo sapiens")
+    viewed = regrade(search_result, a, CURATED)
+    return phylo_result, viewed, a, labels
+
+
+def test_tree_tips_follow_the_grades_view():
+    """Round 13, item 1: a re-identified tip reads "old → new" (purple in
+    the viewer), a left-out one is grey, colours and grades are the view's."""
+    from boldcurator.ui.app import (
+        LEFT_OUT_COLOUR,
+        _phylo_tips,
+        _phylo_view_data,
+    )
+    from boldcurator.ui.format import GRADE_COLOURS
+
+    phylo_result, viewed, a, labels = _tree_case()
+    data = _phylo_view_data(phylo_result, viewed, a, "curated", {"P1", "P2", "P3"})
+    tips = {t["tip"]: t for t in _phylo_tips(phylo_result, {}, data)}
+    renamed = tips[labels[0]]
+    assert renamed["display"] == "BIN1-P1-Aus bis → Aus bus-Kenya"
+    assert renamed["renamed"] and not renamed["left_out"]
+    assert renamed["species"] == "Aus bus"
+    assert renamed["color"] == GRADE_COLOURS[renamed["bags_grade"]]
+    left = tips[labels[2]]
+    assert left["left_out"] and left["color"] == LEFT_OUT_COLOUR
+    assert left["bags_grade"] == "" and left["monophyletic"] is None
+    plain = tips[labels[1]]
+    assert plain["display"] == labels[1] and not plain["renamed"]
+    # The original view is untouched.
+    original = {t["tip"]: t for t in _phylo_tips(phylo_result, {})}
+    assert original[labels[0]]["display"] == labels[0]
+
+
+def test_the_newick_download_carries_the_views_labels():
+    from boldcurator.ui.app import _phylo_tips, _phylo_view_data, _view_newick
+
+    phylo_result, viewed, a, labels = _tree_case()
+    data = _phylo_view_data(phylo_result, viewed, a, "curated", {"P1", "P2", "P3"})
+    newick = _view_newick(phylo_result, _phylo_tips(phylo_result, {}, data))
+    assert "Aus bis -> Aus bus" in newick and "→" not in newick
+    assert labels[1] in newick
+    # The stored tree keeps its own names (rerooting relies on them).
+    assert _view_newick(phylo_result, _phylo_tips(phylo_result, {})) \
+        == phylo_result.newick
+    assert all(c.name in labels for c in phylo_result.tree.get_terminals())
+
+
+def test_the_specimens_downloads_are_short_and_on_one_row():
+    """Round 13, item 2."""
+    import inspect
+
+    from boldcurator.ui import app
+
+    source = inspect.getsource(app)
+    assert "(xlsx)" not in source and "(txt)" not in source
+    assert '"Download:"' in source and "bc-download-row" in source
+    assert ".bc-download-row { display: flex;" in source
+
+
+def test_the_bin_table_shows_the_views_concordance():
+    import pandas as pd
+
+    from boldcurator.ui.app import _bins_html
+
+    html = _bins_html(pd.DataFrame({
+        "bin_uri": ["BOLD:A", "BOLD:B"], "concordance": ["Discordant"] * 2,
+        "concordance_curated": ["Concordant", "—"]}))
+    assert "Concordance (curated IDs)" in html
+    assert ">Concordant</span>" in html and ">—</td>" in html
+
+
+def test_search_state_bin_analysis_follows_the_view(store):
+    from boldcurator.ui.state import AppState
+
+    state = AppState(store, page_size=25)
+    state.run_search("Danaus plexippus")
+    search = state.search
+    assert "concordance_curated" not in search.bin_analysis(store)["content"].columns
+    search.grade_view = "curated"
+    analysis = search.bin_analysis(store)
+    content = analysis["content"]
+    assert list(content.columns).index("concordance_curated") \
+        == list(content.columns).index("concordance") + 1
+    assert "concordant_bins (With curated IDs)" in analysis["summary"]
+    assert analysis["view_summary"]["total_bins"] >= 1
+
+
+def test_the_guide_is_numbered_steps_of_bullets():
+    """Round 14, item 2: separate steps, each a short bulleted list -- and
+    naming today's controls, so a renamed button shows up here."""
+    from boldcurator.ui.app import _guide_panel
+
+    html = str(_guide_panel().content)
+    steps = html.split("<ol")[1].split("</ol>")[0]
+    assert steps.count("<strong>") >= 10
+    assert steps.count("<ul") == steps.count("<strong>")
+    for control in ("Mark reviewed", "Next unreviewed", "Grades from",
+                    "Annotate checked", "Clear filter", "Clear annotations",
+                    "Check this group", "Selected IDs", "Curation report"):
+        assert control in steps, control
+
+
+def test_the_group_navigator_keeps_to_one_line():
+    """Round 14, item 1: the list shrinks to fit beside the buttons."""
+    import inspect
+
+    from boldcurator.ui import app
+
+    source = inspect.getsource(app)
+    assert 'class_="bc-group-nav"' in source
+    assert 'style="flex:1 1 0;min-width:200px;"' in source
+    assert ".bc-group-nav .selectize-input > .item" in source

@@ -78,8 +78,8 @@ def main(argv: list[str] | None = None) -> int:
         def table_text(selector: str) -> str:
             """Only the table(s), not the surrounding panel.
 
-            The toolbar holds a flag <select> whose options include every flag
-            name, so matching against the whole panel's text reports a
+            The annotation form holds a <select> whose options include every
+            flag name, so matching against the whole panel's text reports a
             success for an annotation that never rendered. The Species screen
             can hold two tables (gap analysis, then the checklist) when taxa
             were typed, so this joins every table's text rather than assuming
@@ -106,6 +106,15 @@ def main(argv: list[str] | None = None) -> int:
                 return Array.from(table.querySelectorAll('tbody tr'))
                     .map(tr => tr.children[i].innerText.trim());
             }""", [selector, label])
+
+        def group_count(grade: str) -> int:
+            """How many groups a screen has, from its "i of N" (the group
+            list is a selectize, which keeps only the chosen option)."""
+            pos = page.locator(f"#grade_{grade}_body .bc-group-pos")
+            if not pos.count():
+                return 0
+            match = re.search(r"of ([\d,]+)", pos.first.inner_text())
+            return int(match.group(1).replace(",", "")) if match else 0
 
         def show(name: str, settle: float = 3.0) -> None:
             # has-text, not text-is: the priority grades carry a bullet in
@@ -169,7 +178,7 @@ def main(argv: list[str] | None = None) -> int:
         # -- the grade screens, and the group navigator
         for grade in ("E", "C", "A"):
             show(f"BAGS {grade}")
-            groups = page.locator(f"#group_{grade} option").count()
+            groups = group_count(grade)
             body = page.locator(f"#grade_{grade}_body").inner_text()
             if "No species graded" in body:
                 check(f"grade {grade} reports an empty grade cleanly", True,
@@ -189,52 +198,123 @@ def main(argv: list[str] | None = None) -> int:
             page.screenshot(path=str(args.out / f"03-bags-{grade}.png"),
                             full_page=True)
 
+        def annotate(prefix: str, *, flag: str | None = None, **fields) -> str:
+            """Open the annotation form, fill it in, press Apply. Returns
+            the form's error text ("" once it closed)."""
+            page.click(f"#{prefix}_apply")
+            page.wait_for_selector("#ann_confirm", state="visible", timeout=10_000)
+            time.sleep(SETTLE / 2)
+            if flag is not None:
+                page.select_option("#ann_id_flag", flag)
+                time.sleep(SETTLE / 4)
+            for name, value in fields.items():
+                target = f"#ann_{name}"
+                if isinstance(value, bool):
+                    page.set_checked(target, value)
+                elif page.locator(f"select{target}").count():
+                    page.select_option(target, value)
+                else:
+                    page.fill(target, value)
+                time.sleep(SETTLE / 4)
+            page.click("#ann_confirm")
+            time.sleep(SETTLE * 1.5)
+            if page.locator("#ann_confirm").is_visible():
+                return page.locator("#ann_errors").inner_text() or "(still open)"
+            return ""
+
         # -- annotate one group, and prove it stays in that group
         show("BAGS C") if page.locator("#group_C").count() else show("BAGS E")
         grade = "C" if page.locator("#group_C").count() else "E"
         first = page.locator(f"#grade_{grade}_body strong").first.inner_text()
         page.click(f"#selall_{grade}")
         time.sleep(SETTLE)
-        page.select_option(f"#g{grade}_flag", "synonym")
-        page.fill(f"#g{grade}_note", "driven by drive_ui")
-        page.click(f"#g{grade}_apply")
+        # A misidentification needs a method: refused, with why, until given.
+        error = annotate(f"g{grade}", flag="misidentification",
+                         new_id="Danaus drivenus", note="driven by drive_ui",
+                         curator="Drive Tester")
+        check("an incomplete form is refused and says what is missing",
+              "Identification method is required" in error, error)
+        page.select_option("#ann_method", "Morphology")
+        page.set_checked("#ann_contamination", True)
+        page.set_checked("#ann_other_issue", True)
+        time.sleep(SETTLE / 2)
+        box = page.locator("#shiny-modal .modal-dialog").bounding_box()
+        check("the form fits the window without scrolling, every part shown",
+              box is not None and box["y"] + box["height"]
+              <= page.viewport_size["height"],
+              f"{box and round(box['y'] + box['height'])} of "
+              f"{page.viewport_size['height']}px")
+        page.set_checked("#ann_contamination", False)
+        page.set_checked("#ann_other_issue", False)
+        time.sleep(SETTLE / 2)
+        check("the rank is suggested from the name",
+              page.input_value("#ann_rank") == "species",
+              page.input_value("#ann_rank"))
+        page.click("#ann_confirm")
         time.sleep(SETTLE * 1.5)
         annotated = table_text(f"#grade_{grade}_body")
-        check("the flag lands in the group's table", "synonym" in annotated)
+        check("the flag lands in the group's table",
+              "Misident." in annotated and "Danaus drivenus" in annotated)
         check("the note lands in the group's table", "driven by drive_ui" in annotated)
         page.screenshot(path=str(args.out / "04-annotated.png"), full_page=True)
 
-        # Round 9, item 5: a note alone leaves the flag; "Clear flag" removes
-        # just the flag; "Clear annotations" (confirmed) removes the rest.
-        page.fill(f"#g{grade}_note", "second note")
+        # The form reopens on what the records have; contamination adds to
+        # the misidentification rather than replacing it.
         page.click(f"#g{grade}_apply")
-        time.sleep(SETTLE * 1.5)
-        annotated = table_text(f"#grade_{grade}_body")
-        check("applying only a note keeps the flag",
-              "synonym" in annotated and "second note" in annotated)
-        page.select_option(f"#g{grade}_flag", "__clear__")
+        page.wait_for_selector("#ann_confirm", state="visible", timeout=10_000)
         time.sleep(SETTLE / 2)
-        page.click(f"#g{grade}_apply")
-        time.sleep(SETTLE * 1.5)
+        check("the form reopens on the records' own annotation, and the curator",
+              page.input_value("#ann_id_flag") == "misidentification"
+              and page.input_value("#ann_new_id") == "Danaus drivenus"
+              and page.input_value("#ann_curator") == "Drive Tester",
+              page.input_value("#ann_curator"))
+        check("the header remembers the curator's name",
+              page.input_value("#user") == "Drive Tester", page.input_value("#user"))
+        page.click("#ann_cancel")
+        time.sleep(SETTLE)
+        error = annotate(f"g{grade}", contamination=True,
+                         sequence_taxon="Homo sapiens")
         annotated = table_text(f"#grade_{grade}_body")
-        check('"Clear flag" removes the flag and keeps the note',
-              "synonym" not in annotated and "second note" in annotated)
+        check("contamination combines with the misidentification",
+              not error and "Contam." in annotated
+              and "Misident." in annotated and "Homo sapiens" in annotated,
+              error)
         page.click(f"#g{grade}_clear_ann")
         time.sleep(SETTLE)
         page.click("#confirm_clear_ann")
         time.sleep(SETTLE * 1.5)
-        check('"Clear annotations" removes the note too, once confirmed',
-              "second note" not in table_text(f"#grade_{grade}_body"))
+        annotated = table_text(f"#grade_{grade}_body")
+        check('"Clear annotations" removes them, once confirmed',
+              "driven by drive_ui" not in annotated
+              and "Misident." not in annotated)
 
-        if page.locator(f"#group_{grade} option").count() > 1:
+        # A synonym on one checked record is saved for its name, so it
+        # reaches every record with that name -- here and on other tabs.
+        page.click(f"#clear_{grade}")
+        time.sleep(SETTLE)
+        page.locator(f"#grade_{grade}_body .bc-row-check").first.click()
+        time.sleep(SETTLE)
+        idents = column_values(f"#grade_{grade}_body", "ID")
+        error = annotate(f"g{grade}", flag="synonym", new_id="Danaus seniorus",
+                         rank="species", citation="Driver 2026")
+        updated = column_values(f"#grade_{grade}_body", "Updated ID")
+        same = [u for i, u in zip(idents, updated) if i == idents[0]]
+        check("a synonym reaches every record with the name, marked as a taxon update",
+              not error and len(same) >= 1
+              and all("Danaus seniorus" in u and "taxon" in u
+                      for u in same), f"{error} {same[:3]}")
+        page.screenshot(path=str(args.out / "04b-synonym.png"), full_page=True)
+
+        if group_count(grade) > 1:
             page.click(f"#next_{grade}")
             time.sleep(SETTLE * 1.5)
             other = table_text(f"#grade_{grade}_body")
             check("the next group is untouched",
-                  "synonym" not in other and "driven by drive_ui" not in other)
+                  "Misident." not in other
+                  and "driven by drive_ui" not in other)
 
             # -- a per-row check left in one group must not leak into
-            # "Apply to checked" in another. Only "Check this group" (just
+            # "Annotate checked" in another. Only "Check this group" (just
             # used above) replaces the whole checked set; the per-row
             # checkbox adds to it, so start clean in both groups first.
             page.click(f"#clear_{grade}")            # currently group 2
@@ -249,15 +329,16 @@ def main(argv: list[str] | None = None) -> int:
             time.sleep(SETTLE)
             page.locator(f"#grade_{grade}_body .bc-row-check").first.click()
             time.sleep(SETTLE)
-            page.select_option(f"#g{grade}_flag", "data_issue")
-            page.click(f"#g{grade}_apply")
-            time.sleep(SETTLE * 1.5)
-            check("apply to checked reaches the current group's own check",
-                  "data_issue" in table_text(f"#grade_{grade}_body"))
+            error = annotate(f"g{grade}", other_issue=True,
+                             note="lat/long swapped")
+            check("annotating reaches the current group's own check",
+                  not error and "Other" in column_values(f"#grade_{grade}_body",
+                                                         "Other issue"),
+                  error)
             page.click(f"#prev_{grade}")
             time.sleep(SETTLE * 1.5)
             check("a check left in a different group is not swept into that apply",
-                  "data_issue" not in table_text(f"#grade_{grade}_body"))
+                  "lat/long swapped" not in table_text(f"#grade_{grade}_body"))
 
         # Round 9, item 2: Find records in a group -- the table shows only
         # the matches and "Check the N found" checks exactly those.
@@ -270,6 +351,12 @@ def main(argv: list[str] | None = None) -> int:
         check("Find records narrows a group to the matches",
               bool(who) and all("smith" in w.lower() for w in who),
               f"{len(who)} rows")
+        banner = page.locator(f"#grade_{grade}_body .bc-filter-banner")
+        check("a filtered table says so above it, and is outlined",
+              banner.count() == 1 and "Filtered" in banner.inner_text()
+              and f"showing {len(who)} of" in banner.inner_text()
+              and page.locator(f"#grade_{grade}_body .bc-scroll.bc-filtered").count()
+              == 1, banner.inner_text() if banner.count() else "no banner")
         page.click(f"#selall_{grade}")
         time.sleep(SETTLE)
         here = page.locator(f"#grade_{grade}_body").inner_text()
@@ -279,11 +366,87 @@ def main(argv: list[str] | None = None) -> int:
               re.search(r"\d+ checked here", here) else "")
         page.click(f"#find_clear_{grade}")
         time.sleep(SETTLE)
+        check("Clear filter takes the banner away",
+              page.locator(f"#grade_{grade}_body .bc-filter-banner").count() == 0)
         page.click(f"#clear_{grade}")
         time.sleep(SETTLE)
 
+        # Round 12, item 4: groups marked reviewed, and annotated ones, show
+        # in the group list; Next unreviewed skips the reviewed ones.
+        # Round 14, item 1: Mark reviewed shares the group list's line.
+        nav = page.evaluate(f"""() => {{
+            const list = document.querySelector('#grade_{grade}_body .selectize-input')
+                .getBoundingClientRect();
+            const button = document.querySelector('#review_{grade}')
+                .getBoundingClientRect();
+            const mid = button.top + button.height / 2;
+            return [mid >= list.top && mid <= list.bottom,
+                    Math.round(list.top), Math.round(button.top)];
+        }}""")
+        check("Mark reviewed is on the same line as the group list",
+              bool(nav[0]), str(nav))
+        body = page.locator(f"#grade_{grade}_body").inner_text()
+        page.click(f"#review_{grade}")
+        time.sleep(SETTLE)
+        body = page.locator(f"#grade_{grade}_body").inner_text()
+        options = page.evaluate(
+            f"Object.values(document.querySelector('#group_{grade}').selectize"
+            ".options).map(o => o.label)")
+        check("Mark reviewed marks the group and counts it",
+              "1 reviewed" in body and "Reviewed ✓ (undo)" in body
+              and any(o.startswith("✓") for o in options), str(options[:2]))
+        check("groups holding annotated records carry ✎",
+              any("✎" in o for o in options), str(options[:3]))
+        if group_count(grade) > 1:
+            before = page.locator(f"#grade_{grade}_body .bc-group-pos").inner_text()
+            page.click(f"#next_unrev_{grade}")
+            time.sleep(SETTLE)
+            after = page.locator(f"#grade_{grade}_body .bc-group-pos").inner_text()
+            check("Next unreviewed moves to an unreviewed group",
+                  before != after and "Mark reviewed ✓" in
+                  page.locator(f"#grade_{grade}_body").inner_text(),
+                  f"{before} -> {after}")
+            page.click(f"#prev_{grade}")
+            time.sleep(SETTLE)
+
+        # Round 12, item 3: grade with the curated IDs -- the synonym made
+        # above renames a species, so the checklist gains the curated grade
+        # beside the original and a row for the new name.
+        show("Species", settle=SETTLE)
+        page.check("#grades_from_species input[value='curated']")
+        time.sleep(SETTLE * 2)
+        species_text = page.locator("#species_body").inner_text()
+        check("grading with curated IDs adds the curated grade and the new name",
+              "BAGS (curated IDs)" in species_text
+              and "Danaus seniorus" in species_text
+              and "re-identified" in species_text)
+        page.screenshot(path=str(args.out / "02b-species-curated.png"),
+                        full_page=True)
+        page.check("#grades_from_species input[value='original']")
+        time.sleep(SETTLE * 1.5)
+        check("and back to the original grades",
+              "BAGS (curated IDs)" not in page.locator("#species_body").inner_text())
+
         # -- the paged specimen table
         show("Specimens", settle=SETTLE * 1.5)
+        # The synonym made on a BAGS screen is listed here, downloads as its
+        # own report, and can be removed (after a confirmation).
+        check("the Specimens tab lists the taxon update",
+              "Taxon updates (1)" in page.locator("#specimens_body").inner_text())
+        href = page.get_attribute("#dl_taxon_updates", "href") or ""
+        report = page.request.get(f"{base}/{href.lstrip('/')}")
+        check("the taxon updates report downloads with the synonym",
+              report.ok and "Danaus seniorus" in report.text()
+              and "Driver 2026" in report.text())
+        page.locator("#specimens_body summary").first.click()
+        time.sleep(SETTLE / 2)
+        page.click("#taxon_update_remove")
+        time.sleep(SETTLE)
+        page.click("#confirm_remove_taxon")
+        time.sleep(SETTLE * 1.5)
+        check("a taxon update can be removed",
+              "Taxon updates (" not in page.locator("#specimens_body").inner_text()
+              and "Danaus seniorus" not in table_text("#specimens_body"))
         pages_before = page.locator("#specimens_body").inner_text()
         page.select_option("#find_col_sp", "country.ocean")
         time.sleep(SETTLE / 2)
@@ -324,10 +487,11 @@ def main(argv: list[str] | None = None) -> int:
         time.sleep(SETTLE)
         check("paging moves to different rows",
               tbody_text("#specimens_body")[:200] != before)
-        # The five annotation columns are sortable on the specimen table too,
+        # The annotation columns are sortable on the specimen table too,
         # not only a stored/physical one -- SpecimenTable.sort_by fetches
         # nothing from the database for these, it reads Annotations directly.
-        for label in ("Rep.", "Check", "Flag", "Updated ID", "Notes"):
+        for label in ("Rep.", "Check", "ID issue", "Updated ID", "Notes",
+                      "Contam.", "Curator"):
             check(f'the "{label}" column header is sortable',
                   page.locator("#specimens_body th.bc-sort-th",
                               has_text=label).count() >= 1)
@@ -532,6 +696,57 @@ def main(argv: list[str] | None = None) -> int:
         check("right-clicking a tip reroots the tree",
               after_reroot != before_reroot)
         page.screenshot(path=str(args.out / "06-phylogeny.png"), full_page=True)
+
+        # -- round 13: the tree, the BINs tab and the downloads after
+        # curation. Re-identify one tip's record on the Specimens tab...
+        tip_pid = (tip_link[1].split("-")[1] if tip_link else "")
+        show("Specimens", settle=SETTLE)
+        tops = page.evaluate(
+            "Array.from(document.querySelectorAll('.bc-download-row .btn'))"
+            ".map(b => Math.round(b.getBoundingClientRect().top))")
+        check("the download buttons sit on one row",
+              len(tops) == 8 and len(set(tops)) == 1, str(tops))
+        page.fill("#find_text_sp", tip_pid)
+        page.click("#find_go_sp")
+        time.sleep(SETTLE * 1.5)
+        page.click("#select_all")
+        time.sleep(SETTLE)
+        error = annotate("sp", flag="misidentification", new_id="Danaus drivenus",
+                         method="Morphology", note="driven by drive_ui",
+                         curator="Drive Tester")
+        check("a tree tip's record can be re-identified", not error, error)
+        page.click("#find_clear_sp")
+        time.sleep(SETTLE)
+        page.click("#clear_selection")
+        time.sleep(SETTLE)
+        # ...then grade with curated IDs: its tip reads "old → new".
+        show("Phylogeny", settle=SETTLE)
+        page.check("#grades_from_phylogeny input[value='curated']")
+        time.sleep(SETTLE * 2)
+        labels = page.evaluate(
+            "Array.from(document.querySelectorAll('#phylo-tree-container text'))"
+            ".map(t => [t.textContent, t.getAttribute('fill')])")
+        renamed = [l for l in labels if "→ Danaus drivenus" in l[0]]
+        # Purple -- unless the tip also carries an alignment warning, whose
+        # amber (and ⚠) wins.
+        check("with curated IDs the re-identified tip reads old → new, in purple",
+              bool(renamed) and (renamed[0][1] == "#6f42c1"
+                                 or renamed[0][0].endswith("\u26a0")),
+              str(renamed[:1]))
+        href = page.get_attribute("#dl_phylo_newick", "href") or ""
+        newick = page.request.get(f"{base}/{href.lstrip('/')}").text()
+        check("the Newick download carries the curated label",
+              "-> Danaus drivenus" in newick, newick[:80])
+        page.screenshot(path=str(args.out / "06b-phylogeny-curated.png"),
+                        full_page=True)
+        show("BINs", settle=SETTLE)
+        check("the BINs tab adds concordance with curated IDs",
+              "Concordance (curated IDs)" in page.locator("#bins_body").inner_text())
+        page.check("#grades_from_bins input[value='original']")
+        time.sleep(SETTLE * 1.5)
+        check("and back to the original",
+              "Concordance (curated IDs)" not in
+              page.locator("#bins_body").inner_text())
 
         # -- round 8, item 1.1: a dropped connection (a sleeping machine)
         # reloads the page and restores the work, rather than leaving a dead
