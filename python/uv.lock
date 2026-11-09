@@ -1327,7 +1327,7 @@ wheels = [
 
 [[package]]
 name = "pytest"
-version = "9.1.1"
+version = "9.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "colorama", marker = "sys_platform == 'win32'" },
@@ -1338,9 +1338,9 @@ dependencies = [
     { name = "pygments" },
     { name = "tomli", marker = "python_full_version < '3.11'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e4/47/b9efed96c114afcfa3c9d3fe98a76a1d14c74a9e266d397cf6eb64be5e01/pytest-9.1.1.tar.gz", hash = "sha256:1088fbde8f2b49d95a549a195707afa7a76a3ce9bcadc26b6d71f0ffda5fe313", size = 1636369, upload-time = "2026-06-19T10:58:32.857Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/79/42/bb4641652e58dedeac2ec51abc1f8cae4fee4ec63899a0999016229a0f2a/pytest-9.2.0.tar.gz", hash = "sha256:97c4f3b1f3c7414aa36465e09b8220f1d03627993bd51b1282e193753c80557b", size = 1797555, upload-time = "2026-10-27T21:30:20.728Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/24/25/1de2678b631f5a49215c6c96fff41ba892b0a34df68d6d80292b1b48aa7f/pytest-9.1.1-py3-none-any.whl", hash = "sha256:37a86b45efb9a47a61a36449063e8e18d0cab3161329fc099eb21783169c4f0c", size = 386536, upload-time = "2026-06-19T10:58:31.347Z" },
+    { url = "https://files.pythonhosted.org/packages/51/39/1f5d8c8877a0fa327db959c19341d4be61660de1ab6b7391f9eb805bcd67/pytest-9.2.0-py3-none-any.whl", hash = "sha256:07acdcf88ec174f907dc01af70bf52d49b014bbab03faeeade31c96b18c2e588", size = 411776, upload-time = "2026-10-27T21:30:19.131Z" },
 ]
 
 [[package]]
@@ -1473,7 +1473,7 @@ wheels = [
 
 [[package]]
 name = "shiny"
-version = "1.8.0"
+version = "1.9.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "asgiref" },
@@ -1499,9 +1499,9 @@ dependencies = [
     { name = "websockets", version = "16.1.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "websockets", version = "17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/42/fe/910a50b6b4f14cd6b5d76be9ae2146d54597eb72e78ecedc42b60aa3b56d/shiny-1.8.0.tar.gz", hash = "sha256:7377b93455a3c38e7b2fba49efde59fc9998db671dffce502a170ecc15d9be74", size = 5386927, upload-time = "2026-09-13T00:53:15.611Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/cd/6a/b1285c935bf1e6e20d551335040597818f68da82c3bf4c9723b48947d913/shiny-1.9.0.tar.gz", hash = "sha256:bd5e9bc47af0d8bf0ec856a825fe6906d02117620b6d8a3e1c28c2da11248bcf", size = 5523591, upload-time = "2026-10-29T18:31:46.416Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/1f/b1/f6780c4c3655cb93bc6cf6af6caf8e25fbf01c85f002195da9e39be69d17/shiny-1.8.0-py3-none-any.whl", hash = "sha256:19bc45d80d45242752b78d92abab45f4e72b9ab86b0de436bd8d8795af1aa71d", size = 4071407, upload-time = "2026-09-13T00:53:14.01Z" },
+    { url = "https://files.pythonhosted.org/packages/1a/6a/ce1d21bbc5198e0ed5e8257fc76c271bcb6405a772181b5762b4a7362c66/shiny-1.9.0-py3-none-any.whl", hash = "sha256:89c34a5346de3beeb997590ab019ad8e3a821dac4acdbd0d12130d3cb85a3aa4", size = 4091746, upload-time = "2026-10-29T18:31:43.982Z" },
 ]
 
 [[package]]
